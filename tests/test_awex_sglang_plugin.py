@@ -88,7 +88,7 @@ def test_native_scheduler_hook_preserves_loops_and_runs_once(monkeypatch):
 
 
 def test_awex_config_preserves_nested_router_and_vision_metadata(monkeypatch):
-    import areal.engine.awex.colocate_reader as reader
+    import areal.engine.awex.sglang_adapter as reader
 
     composite = object()
 
