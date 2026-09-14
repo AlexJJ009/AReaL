@@ -13,6 +13,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from einops import rearrange
+from torch.utils.data import DistributedSampler
 from torchdata.stateful_dataloader import StatefulDataLoader
 
 from areal.api.cli_args import MicroBatchSpec, NormConfig
@@ -736,6 +737,8 @@ def split_padded_tensor_dict_into_mb_list(
     data: dict[str, Any],
     mb_spec: MicroBatchSpec,
     group: dist.ProcessGroup | None = None,
+    *,
+    sync_mbs: bool = True,
 ) -> MicroBatchList:
     """Split a padded dict of tensors into micro-batches based on the attention mask.
 
@@ -743,6 +746,8 @@ def split_padded_tensor_dict_into_mb_list(
         data (Dict): Dictionary containing padded tensors.
         mb_spec (MicroBatchSpec): Specification for micro-batch splitting.
         group (Optional[dist.ProcessGroup]): Process group for distributed synchronization.
+        sync_mbs: Synchronize micro-batch counts across ranks. Engines that pad
+            execution with zero-contribution forwards can disable this.
 
     Returns:
         MicroBatchList: A structure containing the split micro-batches and metadata.
@@ -787,7 +792,11 @@ def split_padded_tensor_dict_into_mb_list(
             not_to_split[key] = value
 
     # split
-    group_indices = allocate_balanced_mbs_synced(mb_spec, input_lens, group=group)
+    group_indices = (
+        allocate_balanced_mbs_synced(mb_spec, input_lens, group=group)
+        if sync_mbs
+        else allocate_balanced_mbs(mb_spec, input_lens)
+    )
     group_indices = [
         seqpack.flat2d(
             [list(range(i * granularity, (i + 1) * granularity)) for i in group_index]
@@ -1464,12 +1473,21 @@ def bcast_mb_list(
 def cycle_dataloader(dataloader: StatefulDataLoader, num_cycles: int = -1):
     """Cycle through a dataloader indefinitely."""
     epoch = 0
+    if hasattr(dataloader, "sampler") and isinstance(
+        dataloader.sampler, DistributedSampler
+    ):
+        # Respect an epoch restored by the trainer. Starting from zero here
+        # overwrites the sampler epoch after StatefulDataLoader.load_state_dict
+        # and changes the sample order after recovery.
+        epoch = dataloader.sampler.epoch
+    completed_cycles = 0
     while True:
         if hasattr(dataloader, "sampler") and hasattr(dataloader.sampler, "set_epoch"):
             dataloader.sampler.set_epoch(epoch)
         yield from dataloader
         epoch += 1
-        if num_cycles > 0 and epoch >= num_cycles:
+        completed_cycles += 1
+        if num_cycles > 0 and completed_cycles >= num_cycles:
             break
 
 

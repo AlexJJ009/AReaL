@@ -110,6 +110,11 @@ class OpenAIProxyClient:
             self._shared_tensor_resolver = SharedTensorResolver()
         self.session_id: str | None = None
         self._session_api_key: str | None = None
+        self.interaction_count = 0
+        self.context_overflow = False
+        self.context_overflow_message = ""
+        self.system_error = False
+        self.system_error_message = ""
 
     @property
     def session_api_key(self) -> str:
@@ -156,6 +161,7 @@ class OpenAIProxyClient:
         discount: float = 1.0,
         style: str = "individual",
         drop_retry_orphans: bool = False,
+        is_eval: bool = False,
     ) -> dict[str, InteractionWithTokenLogpReward]:
         """Export interactions for this session via HTTP.
 
@@ -181,6 +187,8 @@ class OpenAIProxyClient:
             and export. Useful when the upstream Agent SDK times out and
             retries the same request, leaving the proxy with two completions
             for the same input messages.
+        is_eval : bool
+            Route process-reward metrics to the eval-rollout scope.
 
         Returns
         -------
@@ -204,6 +212,7 @@ class OpenAIProxyClient:
             "supports_shared_tensor_references": (
                 self._processor_cache_group_id is not None
             ),
+            "is_eval": is_eval,
         }
         headers = self._admin_auth_headers()
         async with self._session.post(url, json=payload, headers=headers) as resp:
@@ -272,11 +281,18 @@ class OpenAIProxyClient:
 
         # Always try to end the session, even on exception
         try:
-            await post_json_with_retry(
+            data = await post_json_with_retry(
                 self._session,
                 url=f"{self.base_url}{RL_END_SESSION_PATHNAME}",
                 headers=self._session_auth_headers(),
             )
+            self.interaction_count = int(data.get("interaction_count", 0))
+            self.context_overflow = bool(data.get("context_overflow", False))
+            self.context_overflow_message = str(
+                data.get("context_overflow_message", "")
+            )
+            self.system_error = bool(data.get("system_error", False))
+            self.system_error_message = str(data.get("system_error_message", ""))
         except Exception as e:
             # Raised errors will be properly handled by OpenAIProxyWorkflow
             logger.warning(f"Failed to end session {self.session_id}: {e}")
