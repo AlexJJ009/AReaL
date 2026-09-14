@@ -116,6 +116,7 @@ LOGGER_COLORS_EXACT = {
     "PRMRunner": "light_purple",
     "ProxyUtils": "light_purple",
     "AReaL-SWEAgent": "light_purple",
+    "ArenaStreamAgent": "light_purple",
     "SWETrain": "light_green",
     # Agent Service - purple
     "AgentGateway": "light_purple",
