@@ -157,6 +157,9 @@ class _RemoteRolloutTaskInput:
     proxy_addr: str | None = None
     reward_normalization: bool = False
     drop_incomplete_group: bool = False
+    keep_partial_group_on_error: bool = False
+    reward_normalization_use_std: bool = True
+    legacy_reward_normalization: bool = False
 
 
 class RolloutController:
@@ -1076,6 +1079,17 @@ class RolloutController:
                 proxy_addr = pending_task.proxy_addr
                 if self._proxy_started and proxy_addr is None:
                     proxy_addr = self.get_proxy_addr(rank)
+                compatibility_kwargs = {}
+                if (
+                    pending_task.keep_partial_group_on_error
+                    or pending_task.legacy_reward_normalization
+                    or not pending_task.reward_normalization_use_std
+                ):
+                    compatibility_kwargs = dict(
+                        keep_partial_group_on_error=pending_task.keep_partial_group_on_error,
+                        reward_normalization_use_std=pending_task.reward_normalization_use_std,
+                        legacy_reward_normalization=pending_task.legacy_reward_normalization,
+                    )
                 engine_task_id = await self.scheduler.async_call_engine(
                     worker.id,
                     "submit",
@@ -1093,6 +1107,7 @@ class RolloutController:
                     proxy_addr=proxy_addr,
                     reward_normalization=pending_task.reward_normalization,
                     drop_incomplete_group=pending_task.drop_incomplete_group,
+                    **compatibility_kwargs,
                 )
 
                 assert task_id == engine_task_id, (task_id, engine_task_id)
@@ -1162,6 +1177,9 @@ class RolloutController:
         proxy_addr: str | None = None,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        keep_partial_group_on_error: bool = False,
+        reward_normalization_use_std: bool = True,
+        legacy_reward_normalization: bool = False,
         min_usable_group_size: int = 1,
     ) -> int:
         validate_rollout_group_sizes(group_size, min_usable_group_size)
@@ -1192,6 +1210,9 @@ class RolloutController:
             proxy_addr=proxy_addr,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
+            keep_partial_group_on_error=keep_partial_group_on_error,
+            reward_normalization_use_std=reward_normalization_use_std,
+            legacy_reward_normalization=legacy_reward_normalization,
         )
 
         # Delegate to dispatcher
@@ -1222,6 +1243,9 @@ class RolloutController:
         group_size: int = 1,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        keep_partial_group_on_error: bool = False,
+        reward_normalization_use_std: bool = True,
+        legacy_reward_normalization: bool = False,
         min_usable_group_size: int = 1,
     ) -> list[dict[str, Any]]:
         perf_tracer.instant(
@@ -1239,6 +1263,9 @@ class RolloutController:
                 min_usable_group_size=min_usable_group_size,
                 reward_normalization=reward_normalization,
                 drop_incomplete_group=drop_incomplete_group,
+                keep_partial_group_on_error=keep_partial_group_on_error,
+                reward_normalization_use_std=reward_normalization_use_std,
+                legacy_reward_normalization=legacy_reward_normalization,
             )
         results = self.wait(count=len(data))
         # Return list of trajectories
@@ -1255,6 +1282,9 @@ class RolloutController:
         dynamic_bs: bool = False,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        keep_partial_group_on_error: bool = False,
+        reward_normalization_use_std: bool = True,
+        legacy_reward_normalization: bool = False,
         min_usable_group_size: int = 1,
     ) -> list[dict[str, Any]]:
         """Prepare a batch with controlled staleness.
@@ -1287,6 +1317,9 @@ class RolloutController:
                         min_usable_group_size=min_usable_group_size,
                         reward_normalization=reward_normalization,
                         drop_incomplete_group=drop_incomplete_group,
+                        keep_partial_group_on_error=keep_partial_group_on_error,
+                        reward_normalization_use_std=reward_normalization_use_std,
+                        legacy_reward_normalization=legacy_reward_normalization,
                     )
 
         if not hasattr(self, "data_generator"):

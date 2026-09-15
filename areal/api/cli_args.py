@@ -272,6 +272,10 @@ class GenerationHyperparameters:
             )
         },
     )
+    reward_normalization_use_std: bool = True
+    keep_partial_group_on_error: bool = False
+    legacy_reward_normalization: bool = False
+
     # NOTE: to add new parameters, please correctly handle them in the `to_openai_args_dict` method.
 
     def new(self, **kwargs):
@@ -326,6 +330,9 @@ class GenerationHyperparameters:
     _WORKFLOW_ONLY_ARGS: ClassVar[set[str]] = {
         "reward_normalization",
         "drop_incomplete_group",
+        "reward_normalization_use_std",
+        "keep_partial_group_on_error",
+        "legacy_reward_normalization",
     }
 
     def to_openai_args_dict(
@@ -2623,6 +2630,10 @@ class AgentConfig:
     reasoning_parser: str = field(
         default="qwen3",
         metadata={"help": "Parser for reasoning content (<think> tags)."},
+    )
+    chat_template_kwargs: dict = field(
+        default_factory=dict,
+        metadata={"help": "Default chat template arguments for proxy requests."},
     )
     chat_template_type: str = field(
         default="hf",

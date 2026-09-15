@@ -675,6 +675,9 @@ class RemoteSGLangEngine(InferenceEngine):
         proxy_addr: str | None = None,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        keep_partial_group_on_error: bool = False,
+        reward_normalization_use_std: bool = True,
+        legacy_reward_normalization: bool = False,
         min_usable_group_size: int = 1,
     ) -> int:
         """Submit a request to the inference engine."""
@@ -691,6 +694,9 @@ class RemoteSGLangEngine(InferenceEngine):
             proxy_addr=proxy_addr,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
+            keep_partial_group_on_error=keep_partial_group_on_error,
+            reward_normalization_use_std=reward_normalization_use_std,
+            legacy_reward_normalization=legacy_reward_normalization,
         )
 
     def wait(
@@ -718,6 +724,9 @@ class RemoteSGLangEngine(InferenceEngine):
         group_size: int = 1,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        keep_partial_group_on_error: bool = False,
+        reward_normalization_use_std: bool = True,
+        legacy_reward_normalization: bool = False,
         min_usable_group_size: int = 1,
     ) -> dict[str, Any]:
         """Submit a batch of requests and wait for results.
@@ -733,6 +742,9 @@ class RemoteSGLangEngine(InferenceEngine):
             min_usable_group_size=min_usable_group_size,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
+            keep_partial_group_on_error=keep_partial_group_on_error,
+            reward_normalization_use_std=reward_normalization_use_std,
+            legacy_reward_normalization=legacy_reward_normalization,
         )
 
     def prepare_batch(
@@ -745,6 +757,9 @@ class RemoteSGLangEngine(InferenceEngine):
         dynamic_bs: bool = False,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        keep_partial_group_on_error: bool = False,
+        reward_normalization_use_std: bool = True,
+        legacy_reward_normalization: bool = False,
         min_usable_group_size: int = 1,
     ):
         """Asynchronously submit and wait until a full batch is ready."""
@@ -758,6 +773,9 @@ class RemoteSGLangEngine(InferenceEngine):
             dynamic_bs=dynamic_bs,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
+            keep_partial_group_on_error=keep_partial_group_on_error,
+            reward_normalization_use_std=reward_normalization_use_std,
+            legacy_reward_normalization=legacy_reward_normalization,
         )
 
     def compute_logp(self, data: list[dict[str, Any]]) -> list[torch.Tensor]:

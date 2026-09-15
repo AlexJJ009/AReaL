@@ -33,6 +33,90 @@ class _Logger:
         self.messages.append(message)
 
 
+class _PartialFailureWorkflow(_ListWorkflow):
+    async def arun_episode(self, engine, data):
+        result = await super().arun_episode(engine, data)
+        if isinstance(result, BaseException):
+            raise result
+        await asyncio.sleep(0)
+        return result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("usable", [7, 8, 11])
+async def test_legacy_partial_group_threshold_keeps_completed_siblings(usable):
+    results = [{str(i): _interaction(float(i))} for i in range(usable)]
+    results += [RuntimeError("failed slot")] * (12 - usable)
+    workflow = GroupedRolloutWorkflow(
+        _PartialFailureWorkflow(results),
+        group_size=12,
+        logger=_Logger(),
+        min_usable_group_size=8,
+        keep_partial_group_on_error=True,
+        reward_normalization=True,
+        legacy_reward_normalization=True,
+    )
+    result = await workflow.arun_episode(None, {})
+    if usable < 8:
+        assert result is None
+    else:
+        assert len(result) == usable
+        values = torch.tensor([interaction.reward for interaction in result.values()])
+        assert values.mean().item() == pytest.approx(0.0, abs=1e-6)
+        assert values.std(unbiased=False).item() == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+async def test_legacy_partial_group_does_not_swallow_cancellation():
+    workflow = GroupedRolloutWorkflow(
+        _PartialFailureWorkflow([asyncio.CancelledError(), {"ok": _interaction(1.0)}]),
+        group_size=2,
+        logger=_Logger(),
+        keep_partial_group_on_error=True,
+    )
+    with pytest.raises(asyncio.CancelledError):
+        await workflow.arun_episode(None, {})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "use_std, expected", [(True, [-1.0, 1.0]), (False, [-2.0, 2.0])]
+)
+async def test_legacy_normalization_uses_last_reward_and_broadcasts(use_std, expected):
+    first = {"a": _interaction(100.0), "b": _interaction(1.0)}
+    second = {"c": _interaction(-100.0), "d": _interaction(5.0)}
+    workflow = GroupedRolloutWorkflow(
+        _ListWorkflow([first, second]),
+        group_size=2,
+        logger=_Logger(),
+        reward_normalization=True,
+        legacy_reward_normalization=True,
+        reward_normalization_use_std=use_std,
+    )
+    result = await workflow.arun_episode(None, {})
+    assert result is not None
+    for group, normalized in zip([first, second], expected):
+        for interaction in group.values():
+            assert interaction.reward == pytest.approx(normalized)
+            assert interaction.rollout_reward == pytest.approx(normalized)
+            assert interaction._cache["rewards"].item() == pytest.approx(normalized)
+    assert first["a"].original_reward == 100.0
+    assert second["c"].original_reward == -100.0
+
+
+def test_legacy_group_config_does_not_leak_workflow_options_to_openai():
+    from areal.api.cli_args import GenerationHyperparameters
+
+    config = GenerationHyperparameters(
+        n_samples=12,
+        legacy_reward_normalization=True,
+        keep_partial_group_on_error=True,
+    )
+    args = config.to_openai_args_dict()
+    for key in config._WORKFLOW_ONLY_ARGS:
+        assert key not in args
+
+
 class _TrainEngine:
     def is_data_parallel_head(self):
         return True
