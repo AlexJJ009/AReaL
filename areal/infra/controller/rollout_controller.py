@@ -57,14 +57,18 @@ def _merge_worker_stats(
 ) -> dict[str, float]:
     """Merge independently aggregated stats from rollout workers.
 
-    Scalar means carry a ``__count`` companion. PRM structured count/sum
-    metrics have explicitly known SUM semantics. Other tensor statistics
-    lack reduction metadata in the export, so retain the existing behavior
-    of omitting them rather than guessing their denominator or reduction.
+    Scalar means carry a ``__count`` companion. Distributions using the
+    ``<base>_count`` convention retain weighted averages and extrema. PRM
+    count/sum metrics have explicit SUM semantics; omit other tensor metrics
+    whose reduction or denominator cannot be determined from the export.
     """
     sums = defaultdict(float)
     scalar_weighted_sums = defaultdict(float)
     scalar_counts = defaultdict(float)
+    distribution_weighted_sums = defaultdict(float)
+    distribution_counts = defaultdict(float)
+    distribution_mins: dict[str, float] = {}
+    distribution_maxes: dict[str, float] = {}
 
     for raw_stats in all_raw_stats:
         for key, value in raw_stats.items():
@@ -78,20 +82,53 @@ def _merge_worker_stats(
                 scalar_counts[key] += count
                 continue
 
+            base, separator, reduction = key.rpartition("/")
+            distribution_count_key = f"{base}_count"
+            if (
+                separator
+                and reduction in {"avg", "min", "max"}
+                and distribution_count_key in raw_stats
+            ):
+                count = raw_stats[distribution_count_key]
+                if count <= 0:
+                    continue
+                if reduction == "avg":
+                    distribution_weighted_sums[key] += value * count
+                    distribution_counts[key] += count
+                elif reduction == "min":
+                    distribution_mins[key] = min(
+                        value, distribution_mins.get(key, value)
+                    )
+                else:
+                    distribution_maxes[key] = max(
+                        value, distribution_maxes.get(key, value)
+                    )
+                continue
+
             metric_key = key.removeprefix("rollout/").removeprefix("eval-rollout/")
             segments = metric_key.split("/")
-            if (
+            is_prm_sum = (
                 len(segments) == 5
                 and segments[0] == "prm_metric"
                 and segments[1] in {"turn", "trajectory"}
                 and segments[-1] in {"count", "sum", "observed_count"}
-            ):
+            )
+            is_distribution_count = key.endswith("_count") and any(
+                f"{key.removesuffix('_count')}/{reduction}" in raw_stats
+                for reduction in ("avg", "min", "max")
+            )
+            if is_prm_sum or is_distribution_count:
                 sums[key] += value
 
     merged = dict(sums)
     for key, weighted_sum in scalar_weighted_sums.items():
         if scalar_counts[key] > 0:
             merged[key] = weighted_sum / scalar_counts[key]
+    for key, weighted_sum in distribution_weighted_sums.items():
+        if distribution_counts[key] > 0:
+            merged[key] = weighted_sum / distribution_counts[key]
+    merged.update(distribution_mins)
+    merged.update(distribution_maxes)
     return merged
 
 

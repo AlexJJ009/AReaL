@@ -17,6 +17,7 @@ from areal.experimental.openai.proxy.server import (
     SessionData,
     derive_session_gateway_api_key,
     derive_session_gateway_token,
+    deserialize_interactions,
 )
 from areal.experimental.openai.proxy.tensor_reference import GroupTensorStoreRegistry
 from areal.experimental.openai.types import InteractionWithTokenLogpReward
@@ -30,6 +31,47 @@ from areal.utils import stats_tracker
 # ---------------------------------------------------------------------------
 
 _ADMIN_KEY = "test-admin-key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_model", [False, True])
+@pytest.mark.parametrize(
+    "explicit_limit", [None, "max_tokens", "max_completion_tokens"]
+)
+async def test_session_generation_defaults_respect_explicit_limits(
+    monkeypatch, use_model, explicit_limit
+):
+    from pydantic import BaseModel
+
+    class Request(BaseModel):
+        max_tokens: int | None = None
+        max_completion_tokens: int | None = None
+        temperature: float = 1.0
+
+    monkeypatch.setattr(srv, "_openai_client", object())
+    srv._session_cache["session"] = SessionData(
+        session_id="session",
+        metadata={"generation_args": {"max_tokens": 128, "temperature": 0.6}},
+    )
+    payload = {explicit_limit: 32} if explicit_limit else {}
+    request = Request(**payload) if use_model else payload
+
+    async def create_fn(
+        max_tokens=None,
+        max_completion_tokens=None,
+        temperature=None,
+        top_p=None,
+        areal_cache=None,
+        processor_cache=None,
+    ):
+        return max_tokens, max_completion_tokens, temperature
+
+    result = await srv._call_client_create(create_fn, request, "session")
+    assert result == (
+        (32 if explicit_limit == "max_tokens" else None) if explicit_limit else 128,
+        32 if explicit_limit == "max_completion_tokens" else None,
+        0.6,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -61,6 +103,62 @@ def _client():
 
 def _admin_headers():
     return {"Authorization": f"Bearer {_ADMIN_KEY}"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tensor_payload", [False, True])
+async def test_export_restores_session_and_interaction_metadata(
+    monkeypatch, tensor_payload
+):
+    """Session metadata survives the actual HTTP export for both trajectory formats."""
+    monkeypatch.setattr(srv, "_capacity", 1)
+    async with _client() as client:
+        started = await client.post(
+            "/rl/start_session",
+            headers=_admin_headers(),
+            json={
+                "task_id": "metadata-test",
+                "metadata": {"arena_task_id": "arena-a", "label": "session"},
+            },
+        )
+        assert started.status_code == 200
+        session_id = started.json()["session_id"]
+        session = srv._session_cache[session_id]
+        interaction = InteractionWithTokenLogpReward(
+            messages=[{"role": "user", "content": "question"}],
+            output_message_list=[{"role": "assistant", "content": "answer"}],
+            reward=1.0,
+        )
+        # Assignment lets the old code reach the missing serialization path.
+        interaction.metadata = {"label": "interaction"}
+        interaction.interaction_id = "turn"
+        if tensor_payload:
+            interaction._cache = {"input_ids": torch.tensor([[1, 2]])}
+        session.completions["turn"] = interaction
+        session.finish()
+        response = await client.post(
+            "/export_trajectories",
+            headers=_admin_headers(),
+            json={"session_id": session_id, "style": "individual"},
+        )
+
+    assert response.status_code == 200
+    restored = deserialize_interactions(response.json()["interactions"])["turn"]
+    assert restored.metadata == {"arena_task_id": "arena-a", "label": "interaction"}
+    assert session.metadata["label"] == "session"
+    assert restored.has_tensor_data is tensor_payload
+    if tensor_payload:
+        torch.testing.assert_close(
+            restored.to_tensor_dict()["input_ids"],
+            torch.tensor([[1, 2]]),
+            rtol=0,
+            atol=0,
+        )
+    else:
+        assert restored.messages == interaction.messages
+    legacy_payload = response.json()["interactions"]
+    legacy_payload["turn"].pop("metadata", None)
+    assert deserialize_interactions(legacy_payload)["turn"].metadata == {}
 
 
 class _Request:
