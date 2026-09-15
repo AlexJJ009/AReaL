@@ -264,29 +264,58 @@ class AwexColocateReader:
         tp_size = int(getattr(server_args, "tp_size", 1))
         pp_size = int(getattr(server_args, "pp_size", 1))
         dp_size = int(getattr(server_args, "dp_size", 1))
-        tp_rank = int(getattr(scheduler, "tp_rank", 0))
+
+        def rank_attr(name: str) -> int | None:
+            for obj in (
+                scheduler,
+                getattr(scheduler, "ps", None),
+                getattr(scheduler, "tp_worker", None),
+            ):
+                value = getattr(obj, name, None) if obj is not None else None
+                if value is not None:
+                    return int(value)
+            return None
+
+        tp_rank = rank_attr("tp_rank")
+        if tp_rank is None and self._instance_local_rank is not None:
+            tp_rank = self._instance_local_rank % tp_size
+        if tp_rank is None or not 0 <= tp_rank < tp_size:
+            raise RuntimeError("Cannot resolve a valid AWEX inference TP rank")
+        pp_rank = rank_attr("pp_rank")
+        if pp_rank is None:
+            pp_rank = (
+                self._instance_local_rank // tp_size
+                if self._instance_local_rank is not None
+                else (0 if pp_size == 1 else None)
+            )
+        if pp_rank is None or not 0 <= pp_rank < pp_size:
+            raise RuntimeError("Cannot resolve a valid AWEX inference PP rank")
 
         if self._infer_instance_world_size is not None:
             world_size = self._infer_instance_world_size
             global_rank = self._instance_local_rank
         else:
             world_size = tp_size * pp_size
-            global_rank = tp_rank
+            global_rank = pp_rank * tp_size + tp_rank
+
+        attn_tp_rank = rank_attr("attn_tp_rank")
+        attn_tp_size = rank_attr("attn_tp_size")
+        attn_dp_rank = rank_attr("attn_dp_rank")
 
         return {
             "scheduler": scheduler,
             "infer_engine_config": server_args,
             "tp_rank": tp_rank,
             "tp_size": tp_size,
-            "pp_rank": int(getattr(scheduler, "pp_rank", 0)),
+            "pp_rank": pp_rank,
             "pp_size": pp_size,
             "dp_size": dp_size,
             "world_size": world_size,
             "global_rank": global_rank,
             "local_rank": tp_rank,
-            "attn_tp_rank": int(getattr(scheduler, "attn_tp_rank", tp_rank)),
-            "attn_tp_size": int(getattr(scheduler, "attn_tp_size", tp_size)),
-            "attn_dp_rank": int(getattr(scheduler, "attn_dp_rank", 0)),
+            "attn_tp_rank": tp_rank if attn_tp_rank is None else attn_tp_rank,
+            "attn_tp_size": tp_size if attn_tp_size is None else attn_tp_size,
+            "attn_dp_rank": 0 if attn_dp_rank is None else attn_dp_rank,
         }
 
     def get_parallelism(self) -> dict:
