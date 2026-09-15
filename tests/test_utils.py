@@ -19,6 +19,7 @@ from areal.utils.data import (
     pad_sequences_to_tensors,
     reorder_list,
     split_padded_tensor_dict_into_mb_list,
+    split_training_batch_into_microbatches,
     unpack_sequence,
     unpad_logits,
 )
@@ -260,3 +261,128 @@ def test_transport_padding_converges_to_distributed_microbatch_count(monkeypatch
     assert len(mb_list.mbs) == 3
     assert mb_list.transport_dummy_count == 2
     assert sum(TRANSPORT_DUMMY_KEY in mb for mb in mb_list.mbs) == 2
+
+
+def _training_batch(batch_size: int) -> dict[str, torch.Tensor]:
+    return {
+        "input_ids": torch.arange(batch_size * 3).view(batch_size, 3),
+        "attention_mask": torch.ones(batch_size, 3, dtype=torch.bool),
+        "loss_mask": torch.tensor([[0, 1, 1]], dtype=torch.bool).repeat(batch_size, 1),
+        "advantages": torch.ones(batch_size, 3),
+    }
+
+
+@pytest.mark.parametrize(
+    ("rank", "batch_size", "expected_semantic_steps"),
+    [(0, 1, [True, False, False]), (1, 2, [False, True, True])],
+)
+def test_synchronized_training_schedule_has_semantic_global_member_per_step(
+    monkeypatch, rank, batch_size, expected_semantic_steps
+):
+    monkeypatch.setattr(data_module.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(data_module.dist, "get_world_size", lambda group=None: 2)
+    monkeypatch.setattr(data_module.dist, "get_rank", lambda group=None: rank)
+
+    def _all_gather_counts(output, value, group=None):
+        del value, group
+        output[:] = [1, 2]
+
+    monkeypatch.setattr(data_module.dist, "all_gather_object", _all_gather_counts)
+
+    schedule = split_training_batch_into_microbatches(
+        _training_batch(batch_size),
+        n_mbs=4,
+    )
+
+    assert len(schedule) == 3
+    assert [
+        TRANSPORT_DUMMY_KEY not in microbatch for microbatch in schedule
+    ] == expected_semantic_steps
+    assert all(
+        bool(microbatch["loss_mask"].any()) == is_semantic
+        for microbatch, is_semantic in zip(
+            schedule, expected_semantic_steps, strict=True
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("rank", "batch_size", "expected_semantic_steps"),
+    [(0, 3, [True, True, True]), (1, 1, [True, False, False])],
+)
+def test_synchronized_training_schedule_preserves_extra_local_microbatches(
+    monkeypatch, rank, batch_size, expected_semantic_steps
+):
+    monkeypatch.setattr(data_module.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(data_module.dist, "get_world_size", lambda group=None: 2)
+    monkeypatch.setattr(data_module.dist, "get_rank", lambda group=None: rank)
+
+    def _all_gather_counts(output, value, group=None):
+        del value, group
+        output[:] = [3, 1]
+
+    def _split_into_local_microbatches(data, mb_spec, sync_mbs):
+        assert sync_mbs is False
+        microbatches = [
+            {key: value[index : index + 1] for key, value in data.items()}
+            for index in range(batch_size)
+        ]
+        return MicroBatchList(
+            data=data,
+            mb_spec=mb_spec,
+            mbs=microbatches,
+            group_lens=[1] * batch_size,
+        )
+
+    monkeypatch.setattr(data_module.dist, "all_gather_object", _all_gather_counts)
+    monkeypatch.setattr(
+        data_module,
+        "split_padded_tensor_dict_into_mb_list",
+        _split_into_local_microbatches,
+    )
+
+    schedule = split_training_batch_into_microbatches(
+        _training_batch(batch_size),
+        n_mbs=2,
+    )
+
+    assert len(schedule) == 3
+    assert [
+        TRANSPORT_DUMMY_KEY not in microbatch for microbatch in schedule
+    ] == expected_semantic_steps
+
+
+def test_tensor_container_skeleton_round_trip():
+    item = {
+        "input_ids": torch.arange(6, dtype=torch.long).view(2, 3),
+        "nested": [torch.ones(2, dtype=torch.bool), {"logprobs": torch.randn(4)}],
+        "reward": 1.5,
+        "task": "math",
+    }
+
+    tensors: list[torch.Tensor] = []
+    skeleton = data_module._deconstruct_tensor_container(item, tensors)
+    rebuilt = data_module._reconstruct_tensor_container(skeleton, iter(tensors))
+
+    assert torch.equal(rebuilt["input_ids"], item["input_ids"])
+    assert torch.equal(rebuilt["nested"][0], item["nested"][0])
+    assert torch.equal(rebuilt["nested"][1]["logprobs"], item["nested"][1]["logprobs"])
+    assert rebuilt["reward"] == 1.5
+    assert rebuilt["task"] == "math"
+
+
+def test_skeleton_tensor_leaves_follow_depth_first_order():
+    tensors: list[torch.Tensor] = []
+    items = [
+        {"a": torch.zeros(1, dtype=torch.long), "b": [torch.zeros(2)]},
+        {"a": torch.zeros(3, dtype=torch.long)},
+    ]
+    skeletons = [
+        data_module._deconstruct_tensor_container(item, tensors) for item in items
+    ]
+
+    leaves = data_module._skeleton_tensor_leaves(skeletons)
+
+    assert [leaf.shape for leaf in leaves] == [(1,), (2,), (3,)]
+    assert [leaf.dtype for leaf in leaves] == [torch.long, torch.float32, torch.long]
+    assert [leaf.numel for leaf in leaves] == [1, 2, 3]

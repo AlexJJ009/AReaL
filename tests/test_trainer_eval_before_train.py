@@ -83,6 +83,8 @@ class _FailingUpdateActor:
 
 
 class _FailingPPOActor:
+    parallel_strategy = SimpleNamespace(dp_size=1)
+
     def __init__(self, events: list[tuple]):
         self.events = events
 
@@ -154,7 +156,8 @@ def _build_ppo_trainer(events: list[tuple], *, recovered: bool = False):
     trainer.config = SimpleNamespace(
         total_train_epochs=1,
         total_train_steps=None,
-        rollout=SimpleNamespace(agent=None),
+        rollout=SimpleNamespace(agent=None, _version="v1"),
+        teacher=None,
         gconfig=SimpleNamespace(
             n_samples=1,
             reward_normalization=False,
@@ -164,6 +167,8 @@ def _build_ppo_trainer(events: list[tuple], *, recovered: bool = False):
         actor=SimpleNamespace(
             _version="v1",
             weight_update_mode="xccl",
+            min_usable_group_size=None,
+            resolve_min_usable_group_size=lambda _: 1,
             should_compute_prox_logp=lambda: False,
         ),
         memory_profiler=None,
@@ -249,6 +254,33 @@ def test_ppo_trainer_orders_initial_eval_around_recovery(monkeypatch, recovered:
             "epoch_step": -1,
             "global_step": -1,
         }
+
+
+@pytest.mark.parametrize(
+    ("requires_rl", "explicit_minimum", "expected"),
+    [(False, None, 1), (False, 3, 3), (True, None, 2)],
+)
+def test_rollout_minimum_uses_only_active_rl_estimator(
+    monkeypatch, requires_rl, explicit_minimum, expected
+):
+    from areal.api.cli_args import NormConfig, PPOActorConfig
+
+    _disable_timing_contexts(monkeypatch, rl_trainer)
+    trainer = _build_ppo_trainer([])
+    trainer.config.actor = PPOActorConfig(
+        reward_norm=NormConfig(mean_level="group", std_level="group", group_size=4),
+        min_usable_group_size=explicit_minimum,
+    )
+    trainer.config.gconfig.n_samples = 4
+    trainer.mopd_execution_plan = SimpleNamespace(requires_rl=requires_rl)
+
+    def prepare_batch(*args, **kwargs):
+        assert kwargs["min_usable_group_size"] == expected
+        raise _StopAfterFirstUpdate
+
+    trainer.actor.prepare_batch = prepare_batch
+    with pytest.raises(_StopAfterFirstUpdate):
+        trainer.train(workflow=object())
 
 
 def test_ppo_initial_eval_offloads_rollout_when_evaluation_fails(monkeypatch):

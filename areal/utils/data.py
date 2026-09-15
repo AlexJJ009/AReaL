@@ -4,6 +4,7 @@
 # Copyright (c) 2023, Tri Dao.
 
 import copy
+import math
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import Any, NamedTuple
@@ -360,6 +361,45 @@ def split_and_unpad_tensor(
     return result
 
 
+@dataclass(frozen=True)
+class RolloutGroup:
+    """Logical rollouts within one prompt, each occupying contiguous tensor rows.
+
+    Workflows own optional raw reward references. A reference is required when
+    reward normalization consumes a rollout whose row rewards differ.
+    """
+
+    row_counts: tuple[int, ...]
+    rewards: tuple[float | None, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "row_counts", tuple(self.row_counts))
+        object.__setattr__(self, "rewards", tuple(self.rewards))
+        if not self.row_counts or any(
+            type(count) is not int or count < 1 for count in self.row_counts
+        ):
+            raise ValueError("rollout row_counts must be positive integers")
+        if not self.rewards:
+            object.__setattr__(self, "rewards", (None,) * len(self.row_counts))
+        if len(self.rewards) != len(self.row_counts):
+            raise ValueError("rollout rewards must match row_counts")
+        if any(
+            r is not None and (type(r) not in (int, float) or not math.isfinite(r))
+            for r in self.rewards
+        ):
+            raise ValueError("rollout_reward must be finite")
+
+    def validate_rows(self, rows: int) -> "RolloutGroup":
+        # RPC restores dataclass fields without running the constructor and
+        # encodes tuples as lists. Revalidate at the consuming boundary.
+        group = RolloutGroup(self.row_counts, self.rewards)
+        if sum(group.row_counts) != rows:
+            raise ValueError(
+                f"rollout row_counts sum to {sum(group.row_counts)}, expected {rows}"
+            )
+        return group
+
+
 @dataclass
 class TrajBatchMeta:
     """Metadata for reversing concat_batch: traj counts, group sizes, seqlens."""
@@ -367,6 +407,16 @@ class TrajBatchMeta:
     n_trajs: int
     traj_group_sizes: list[int]
     traj_seqlens: list[int]
+    rollout_groups: list[RolloutGroup | None] | None = None
+
+    @property
+    def logical_group_sizes(self) -> list[int]:
+        if self.rollout_groups is None:
+            return self.traj_group_sizes
+        return [
+            len(group.row_counts) if group is not None else rows
+            for group, rows in zip(self.rollout_groups, self.traj_group_sizes)
+        ]
 
 
 def concat_batch(
@@ -376,21 +426,22 @@ def concat_batch(
     assert isinstance(data, list) and all(isinstance(d, dict) for d in data), (
         f"Expected list[dict], got {type(data)}"
     )
-    traj_group_sizes = []
-    for d in data:
-        first_tensor = next(
-            (v for v in d.values() if isinstance(v, torch.Tensor)), None
-        )
-        traj_group_sizes.append(
-            first_tensor.shape[0] if first_tensor is not None else 1
-        )
+    traj_group_sizes = [get_batch_size(d) for d in data]
+    rollout_groups = [d.get("rollout_group") for d in data]
+    for i, (group, rows) in enumerate(zip(rollout_groups, traj_group_sizes)):
+        if group is not None:
+            if not isinstance(group, RolloutGroup):
+                raise ValueError("rollout_group must be a RolloutGroup")
+            rollout_groups[i] = group.validate_rows(rows)
     traj_seqlens = [d["attention_mask"].shape[-1] for d in data]
     meta = TrajBatchMeta(
         n_trajs=len(data),
         traj_group_sizes=traj_group_sizes,
         traj_seqlens=traj_seqlens,
+        rollout_groups=rollout_groups,
     )
-    return concat_padded_tensors(data), meta
+    tensors = [{k: v for k, v in d.items() if k != "rollout_group"} for d in data]
+    return concat_padded_tensors(tensors), meta
 
 
 def split_batch(
@@ -398,9 +449,14 @@ def split_batch(
     meta: TrajBatchMeta,
 ) -> list[Any] | None:
     """Inverse of concat_batch: split batched result back into per-trajectory list."""
-    return split_and_unpad_tensor(
+    split = split_and_unpad_tensor(
         result, meta.n_trajs, meta.traj_group_sizes, meta.traj_seqlens
     )
+    if isinstance(result, dict) and meta.rollout_groups is not None:
+        for item, group in zip(split, meta.rollout_groups):
+            if group is not None:
+                item["rollout_group"] = group
+    return split
 
 
 def batched_call(
@@ -769,6 +825,13 @@ def make_transport_dummy(template: dict[str, Any]) -> dict[str, Any]:
     return dummy
 
 
+def make_transport_microbatch(template: dict[str, Any]) -> dict[str, Any]:
+    """Create one transport-only batch that arbitrary objectives must bypass."""
+    dummy = make_transport_dummy(template)
+    dummy[TRANSPORT_DUMMY_KEY] = True
+    return dummy
+
+
 def _pad_batch_to_min_groups(
     data: dict[str, Any],
     *,
@@ -960,6 +1023,76 @@ def split_padded_tensor_dict_into_mb_list(
         group_lens=group_lens,
         transport_dummy_count=transport_dummy_count,
     )
+
+
+def split_training_batch_into_microbatches(
+    data: dict[str, Any],
+    n_mbs: int,
+    group: dist.ProcessGroup | None = None,
+) -> list[dict[str, Any]]:
+    """Build a synchronized PPO schedule without all-dummy global steps."""
+    if n_mbs < 1:
+        raise ValueError(f"n_mbs must be positive, got {n_mbs}")
+    batch_size = get_batch_size(data)
+    if batch_size < 1:
+        raise ValueError("Cannot split an empty training batch")
+
+    local_n_mbs = min(batch_size, n_mbs)
+    local_mbs = split_padded_tensor_dict_into_mb_list(
+        data,
+        MicroBatchSpec(n_mbs=local_n_mbs),
+        sync_mbs=False,
+    ).mbs
+    if not dist.is_initialized():
+        if local_n_mbs < n_mbs:
+            logger.warning(
+                "Reducing PPO minibatches from %d to %d for a batch of %d rows",
+                n_mbs,
+                local_n_mbs,
+                batch_size,
+            )
+        return local_mbs
+
+    counts: list[int | None] = [None] * dist.get_world_size(group)
+    dist.all_gather_object(counts, len(local_mbs), group=group)
+    concrete_counts = [count for count in counts if count is not None]
+    effective_n_mbs = max(
+        min(n_mbs, sum(concrete_counts)),
+        max(concrete_counts),
+    )
+    if effective_n_mbs < n_mbs:
+        logger.warning(
+            "Reducing synchronized PPO minibatches from %d to %d for %d global "
+            "training microbatches",
+            n_mbs,
+            effective_n_mbs,
+            sum(concrete_counts),
+        )
+    elif effective_n_mbs > n_mbs:
+        logger.warning(
+            "Increasing synchronized PPO minibatches from %d to %d because one "
+            "data-parallel rank produced that many local microbatches",
+            n_mbs,
+            effective_n_mbs,
+        )
+
+    group_rank = dist.get_rank(group=group)
+    offset = sum(concrete_counts[:group_rank])
+    scheduled: list[dict[str, Any] | None] = [None] * effective_n_mbs
+    for index, microbatch in enumerate(local_mbs):
+        slot = (offset + index) % effective_n_mbs
+        if scheduled[slot] is not None:
+            raise RuntimeError(
+                "Microbatch scheduling collision at slot "
+                f"{slot} with {effective_n_mbs} synchronized slots"
+            )
+        scheduled[slot] = microbatch
+
+    dummy = make_transport_microbatch(data)
+    return [
+        microbatch if microbatch is not None else copy.deepcopy(dummy)
+        for microbatch in scheduled
+    ]
 
 
 N_TOKENS_PER_PAGE = 256
@@ -1443,6 +1576,164 @@ def all_gather_tensor_container(data, group=None) -> list:
     return results
 
 
+@dataclass(frozen=True)
+class _TensorLeaf:
+    """Picklable stand-in for a tensor leaf inside a gathered container skeleton."""
+
+    shape: tuple[int, ...]
+    dtype: torch.dtype
+    device_type: str
+
+    @property
+    def numel(self) -> int:
+        return int(np.prod(self.shape))
+
+
+def _deconstruct_tensor_container(value, out_tensors: list[torch.Tensor]):
+    """Split a container into a picklable skeleton and its tensor leaves (DFS order)."""
+    if torch.is_tensor(value):
+        out_tensors.append(value)
+        return _TensorLeaf(tuple(value.shape), value.dtype, value.device.type)
+    if isinstance(value, list):
+        return [_deconstruct_tensor_container(item, out_tensors) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _deconstruct_tensor_container(item, out_tensors)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _reconstruct_tensor_container(skeleton, tensors: Iterator[torch.Tensor]):
+    """Rebuild a container from its skeleton, consuming tensor leaves in DFS order."""
+    if isinstance(skeleton, _TensorLeaf):
+        return next(tensors)
+    if isinstance(skeleton, list):
+        return [_reconstruct_tensor_container(item, tensors) for item in skeleton]
+    if isinstance(skeleton, dict):
+        return {
+            key: _reconstruct_tensor_container(item, tensors)
+            for key, item in skeleton.items()
+        }
+    return skeleton
+
+
+def _skeleton_tensor_leaves(skeletons) -> list[_TensorLeaf]:
+    leaves: list[_TensorLeaf] = []
+
+    def _walk(value):
+        if isinstance(value, _TensorLeaf):
+            leaves.append(value)
+        elif isinstance(value, list):
+            for item in value:
+                _walk(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                _walk(item)
+
+    _walk(skeletons)
+    return leaves
+
+
+def all_gather_ragged_tensor_container(items: list, group=None) -> list[list]:
+    """All-gather per-rank container lists whose lengths differ across ranks.
+
+    Complements :func:`all_gather_tensor_container`, which requires every rank
+    to contribute the same number of items. One object all-gather exchanges
+    per-item skeletons (structure, non-tensor leaves, and tensor metadata);
+    tensor payloads then travel in one padded all-gather per (dtype, device
+    type) bucket. Buckets are derived from the gathered metadata, so every
+    rank — including ranks with no items — joins the same collectives.
+    """
+    world_size = dist.get_world_size(group)
+
+    local_tensors: list[torch.Tensor] = []
+    local_skeletons = [
+        _deconstruct_tensor_container(item, local_tensors) for item in items
+    ]
+
+    all_skeletons: list[list | None] = [None] * world_size
+    dist.all_gather_object(all_skeletons, local_skeletons, group=group)
+
+    leaves_by_rank = [_skeleton_tensor_leaves(skeletons) for skeletons in all_skeletons]
+    buckets = sorted(
+        {
+            (leaf.dtype, leaf.device_type)
+            for rank_leaves in leaves_by_rank
+            for leaf in rank_leaves
+        },
+        key=str,
+    )
+
+    local_rank = dist.get_rank(group=group)
+    payloads: dict[tuple[torch.dtype, str], list[list[torch.Tensor]]] = {}
+    for bucket in buckets:
+        dtype, device_type = bucket
+        device = (
+            torch.device("cpu")
+            if device_type == "cpu"
+            else current_platform.current_device()
+        )
+        max_numel = max(
+            sum(
+                leaf.numel
+                for leaf in rank_leaves
+                if (leaf.dtype, leaf.device_type) == bucket
+            )
+            for rank_leaves in leaves_by_rank
+        )
+        local_bucket_tensors = [
+            tensor
+            for tensor, leaf in zip(
+                local_tensors, leaves_by_rank[local_rank], strict=True
+            )
+            if (leaf.dtype, leaf.device_type) == bucket
+        ]
+        flat = (
+            torch.cat([tensor.reshape(-1) for tensor in local_bucket_tensors])
+            if local_bucket_tensors
+            else torch.empty(0, dtype=dtype, device=device)
+        )
+        padded = F.pad(flat, (0, max_numel - flat.numel()))
+        if max_numel > 0:
+            gathered = [torch.empty_like(padded) for _ in range(world_size)]
+            dist.all_gather(gathered, padded, group=group)
+        else:
+            # Every rank's payload is empty; slicing below yields 0-numel views.
+            gathered = [padded] * world_size
+
+        bucket_payload: list[list[torch.Tensor]] = []
+        for rank_leaves, buffer in zip(leaves_by_rank, gathered, strict=True):
+            offset = 0
+            rank_tensors = []
+            for leaf in rank_leaves:
+                if (leaf.dtype, leaf.device_type) != bucket:
+                    continue
+                # Clone so results do not alias the padded gather buffers,
+                # which would otherwise pin world_size * max_rank_payload
+                # memory for the lifetime of the batch.
+                rank_tensors.append(
+                    buffer.narrow(0, offset, leaf.numel).view(leaf.shape).clone()
+                )
+                offset += leaf.numel
+            bucket_payload.append(rank_tensors)
+        payloads[bucket] = bucket_payload
+
+    results: list[list] = []
+    for rank_index, (skeletons, rank_leaves) in enumerate(
+        zip(all_skeletons, leaves_by_rank, strict=True)
+    ):
+        cursors = {
+            bucket: iter(bucket_payload[rank_index])
+            for bucket, bucket_payload in payloads.items()
+        }
+        ordered = [
+            next(cursors[(leaf.dtype, leaf.device_type)]) for leaf in rank_leaves
+        ]
+        results.append(_reconstruct_tensor_container(skeletons, iter(ordered)))
+    return results
+
+
 def broadcast_tensor_container(data, src_rank=0, group=None):
     if dist.get_rank() != src_rank:
         metadata = [None]
@@ -1602,6 +1893,75 @@ def cycle_dataloader(dataloader: StatefulDataLoader, num_cycles: int = -1):
             break
 
 
+def normalize_rollout_rewards(
+    row_rewards: torch.Tensor,
+    norm: "Normalization",
+    meta: TrajBatchMeta,
+    *,
+    reward_bias: float = 0.0,
+    reward_scaling: float = 1.0,
+    reward_clip: float = float("inf"),
+    unpenalized_rewards: torch.Tensor | None = None,
+    reduce_group=None,
+) -> torch.Tensor:
+    """Normalize row scores against one reference per logical rollout.
+
+    Explicit references bypass row-length penalties; all scores share the
+    actor's bias, scaling and clipping. Missing references require equal rows.
+    """
+    scores = ((row_rewards + reward_bias) * reward_scaling).clamp(
+        min=-reward_clip, max=reward_clip
+    )
+    if norm.mean_level is None and norm.std_level is None:
+        return scores.float()
+    counts: list[int] = []
+    explicit: list[float | None] = []
+    groups = meta.rollout_groups or [None] * meta.n_trajs
+    for group, rows in zip(groups, meta.traj_group_sizes):
+        counts.extend(group.row_counts if group is not None else [1] * rows)
+        explicit.extend(group.rewards if group is not None else [None] * rows)
+    repeats = torch.tensor(counts, device=row_rewards.device, dtype=torch.long)
+    starts = repeats.cumsum(0) - repeats
+    member = torch.repeat_interleave(
+        torch.arange(len(counts), device=row_rewards.device),
+        repeats,
+        output_size=row_rewards.shape[0],
+    )
+    supplied = torch.tensor(
+        [r is not None for r in explicit], device=row_rewards.device, dtype=torch.bool
+    )
+    reference = torch.where(
+        supplied,
+        scores.new_tensor([r if r is not None else 0.0 for r in explicit]),
+        row_rewards[starts],
+    )
+    equal_rows = row_rewards == reference[member]
+    if unpenalized_rewards is not None:
+        equal_rows &= unpenalized_rewards == unpenalized_rewards[starts][member]
+    invalid_reference = torch.any(~supplied[member] & ~equal_rows)
+    if dist.is_initialized() and (
+        norm.mean_level == "batch" or norm.std_level == "batch"
+    ):
+        dist.all_reduce(invalid_reference, op=dist.ReduceOp.MAX, group=reduce_group)
+    torch._assert_async(
+        ~invalid_reference,
+        "Split rollout row rewards differ; supply an explicit rollout_reward "
+        "for reward normalization.",
+    )
+    reference = ((reference + reward_bias) * reward_scaling).clamp(
+        min=-reward_clip, max=reward_clip
+    )
+    mean, scale = norm.affine_parameters(
+        reference,
+        group_sizes=meta.logical_group_sizes,
+        reduce_group=reduce_group,
+    )
+    if norm.std_level is not None:
+        # affine_parameters includes epsilon in the divisor.
+        scale = torch.where(scale <= 2 * norm.eps, 1.0, scale)
+    return ((scores - mean[member]) / scale[member]).float()
+
+
 class Normalization:
     """
     Adaptive normalization with different levels.
@@ -1659,18 +2019,50 @@ class Normalization:
         high_precision: bool = True,
         reduce_group=None,
         group_sizes: list[int] | None = None,
+        group_member_counts: list[int] | None = None,
     ) -> torch.Tensor:
-        bs = x.size(0)
-        eps = self.eps
-
-        # Early return if no elements are active (all masked out)
         if loss_mask is not None and loss_mask.sum().item() == 0:
             return x.float()
+        mean, scale = self.affine_parameters(
+            x,
+            loss_mask,
+            high_precision,
+            reduce_group,
+            group_sizes,
+            group_member_counts,
+        )
+        centered = x - mean
+        if loss_mask is not None:
+            centered = centered * loss_mask
+        return (centered / scale).float()
+
+    @torch.no_grad()
+    def affine_parameters(
+        self,
+        x: torch.Tensor,
+        loss_mask: torch.Tensor | None = None,
+        high_precision: bool = True,
+        reduce_group=None,
+        group_sizes: list[int] | None = None,
+        group_member_counts: list[int] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return the baseline and divisor, retaining masked token statistics.
+
+        Logical member counts only select singleton fallbacks; they do not
+        change the token weights used for advantage normalization.
+        """
+        bs = x.size(0)
+        eps = self.eps
 
         # Pre-compute group slices once (variable-size groups via group_sizes).
         group_slices = None
         if self.mean_level == "group" or self.std_level == "group":
             group_slices = self._build_group_slices(bs, group_sizes)
+            if group_member_counts is not None and (
+                len(group_member_counts) != len(group_slices)
+                or any(count < 1 for count in group_member_counts)
+            ):
+                raise ValueError("group_member_counts must match the prompt groups")
 
         # Step 1: Compute mean
         if self.mean_level == "batch":
@@ -1685,10 +2077,14 @@ class Normalization:
             mean = mean.expand_as(x)
         elif self.mean_level == "group":
             mean = torch.zeros_like(x)
-            for s in group_slices:
+            for i, s in enumerate(group_slices):
                 xx = x[s]
                 m = loss_mask[s] if loss_mask is not None else None
-                group_sz = s.stop - s.start
+                group_sz = (
+                    group_member_counts[i]
+                    if group_member_counts is not None
+                    else s.stop - s.start
+                )
 
                 # A singleton group has no peer to leave out. Use itself as the
                 # baseline so leave-one-out normalization outputs zero instead
@@ -1710,12 +2106,6 @@ class Normalization:
         else:  # mean_level == "none"
             mean = torch.zeros_like(x)
 
-        # Subtract mean
-        x_centered = x - mean
-        # mask unrelevant elements as 0
-        if loss_mask is not None:
-            x_centered = x_centered * loss_mask
-
         # Step 2: Compute std
         if self.std_level == "batch":
             std = self._compute_std(
@@ -1730,11 +2120,15 @@ class Normalization:
             std = std.expand_as(x)
         elif self.std_level == "group":
             std = torch.zeros_like(x)
-            for s in group_slices:
+            for i, s in enumerate(group_slices):
                 xx = x[s]
                 m = loss_mask[s] if loss_mask is not None else None
                 group_mean_slice = mean[s]  # already computed and expanded
-                group_sz = s.stop - s.start
+                group_sz = (
+                    group_member_counts[i]
+                    if group_member_counts is not None
+                    else s.stop - s.start
+                )
 
                 # Special case: with group_size=1 and std_unbiased=True, std should be 1 for numerical stability
                 if group_sz == 1 and self.std_unbiased:
@@ -1757,8 +2151,7 @@ class Normalization:
             std = torch.ones_like(x)
             eps = 0.0
 
-        # Normalize
-        return (x_centered / (std + eps)).float()
+        return mean, std + eps
 
     @staticmethod
     def _compute_mean(

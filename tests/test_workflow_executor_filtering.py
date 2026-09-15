@@ -108,7 +108,8 @@ async def test_filter_accepts_local_rewards_without_clearing_remote_payload(
     result = await task()
 
     assert result is not None
-    assert result.trajectory is trajectory
+    assert result.trajectory["input_ids"] is trajectory["input_ids"]
+    assert result.trajectory["rollout_group"].row_counts == (2,)
     assert isinstance(result.trajectory["input_ids"], RTensor)
     manager.on_rollout_accepted.assert_called_once_with()
     clear_node.assert_not_awaited()

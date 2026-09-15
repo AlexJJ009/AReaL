@@ -12,6 +12,7 @@ from openai.types.responses.response import Response
 from openai.types.responses.response_input_param import ResponseInputParam
 
 from areal.api import ModelResponse
+from areal.utils.data import RolloutGroup, concat_padded_tensors, get_batch_size
 from areal.utils import logging
 
 logger = logging.getLogger("TokenLogpReward")
@@ -61,6 +62,11 @@ class InteractionWithTokenLogpReward:
     # Response fields (optional for completion)
     response: Response | None = None
     input_data: str | ResponseInputParam = field(default_factory=lambda: "")
+
+    # One explicit normalization reference per logical rollout, when row scores differ.
+    rollout_reward: float | None = None
+    # Assigned by GroupedRolloutWorkflow before merging independently sampled slots.
+    rollout_index: int | None = None
 
     # Interaction ID cache (used for deserialization)
     _interaction_id: str | None = None
@@ -275,6 +281,42 @@ class InteractionWithTokenLogpReward:
         return result
 
 
+def _interaction_rollout_reward(
+    interactions: list[InteractionWithTokenLogpReward],
+) -> float | None:
+    references = {
+        v.rollout_reward for v in interactions if v.rollout_reward is not None
+    }
+    if len(references) > 1:
+        raise ValueError("Interactions in one rollout must share rollout_reward")
+    reference = next(iter(references), None)
+    RolloutGroup((len(interactions),), (reference,))
+    return reference
+
+
+def concat_tensor_interactions(
+    interactions: dict[str, InteractionWithTokenLogpReward],
+) -> dict[str, Any]:
+    """Export tensor rows while retaining the wrapper's logical membership."""
+    batches = []
+    counts: list[int] = []
+    rewards: list[float | None] = []
+    members: dict[int, list[InteractionWithTokenLogpReward]] = {}
+    for interaction in interactions.values():
+        index = (
+            interaction.rollout_index if interaction.rollout_index is not None else 0
+        )
+        members.setdefault(index, []).append(interaction)
+    for member in members.values():
+        tensors = [v.to_tensor_dict() for v in member]
+        batches.extend(tensors)
+        counts.append(sum(get_batch_size(t) for t in tensors))
+        rewards.append(_interaction_rollout_reward(member))
+    result = concat_padded_tensors(batches)
+    result["rollout_group"] = RolloutGroup(tuple(counts), tuple(rewards))
+    return result
+
+
 def normalize_group_rewards(
     results: list[dict[str, InteractionWithTokenLogpReward] | None],
 ) -> bool:
@@ -310,6 +352,61 @@ def normalize_group_rewards(
                 interaction._cache["original_rewards"] = torch.tensor(
                     [float(interaction.original_reward)]
                 )
+    return True
+
+
+def normalize_logical_rollout_rewards(
+    results: list[dict[str, InteractionWithTokenLogpReward] | None],
+) -> bool:
+    """Normalize row rewards against one explicit or equal-row rollout reference."""
+    if not results or any(not result for result in results):
+        return False
+    references: list[float] = []
+    for result in results:
+        assert result is not None
+        interactions = list(result.values())
+        reference = _interaction_rollout_reward(interactions)
+        if any(v.reward is None for v in interactions):
+            return False
+        if reference is None:
+            row_rewards = {v.reward for v in interactions}
+            if len(row_rewards) != 1:
+                raise ValueError(
+                    "Split rollout row rewards differ; supply an explicit "
+                    "rollout_reward for reward normalization."
+                )
+            reference = interactions[0].reward
+            for interaction in interactions:
+                if interaction._cache is not None:
+                    torch._assert_async(
+                        torch.all(interaction._cache["rewards"] == reference),
+                        "Split rollout row rewards differ; supply an explicit "
+                        "rollout_reward for reward normalization.",
+                    )
+        references.append(reference)
+
+    rewards = torch.tensor(references, dtype=torch.float32)
+    mean = rewards.mean()
+    std = (
+        rewards.std(unbiased=False) if len(references) > 1 else rewards.new_tensor(1.0)
+    )
+    scale = torch.where(std <= 1e-8, 1.0, std + 1e-8)
+    row_rewards = torch.tensor(
+        [v.reward for result in results for v in result.values()], dtype=torch.float32
+    )
+    normalized_rows = iter(((row_rewards - mean) / scale).tolist())
+    normalized_references = ((rewards - mean) / scale).tolist()
+    for result, reference in zip(results, normalized_references):
+        assert result is not None
+        for interaction in result.values():
+            interaction.original_reward = interaction.reward
+            interaction.reward = next(normalized_rows)
+            interaction.rollout_reward = reference
+            if interaction._cache is not None:
+                # Cached exports can contain more than one physical row.
+                cache = interaction._cache
+                cache["original_rewards"] = cache["rewards"].clone()
+                cache["rewards"] = (cache["rewards"].float() - mean) / scale
     return True
 
 
