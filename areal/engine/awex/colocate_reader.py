@@ -50,6 +50,30 @@ from areal.utils.logging import getLogger  # noqa: E402
 logger = getLogger("AwexColocateReader")
 
 
+class _DeviceBoundWeightsReader(NCCLWorkerWeightsReader):
+    """Bind communication to the model's logical CUDA device, not a rank id."""
+
+    def __init__(self, *args, model: torch.nn.Module, **kwargs):
+        device = next(model.parameters()).device
+        if device.type != "cuda" or device.index is None:
+            raise RuntimeError("AWEX reader requires model weights resumed on CUDA")
+        self._model_device = device
+        super().__init__(*args, model=model, **kwargs)
+
+    def _set_device(self) -> None:
+        # TODO(agent): This adapter is CUDA-only; physical ids remain metadata
+        # identities and must not be used as CUDA_VISIBLE_DEVICES indices.
+        torch.cuda.set_device(self._model_device)
+        self.barrier_device = self._model_device.index
+        self.backend = "nccl"
+        self.ready_tensor = torch.tensor(1, device=self._model_device)
+        logger.info(
+            "Bound AWEX reader rank %s to model device %s",
+            self.transfer_rank,
+            self._model_device,
+        )
+
+
 class _PhysicalDeviceMetaServerClient:
     """Use physical GPU ids in AWEX colocate metadata and handshake keys."""
 
@@ -523,7 +547,7 @@ class AwexColocateReader:
         logger.info("Got training_params_meta from MetaServer")
 
         model_context = self._build_model_context()
-        reader = NCCLWorkerWeightsReader(
+        reader = _DeviceBoundWeightsReader(
             engine_name="sglang",
             model=self._get_model(),
             model_context=model_context,

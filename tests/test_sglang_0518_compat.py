@@ -3,8 +3,58 @@ from unittest.mock import Mock
 
 import pytest
 
-from areal.engine.awex.colocate_reader import AwexColocateReader
+from areal.engine.awex.colocate_reader import (
+    AwexColocateReader,
+    NCCLWorkerWeightsReader,
+    _DeviceBoundWeightsReader,
+)
 from areal.engine.awex.sglang_plugin import AwexSchedulerPlugin
+
+
+@pytest.mark.parametrize(
+    "visible,logical", [(None, 7), ("0,1,2,3,4,5,6,7", 6), ("7", 0), ("7,4,6,5", 1)]
+)
+def test_reader_device_with_visible_remapping_matches_model(
+    monkeypatch, visible, logical
+):
+    """Device selection must not fall back to LOCAL_RANK or physical ids."""
+    import torch
+
+    if visible is None:
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    else:
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", visible)
+    monkeypatch.setenv("LOCAL_RANK", "0")
+    device = torch.device("cuda", logical)
+    model = NS(parameters=lambda: iter([NS(device=device)]))
+    monkeypatch.setattr(NCCLWorkerWeightsReader, "__init__", lambda *a, **kw: None)
+    set_device, tensor = Mock(), Mock()
+    monkeypatch.setattr(torch.cuda, "set_device", set_device)
+    monkeypatch.setattr(torch, "tensor", tensor)
+    reader = _DeviceBoundWeightsReader(model=model)
+    reader.transfer_rank = 23
+
+    reader._set_device()
+
+    set_device.assert_called_once_with(device)
+    tensor.assert_called_once_with(1, device=device)
+    assert reader.barrier_device == logical
+    assert reader.backend == "nccl"
+    assert reader.ready_tensor is tensor.return_value
+
+
+def test_reader_device_with_cpu_weights_fails_before_initialization(monkeypatch):
+    """Do not silently select GPU zero when weights have not been resumed."""
+    import torch
+
+    model = NS(parameters=lambda: iter([NS(device=torch.device("cpu"))]))
+    initialize = Mock()
+    monkeypatch.setattr(NCCLWorkerWeightsReader, "__init__", initialize)
+
+    with pytest.raises(RuntimeError, match="weights resumed on CUDA"):
+        _DeviceBoundWeightsReader(model=model)
+
+    initialize.assert_not_called()
 
 
 @pytest.mark.parametrize("location", ["scheduler", "ps", "tp_worker", "instance"])
