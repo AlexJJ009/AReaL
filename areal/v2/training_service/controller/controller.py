@@ -1007,12 +1007,29 @@ class GatewayTrainController:
                     f"the train GPUs, got train={len(self._worker_addrs)} "
                     f"workers vs inference={len(inference_urls)} servers"
                 )
+            nccl_master_addr = ""
+            nccl_master_port = 0
+            if not colocate:
+                import requests
+
+                # AWEX rank 0 belongs to the first inference instance.
+                resp = requests.post(
+                    f"{rollout.inference_guard_addrs[0]}/alloc_ports",
+                    json={"count": 1},
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                port_data = resp.json()
+                nccl_master_addr = port_data["host"]
+                nccl_master_port = port_data["ports"][0]
             ctrl.connect(
                 pair_name=pair_name,
                 train_worker_urls=self._worker_addrs,
                 inference_worker_urls=inference_urls,
                 mode="awex",
                 colocate=colocate,
+                nccl_master_addr=nccl_master_addr,
+                nccl_master_port=nccl_master_port,
             )
         else:  # disk
             ctrl.connect(
