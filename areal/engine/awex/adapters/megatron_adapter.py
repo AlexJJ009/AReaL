@@ -32,6 +32,7 @@ from areal.engine.awex.dte.delta_config import (
     validate_dte_world_size,
 )
 from areal.engine.awex.dte.delta_detect import AdamWInversionDetector
+from areal.engine.awex.transport.dtype import align_send_ops_to_recv_dtype
 from areal.engine.awex.transport.metadata import (
     awex_wu_use_group,
     fetch_kv_metadata,
@@ -404,6 +405,7 @@ class AwexMegatronAdapter(AwexTrainingAdapter):
             self._weights_update_group,
             copy_rank=self._transfer_rank,
         )
+        align_send_ops_to_recv_dtype(send_ops, self._transfer_plan)
         batch_send_recv(
             send_ops=send_ops,
             recv_ops=[],
@@ -465,6 +467,7 @@ class AwexMegatronAdapter(AwexTrainingAdapter):
                 self._weights_update_group,
                 copy_rank=self._transfer_rank,
             )
+            align_send_ops_to_recv_dtype(send_ops, self._transfer_plan)
             batch_send_recv(
                 send_ops=send_ops,
                 recv_ops=[],

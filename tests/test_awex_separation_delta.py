@@ -316,7 +316,7 @@ def test_megatron_full_transfer_uses_gloo_completion_barrier(monkeypatch):
     monkeypatch.setattr(mod.dist, "barrier", lambda *, group: barriers.append(group))
     adapter = object.__new__(mod.AwexMegatronAdapter)
     adapter._dte_config = SimpleNamespace(enabled=False)
-    adapter._transfer_plan = object()
+    adapter._transfer_plan = SimpleNamespace(operations={})
     adapter._weights_update_group = "nccl"
     adapter._weights_update_group_gloo = "gloo"
     adapter._transfer_rank = 8
