@@ -318,3 +318,50 @@ def test_unverified_sglang_build_is_rejected(monkeypatch):
     monkeypatch.setattr(plugin.pkg_version, "get_version", lambda name: "0.5.19.dev126")
     with pytest.raises(RuntimeError, match="Re-check Scheduler"):
         plugin.assert_supported_sglang_version()
+
+
+@pytest.mark.parametrize(
+    ("visible", "physical", "device_count", "logical"),
+    [
+        (None, 0, 8, 0),
+        (None, 7, 8, 7),
+        ("7", 7, 1, 0),
+        ("4,5,6,7", 6, 4, 2),
+        ("2,6,1", 6, 3, 1),
+    ],
+)
+def test_awex_reader_selects_correct_device_without_scheduler_gpu_id(
+    monkeypatch, visible, physical, device_count, logical
+):
+    from areal.engine.awex.colocate_reader import _SGLangNCCLWorkerWeightsReader
+
+    if visible is None:
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    else:
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", visible)
+    reader = _SGLangNCCLWorkerWeightsReader.__new__(_SGLangNCCLWorkerWeightsReader)
+    reader._physical_gpu_id = physical
+    reader.transfer_rank = 7
+    reader.scheduler = SimpleNamespace()
+    devices = []
+    monkeypatch.setattr(torch.cuda, "device_count", lambda: device_count)
+    monkeypatch.setattr(torch.cuda, "set_device", devices.append)
+    monkeypatch.setattr(torch, "tensor", lambda value, **kwargs: kwargs["device"])
+
+    reader._set_device()
+
+    assert devices == [logical]
+    assert reader.barrier_device == logical
+    assert reader.backend == "nccl"
+    assert reader.ready_tensor == torch.device("cuda", logical)
+
+
+def test_awex_reader_rejects_invisible_physical_device(monkeypatch):
+    from areal.engine.awex.colocate_reader import _SGLangNCCLWorkerWeightsReader
+
+    reader = _SGLangNCCLWorkerWeightsReader.__new__(_SGLangNCCLWorkerWeightsReader)
+    reader._physical_gpu_id = 7
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2,6")
+
+    with pytest.raises(ValueError, match="not in CUDA_VISIBLE_DEVICES"):
+        reader._set_device()

@@ -51,6 +51,54 @@ from areal.utils.logging import getLogger  # noqa: E402
 logger = getLogger("AwexColocateReader")
 
 
+class _SGLangNCCLWorkerWeightsReader(NCCLWorkerWeightsReader):
+    """Select the CUDA device even when SGLang omits scheduler.gpu_id."""
+
+    def __init__(self, *args, physical_gpu_id: int, **kwargs):
+        self._physical_gpu_id = physical_gpu_id
+        super().__init__(*args, **kwargs)
+
+    def _init_reader_in_colocate_mode(self):
+        from areal.engine.awex.colocate_transport import (
+            _BoundedMemoryNcclColocateStreamBatchTransport,
+        )
+
+        super()._init_reader_in_colocate_mode()
+        self.colocate_transport = _BoundedMemoryNcclColocateStreamBatchTransport(
+            self.transfer_rank, self.infer_world_size
+        )
+
+    def _set_device(self):
+        visible = [
+            entry.strip()
+            for entry in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")
+            if entry.strip()
+        ]
+        if visible:
+            if str(self._physical_gpu_id) not in visible:
+                raise ValueError(
+                    f"AWEX physical GPU {self._physical_gpu_id} is not in "
+                    f"CUDA_VISIBLE_DEVICES={visible!r}"
+                )
+            logical_gpu_id = visible.index(str(self._physical_gpu_id))
+        else:
+            logical_gpu_id = self._physical_gpu_id
+        if not 0 <= logical_gpu_id < torch.cuda.device_count():
+            raise ValueError(f"AWEX CUDA device index out of range: {logical_gpu_id}")
+        torch.cuda.set_device(logical_gpu_id)
+        self.barrier_device = logical_gpu_id
+        self.backend = "nccl"
+        self.ready_tensor = torch.tensor(
+            1, dtype=torch.int64, device=torch.device("cuda", logical_gpu_id)
+        )
+        logger.info(
+            "AWEX reader rank %s uses logical CUDA device %d (physical GPU %d)",
+            self.transfer_rank,
+            logical_gpu_id,
+            self._physical_gpu_id,
+        )
+
+
 class _PhysicalDeviceMetaServerClient:
     """Use physical GPU ids in AWEX colocate metadata and handshake keys."""
 
@@ -565,7 +613,8 @@ class AwexColocateReader:
         logger.info("Got training_params_meta from MetaServer")
 
         model_context = self._build_model_context()
-        reader = NCCLWorkerWeightsReader(
+        reader = _SGLangNCCLWorkerWeightsReader(
+            physical_gpu_id=self._local_gpu_id,
             engine_name="sglang",
             model=self._get_model(),
             model_context=model_context,
