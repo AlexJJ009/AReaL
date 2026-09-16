@@ -312,7 +312,7 @@ sglang:
   max_prefill_tokens: 8192
   chunked_prefill_size: 8192
   max_running_requests: 16
-  mem_fraction_static: 0.65
+  mem_fraction_static: 0.70
   attention_backend: null
   sampling_backend: null
   disable_cuda_graph: false
