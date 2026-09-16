@@ -64,7 +64,7 @@ from areal.utils.environ import (  # noqa: E402
 from areal.utils.logging import getLogger  # noqa: E402
 
 logger = getLogger("AwexSGLangPlugin")
-SUPPORTED_SGLANG_VERSIONS = ("0.5.9", "0.5.10.post1")
+SUPPORTED_SGLANG_VERSIONS = ("0.5.9", "0.5.10.post1", "0.5.19.dev125+g119b5ffe4")
 
 
 def assert_supported_sglang_version() -> None:
@@ -1013,6 +1013,19 @@ def register_awex_plugin() -> None:
     assert_supported_sglang_version()
     from sglang.srt.managers.scheduler import Scheduler
 
+    if os.environ.get("QWEN_AWEX_FROZEN_CONTRACT"):
+        from sglang.srt.managers.scheduler_components import weight_updater
+
+        from areal.engine.sglang_fork_contract import check_static_contract
+        from areal.models.mcore.qwen4_exp_awex_memory import install_kv_residency_hooks
+        from areal.models.mcore.qwen4_exp_frozen_state import install_static_state_hooks
+
+        check_static_contract()
+        # This executes inside each worker before Scheduler construction, so
+        # preservation is installed before any native weights release.
+        install_static_state_hooks(weight_updater)
+        install_kv_residency_hooks(weight_updater, Scheduler)
+
     _orig_init = Scheduler.__init__
 
     def _patched_init(self, *args, **kwargs):
@@ -1028,6 +1041,10 @@ def register_awex_plugin() -> None:
         except BaseException:
             logger.exception("[AWEX] Scheduler.__init__ original init failed")
             raise
+        if os.environ.get("QWEN_AWEX_FROZEN_CONTRACT"):
+            from areal.engine.sglang_fork_contract import check_scheduler_contract
+
+            check_scheduler_contract(self)
         plugin = AwexSchedulerPlugin(self)
         logger.info(
             "[AWEX] Scheduler.__init__ original init complete "

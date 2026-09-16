@@ -1,0 +1,145 @@
+{
+  "benchmark": "swebench-verified-full-git-sanitized@1.0.1",
+  "selected": [
+    "env:swebench-verified-scikit-learn__scikit-learn-13328@1.0.6-image-offline-golden",
+    "env:swebench-verified-scikit-learn__scikit-learn-13135@1.0.6-image-offline-golden",
+    "env:swebench-verified-scikit-learn__scikit-learn-13779@1.0.6-image-offline-golden",
+    "env:swebench-verified-sphinx-doc__sphinx-7757@1.0.6-image-offline-golden",
+    "env:swebench-verified-sympy__sympy-18763@1.0.6-image-offline-golden",
+    "env:swebench-verified-scikit-learn__scikit-learn-14141@1.0.6-image-offline-golden",
+    "env:swebench-verified-scikit-learn__scikit-learn-13142@1.0.6-image-offline-golden",
+    "env:swebench-verified-scikit-learn__scikit-learn-15100@1.0.6-image-offline-golden",
+    "env:swebench-verified-scikit-learn__scikit-learn-10297@1.0.6-image-offline-golden",
+    "env:swebench-verified-scikit-learn__scikit-learn-12973@1.0.6-image-offline-golden",
+    "env:swebench-verified-sphinx-doc__sphinx-7910@1.0.6-image-offline-golden",
+    "env:swebench-verified-sympy__sympy-11618@1.0.6-image-offline-golden",
+    "env:swebench-verified-sphinx-doc__sphinx-10466@1.0.6-image-offline-golden",
+    "env:swebench-verified-sphinx-doc__sphinx-9673@1.0.6-image-offline-golden",
+    "env:swebench-verified-sphinx-doc__sphinx-9281@1.0.6-image-offline-golden",
+    "env:swebench-verified-scikit-learn__scikit-learn-10844@1.0.6-image-offline-golden"
+  ],
+  "groups_per_node": 8,
+  "samples_per_group": 8,
+  "selection": "lowest measured agent_ms among DONE new-harness reference tasks, without score filtering; speed-selected protocol set, not representative quality estimate",
+  "reference_job": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217",
+  "evidence": [
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-13328@1.0.6-image-offline-golden",
+      "agent_ms": 124214,
+      "eval_ms": 19003,
+      "score": 1,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-scikit-learn__scikit-learn-13328:0"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-13135@1.0.6-image-offline-golden",
+      "agent_ms": 130318,
+      "eval_ms": 19537,
+      "score": 1,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-scikit-learn__scikit-learn-13135:0"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-13779@1.0.6-image-offline-golden",
+      "agent_ms": 142421,
+      "eval_ms": 19017,
+      "score": 1,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-scikit-learn__scikit-learn-13779:0"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-7757@1.0.6-image-offline-golden",
+      "agent_ms": 148890,
+      "eval_ms": 19010,
+      "score": 1,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-sphinx-doc__sphinx-7757:0"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-18763@1.0.6-image-offline-golden",
+      "agent_ms": 150682,
+      "eval_ms": 20973,
+      "score": 0,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-sympy__sympy-18763:0"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-14141@1.0.6-image-offline-golden",
+      "agent_ms": 159649,
+      "eval_ms": 17078,
+      "score": 1,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-scikit-learn__scikit-learn-14141:0"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-13142@1.0.6-image-offline-golden",
+      "agent_ms": 162695,
+      "eval_ms": 23107,
+      "score": 1,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-scikit-learn__scikit-learn-13142:0"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-15100@1.0.6-image-offline-golden",
+      "agent_ms": 164750,
+      "eval_ms": 19122,
+      "score": 1,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-scikit-learn__scikit-learn-15100:0"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-10297@1.0.6-image-offline-golden",
+      "agent_ms": 175099,
+      "eval_ms": 19072,
+      "score": 1,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-scikit-learn__scikit-learn-10297:0"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-12973@1.0.6-image-offline-golden",
+      "agent_ms": 176712,
+      "eval_ms": 19164,
+      "score": 1,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-scikit-learn__scikit-learn-12973:0"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-7910@1.0.6-image-offline-golden",
+      "agent_ms": 176997,
+      "eval_ms": 37247,
+      "score": 1,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-sphinx-doc__sphinx-7910:0"
+    },
+    {
+      "data_id": "env:swebench-verified-sympy__sympy-11618@1.0.6-image-offline-golden",
+      "agent_ms": 177494,
+      "eval_ms": 19018,
+      "score": 1,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-sympy__sympy-11618:0"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-10466@1.0.6-image-offline-golden",
+      "agent_ms": 187956,
+      "eval_ms": 21648,
+      "score": 1,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-sphinx-doc__sphinx-10466:0"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-9673@1.0.6-image-offline-golden",
+      "agent_ms": 189172,
+      "eval_ms": 19037,
+      "score": 1,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-sphinx-doc__sphinx-9673:0"
+    },
+    {
+      "data_id": "env:swebench-verified-sphinx-doc__sphinx-9281@1.0.6-image-offline-golden",
+      "agent_ms": 193273,
+      "eval_ms": 17132,
+      "score": 1,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-sphinx-doc__sphinx-9281:0"
+    },
+    {
+      "data_id": "env:swebench-verified-scikit-learn__scikit-learn-10844@1.0.6-image-offline-golden",
+      "agent_ms": 193526,
+      "eval_ms": 19327,
+      "score": 1,
+      "reference_task_id": "swe-verified-qwen3-8-prod-openai-medium-32k-2609141217:swebench-verified-scikit-learn__scikit-learn-10844:0"
+    }
+  ],
+  "excluded_active_and_queued": [
+    "env:swebench-verified-sphinx-doc__sphinx-10323@1.0.6-image-offline-golden",
+    "env:swebench-verified-django__django-16032@1.0.6-image-offline-golden",
+    "env:swebench-verified-django__django-14315@1.0.6-image-offline-golden"
+  ],
+  "heldout_overlap": 0
+}

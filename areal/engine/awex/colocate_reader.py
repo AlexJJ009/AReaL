@@ -28,6 +28,7 @@ signal-finished); see ``awex_sglang_plugin.process_awex_queue``.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import torch
@@ -243,6 +244,9 @@ class AwexColocateReader:
         self._infer_params_meta = None
         self._infer_conf: dict | None = None
         self._initialized = False
+        self._qwen4_frozen_contract = None
+        self._qwen4_frozen_binder = None
+        self._qwen4_parameter_identity = None
 
     # ── model / context helpers ───────────────────────────────────────
 
@@ -264,7 +268,30 @@ class AwexColocateReader:
         tp_size = int(getattr(server_args, "tp_size", 1))
         pp_size = int(getattr(server_args, "pp_size", 1))
         dp_size = int(getattr(server_args, "dp_size", 1))
-        tp_rank = int(getattr(scheduler, "tp_rank", 0))
+
+        # incident 15: the v3 fork keeps tp_rank on scheduler.tp_worker, NOT on the
+        # Scheduler itself. `getattr(scheduler, "tp_rank", 0)` silently
+        # returned 0 on EVERY rank, so every reader's rank_info claimed
+        # tp_rank=0, the sharding strategy computed offset-0 slices for all 64
+        # ranks, and the whole engine ended up with shard 0 of every tensor
+        # (942397 sentinel: identical norm/first4 across all ranks; MetaServer
+        # raw meta: gr=0..7 but tp=0 everywhere). Resolve through tp_worker
+        # and fall back to the instance-local rank (== tp rank for pp=1);
+        # never silently default to 0.
+        from areal.engine.sglang_fork_contract import resolve_scheduler_parallel_attr
+
+        def _rank_attr(name: str) -> int | None:
+            return resolve_scheduler_parallel_attr(scheduler, name)
+
+        tp_rank = _rank_attr("tp_rank")
+        if tp_rank is None and self._instance_local_rank is not None:
+            tp_rank = int(self._instance_local_rank) % max(tp_size, 1)
+        if tp_rank is None:
+            raise RuntimeError(
+                "Cannot resolve tp_rank from scheduler/tp_worker and "
+                "instance_local_rank is unset; refusing to default to 0 "
+                "(would silently corrupt the AWEX transfer plan, incident 15)"
+            )
 
         if self._infer_instance_world_size is not None:
             world_size = self._infer_instance_world_size
@@ -273,20 +300,25 @@ class AwexColocateReader:
             world_size = tp_size * pp_size
             global_rank = tp_rank
 
+        pp_rank = _rank_attr("pp_rank")
+        attn_tp_rank = _rank_attr("attn_tp_rank")
+        attn_tp_size = _rank_attr("attn_tp_size")
+        attn_dp_rank = _rank_attr("attn_dp_rank")
+
         return {
             "scheduler": scheduler,
             "infer_engine_config": server_args,
             "tp_rank": tp_rank,
             "tp_size": tp_size,
-            "pp_rank": int(getattr(scheduler, "pp_rank", 0)),
+            "pp_rank": 0 if pp_rank is None else pp_rank,
             "pp_size": pp_size,
             "dp_size": dp_size,
             "world_size": world_size,
             "global_rank": global_rank,
             "local_rank": tp_rank,
-            "attn_tp_rank": int(getattr(scheduler, "attn_tp_rank", tp_rank)),
-            "attn_tp_size": int(getattr(scheduler, "attn_tp_size", tp_size)),
-            "attn_dp_rank": int(getattr(scheduler, "attn_dp_rank", 0)),
+            "attn_tp_rank": tp_rank if attn_tp_rank is None else attn_tp_rank,
+            "attn_tp_size": tp_size if attn_tp_size is None else attn_tp_size,
+            "attn_dp_rank": 0 if attn_dp_rank is None else attn_dp_rank,
         }
 
     def get_parallelism(self) -> dict:
@@ -365,12 +397,45 @@ class AwexColocateReader:
         )
         return resolver.get_parameters_meta()
 
+    def _bind_qwen4_frozen_contract(self, timeout_s: float) -> None:
+        from pathlib import Path
+
+        from sglang.srt.managers.scheduler_components import weight_updater
+
+        from areal.models.mcore.qwen4_exp_awex import register_qwen4_exp_awex
+        from areal.models.mcore.qwen4_exp_awex_binding import SglangFrozenBinder
+        from areal.models.mcore.qwen4_exp_awex_contract import load_frozen_contract
+
+        manifest = os.environ.get("QWEN_AWEX_FROZEN_CONTRACT")
+        if not manifest:
+            raise ValueError("Qwen4Exp AWEX requires QWEN_AWEX_FROZEN_CONTRACT")
+        contract = load_frozen_contract(
+            Path(manifest), Path(self._scheduler.server_args.model_path)
+        )
+        train_info = self._meta_server_client.get_object(
+            "awex_train_info", timeout=timeout_s
+        )
+        if (
+            train_info.get("train_world_size") != self._train_world_size
+            or train_info.get("qwen4_exp_frozen_contract") != contract.to_dict()
+        ):
+            raise ValueError("Training and inference frozen contracts differ")
+        binder = SglangFrozenBinder(self._get_model, contract, weight_updater)
+        register_qwen4_exp_awex(sglang_binder=binder)
+        self._qwen4_frozen_contract = contract
+        self._qwen4_frozen_binder = binder
+
     def get_weight_metadata(self):
         """Inference-side parameters_meta for ONE engine instance."""
         if self._engine_rank is None:
             raise RuntimeError(
                 "AwexColocateReader must be initialized before getting weight metadata"
             )
+        if (
+            type(self._get_model()).__name__ == "Qwen4ExpForConditionalGeneration"
+            and self._qwen4_frozen_binder is None
+        ):
+            raise RuntimeError("Qwen4Exp metadata requires matching frozen contracts")
         if self._infer_params_meta is None:
             self._infer_params_meta = self._build_instance_params_meta()
         return self._infer_params_meta
@@ -434,6 +499,8 @@ class AwexColocateReader:
 
         host, port = meta_server_addr.rsplit(":", 1)
         self._meta_server_client = MetaServerClient(host, int(port))
+        if type(self._get_model()).__name__ == "Qwen4ExpForConditionalGeneration":
+            self._bind_qwen4_frozen_contract(timeout_s)
 
         # Compute single-instance parameters_meta (also reused as the native
         # reader's constructor arg later).
@@ -458,6 +525,10 @@ class AwexColocateReader:
             # awex.
             "router_dtype": _get_router_dtype(awex_hf_config),
         }
+        if self._qwen4_frozen_contract is not None:
+            infer_conf["qwen4_exp_frozen_contract"] = (
+                self._qwen4_frozen_contract.to_dict()
+            )
         self._infer_conf = infer_conf
 
         # Only one rank publishes the engine-instance-wide info the writer waits
@@ -516,6 +587,11 @@ class AwexColocateReader:
             reader.meta_server_client, self._local_gpu_id
         )
         reader.initialize()
+        if self._qwen4_frozen_contract is not None:
+            self._qwen4_parameter_identity = tuple(
+                (name, id(parameter))
+                for name, parameter in self._get_model().named_parameters()
+            )
         self._reader = reader
         logger.info(
             "Constructed native NCCLWorkerWeightsReader (transfer_rank=%d, "
@@ -538,6 +614,16 @@ class AwexColocateReader:
         if not self._initialized:
             raise RuntimeError("AwexColocateReader not initialized")
         reader = self._ensure_reader()
+        if self._qwen4_frozen_contract is not None:
+            identity = tuple(
+                (name, id(parameter))
+                for name, parameter in self._get_model().named_parameters()
+            )
+            if identity != self._qwen4_parameter_identity:
+                raise RuntimeError(
+                    "Qwen4Exp Parameters changed; reconstruct the AWEX reader after recovery"
+                )
+            reader.weight_converter.refresh_frozen_contract()
         reader.update_weights(step_id=version)
         self._rebuild_derived_weights()
         logger.info("Colocate weight update completed: version=%d", version)

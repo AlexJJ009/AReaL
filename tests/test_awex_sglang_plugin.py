@@ -207,7 +207,7 @@ def test_awex_weight_update_runs_without_grad_tracking():
     reader = SimpleNamespace(
         update_weights=lambda step_id: grad_modes.append(torch.is_grad_enabled())
     )
-    instance = object.__new__(AwexColocateReader)
+    instance = AwexColocateReader(SimpleNamespace())
     instance._initialized = True
     instance._ensure_reader = lambda: reader
     instance._rebuild_derived_weights = lambda: None
@@ -300,3 +300,21 @@ def test_awex_rejects_megatron_without_ddp_flat_buffers():
             weight_update_mode="awex",
             megatron=MegatronEngineConfig(wrap_with_ddp=False),
         )
+
+
+@pytest.mark.parametrize(
+    "installed", ["0.5.9", "0.5.10.post1", "0.5.19.dev125+g119b5ffe4"]
+)
+def test_supported_sglang_builds_are_accepted(monkeypatch, installed):
+    import areal.engine.awex.sglang_plugin as plugin
+
+    monkeypatch.setattr(plugin.pkg_version, "get_version", lambda name: installed)
+    plugin.assert_supported_sglang_version()
+
+
+def test_unverified_sglang_build_is_rejected(monkeypatch):
+    import areal.engine.awex.sglang_plugin as plugin
+
+    monkeypatch.setattr(plugin.pkg_version, "get_version", lambda name: "0.5.19.dev126")
+    with pytest.raises(RuntimeError, match="Re-check Scheduler"):
+        plugin.assert_supported_sglang_version()

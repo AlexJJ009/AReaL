@@ -173,6 +173,8 @@ megatron = [
     "megatron-core==0.17.0; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
     "mbridge @ git+https://github.com/ISEEKYAN/mbridge.git@310e8fb; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "megatron-bridge==0.4.0; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    # Keep the shared Megatron backend dependencies identical across variants.
+    "mcore-bridge @ git+https://github.com/dingzhiqiang/mcore-bridge.git@03f56345d9f599fcedc147881b08072c4f2c51f9; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 cuda-train = [
     "areal[tms]",
