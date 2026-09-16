@@ -365,3 +365,65 @@ def test_awex_reader_rejects_invisible_physical_device(monkeypatch):
 
     with pytest.raises(ValueError, match="not in CUDA_VISIBLE_DEVICES"):
         reader._set_device()
+
+
+def test_receiver_initialization_failure_reaches_scheduler_loop():
+    plugin = AwexSchedulerPlugin(SimpleNamespace())
+    failure = SystemError("metadata tuple construction failed")
+    plugin._initialization_error = failure
+    with pytest.raises(
+        RuntimeError, match="AWEX receiver initialization failed"
+    ) as exc:
+        plugin.process_awex_queue()
+    assert exc.value.__cause__ is failure
+
+
+def test_native_scheduler_surfaces_initialization_error_while_unpaused():
+    calls = []
+    scheduler = SimpleNamespace(
+        _apply_war_barrier=lambda: None,
+        _engine_paused=False,
+        process_input_requests=lambda requests: calls.append(requests),
+    )
+    plugin = AwexSchedulerPlugin(scheduler)
+    plugin._patch_event_loop()
+    plugin._initialization_error = ValueError("invalid metadata")
+    with pytest.raises(RuntimeError, match="AWEX receiver initialization failed"):
+        scheduler.process_input_requests([])
+    assert not calls
+
+
+def test_scheduler_dispatcher_captures_gc_guard_and_registration_is_idempotent(
+    monkeypatch,
+):
+    import sys
+
+    import areal.engine.awex.sglang_plugin as plugin_module
+
+    class Scheduler:
+        def __init__(self):
+            self.dispatch = {"freeze": self.handle_freeze_gc}
+
+        def handle_freeze_gc(self, request):
+            return request
+
+    original_freeze = Scheduler.handle_freeze_gc
+    monkeypatch.setitem(
+        sys.modules,
+        "sglang.srt.managers.scheduler",
+        SimpleNamespace(Scheduler=Scheduler),
+    )
+    monkeypatch.delenv("QWEN_AWEX_FROZEN_CONTRACT", raising=False)
+    monkeypatch.setattr(plugin_module, "assert_supported_sglang_version", lambda: None)
+    monkeypatch.setattr(AwexSchedulerPlugin, "bind", lambda self: None)
+    monkeypatch.setattr(
+        plugin_module, "_patch_execute_task_in_model_worker", lambda *a: None
+    )
+    plugin_module.register_awex_plugin()
+    guarded = Scheduler.handle_freeze_gc
+    assert guarded.__wrapped__ is original_freeze
+    plugin_module.register_awex_plugin()
+    assert Scheduler.handle_freeze_gc is guarded
+    scheduler = Scheduler()
+    assert scheduler.dispatch["freeze"].__func__ is guarded
+    assert scheduler.dispatch["freeze"]("request") == "request"
