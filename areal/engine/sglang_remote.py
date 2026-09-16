@@ -516,14 +516,13 @@ class SGLangBackend:
             )
 
         if awex_colocate or awex_meta_addr:
+            launch_module = _env.get("AREAL_SGLANG_FORCE_LAUNCH_MODULE", "").strip()
+            launch_module = launch_module or "areal.engine.awex.sglang_plugin"
             sglang_entrypoints = (
                 "sglang.launch_server",
                 "areal.v2.inference_service.sglang.launch_server",
             )
-            cmd = [
-                "areal.engine.awex.sglang_plugin" if c in sglang_entrypoints else c
-                for c in cmd
-            ]
+            cmd = [launch_module if c in sglang_entrypoints else c for c in cmd]
             if awex_meta_addr:
                 _env["AWEX_META_SERVER_ADDR"] = awex_meta_addr
             logger.info("AWEX mode: using awex_sglang_plugin entry, cmd=%s", cmd[:4])
