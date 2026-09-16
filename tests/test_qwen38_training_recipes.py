@@ -171,3 +171,30 @@ def test_swe_identity_reward_preserves_partial_scores_and_rejects_invalid_values
     for value in (float("nan"), float("inf"), -0.1, 1.1):
         with pytest.raises(ValueError, match="within"):
             identity_reward(value, {})
+
+
+@pytest.mark.parametrize("split_mode", ["pair", "trajectory"])
+def test_sft_structured_schema_accepts_supported_split_modes(split_mode):
+    from examples.swe.config import SweSFTConfig
+
+    from areal.api.cli_args import to_structured_cfg
+
+    config = OmegaConf.to_object(
+        to_structured_cfg(
+            OmegaConf.create({"swe": {"split_mode": split_mode}}), SweSFTConfig
+        ).swe
+    )
+    assert config.split_mode == split_mode
+
+
+def test_sft_structured_schema_rejects_invalid_split_mode():
+    from examples.swe.config import SweSFTConfig
+
+    from areal.api.cli_args import to_structured_cfg
+
+    with pytest.raises(ValueError, match="split_mode must be either"):
+        OmegaConf.to_object(
+            to_structured_cfg(
+                OmegaConf.create({"swe": {"split_mode": "typo"}}), SweSFTConfig
+            ).swe
+        )
