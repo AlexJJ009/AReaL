@@ -92,11 +92,28 @@ def test_submit_preserves_arguments_and_packages_runtime(tmp_path, profile):
 def test_rl_profiles_preserve_sampling_and_memory_settings(monkeypatch):
     import re
 
+    from examples.swe.utils import SWEPPOConfig
+
+    from areal.api.cli_args import GRPOConfig, to_structured_cfg
+
     for name in ("swe_rl_256k.yaml", "rlvr_gsm8k_256k.yaml"):
         source = (RECIPE / name).read_text()
         for key in re.findall(r"\$\{oc.env:([A-Za-z_][A-Za-z_0-9]*)(?:[,}])", source):
             monkeypatch.setenv(key, "fixture")
         monkeypatch.setenv("TOTAL_TRAIN_STEPS", "500")
+        schema = SWEPPOConfig if name.startswith("swe") else GRPOConfig
+        structured = OmegaConf.to_object(
+            to_structured_cfg(OmegaConf.load(RECIPE / name), schema)
+        )
+        assert structured.actor.min_usable_group_size == 8
+        assert structured.actor.reward_norm is None
+        assert structured.gconfig.reward_normalization
+        assert not structured.gconfig.reward_normalization_use_std
+        assert (
+            "reward_normalization_use_std"
+            not in structured.gconfig.to_openai_args_dict()
+        )
+        assert structured.total_train_steps == 500
         config = OmegaConf.to_container(OmegaConf.load(RECIPE / name), resolve=True)
         assert (
             config["gconfig"]["max_tokens"]
@@ -111,3 +128,46 @@ def test_rl_profiles_preserve_sampling_and_memory_settings(monkeypatch):
         )
         assert config["sglang"]["mem_fraction_static"] == 0.65
         assert config["actor"]["megatron"]["freeze_ple_table"] is True
+
+
+def test_swe_workflow_kwargs_preserve_sampling_arguments():
+    from examples.swe.utils import SWEPPOConfig
+
+    config = SWEPPOConfig()
+    config.gconfig.temperature = 0.7
+    config.gconfig.top_p = 0.8
+    config.gconfig.top_k = 42
+    config.gconfig.max_new_tokens = 65536
+    config.econfig.timeout = 1800
+    kwargs = load_entry().build_workflow_kwargs(config)
+    assert kwargs["gen_args"] == dict(
+        temperature=0.7, top_p=0.8, top_k=42, max_completion_tokens=65536
+    )
+    assert kwargs["timeout"] == kwargs["econfig"]["timeout"] == 1800
+
+
+def test_thinking_defaults_respect_explicit_switch_without_mutation():
+    spec = importlib.util.spec_from_file_location(
+        "qwen_template_defaults", RECIPE / "runtime/qwen_template_defaults.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.with_template_defaults()["chat_template_kwargs"] == dict(
+        enable_thinking=True, reasoning_effort="medium", thinking_option=None
+    )
+    body = {"chat_template_kwargs": {"thinking_option": "off"}, "other": 42}
+    merged = module.with_template_defaults(body)
+    assert merged["chat_template_kwargs"] == dict(
+        thinking_option="off", reasoning_effort="medium"
+    )
+    assert merged["other"] == 42
+    assert body == {"chat_template_kwargs": {"thinking_option": "off"}, "other": 42}
+
+
+def test_swe_identity_reward_preserves_partial_scores_and_rejects_invalid_values():
+    from examples.swe.reward_transforms import identity_reward
+
+    assert identity_reward(0.4, {}, reward_threshold=0.98) == 0.4
+    for value in (float("nan"), float("inf"), -0.1, 1.1):
+        with pytest.raises(ValueError, match="within"):
+            identity_reward(value, {})

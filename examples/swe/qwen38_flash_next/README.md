@@ -68,6 +68,19 @@ rollout queue, cache isolation, diagnostics, harness and recovery checks are ret
 RLVR preserves its own queue and cache settings. The historical RLVR entry disables
 evaluation even though a validation dataset is present in its YAML.
 
+### Open-source main compatibility
+
+The recipes use main's `actor.min_usable_group_size=8` and retain rollout-time mean-only
+reward normalization with `gconfig.reward_normalization_use_std=false`. This option
+defaults to true for existing workflows; mean-only normalization requires the v1 rollout
+backend. `TOTAL_TRAIN_STEPS` controls the training limit (default 10).
+
+The runtime helpers explicitly supply thinking template defaults through
+`extra_body.chat_template_kwargs` (`enable_thinking=true`, `reasoning_effort=medium`,
+`thinking_option=null`). A request-level thinking switch overrides the default switches.
+SWE installs these defaults in its diagnostic proxy; RLVR supplies them in the MathAgent
+request. These replace inner-source-only AgentConfig fields.
+
 ### RL launch environment
 
 Export these variables, or set `QWEN_LAUNCH_ENV` to an untracked shell file defining

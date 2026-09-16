@@ -7,7 +7,22 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import asdict
 from pathlib import Path
+
+
+def build_workflow_kwargs(config):
+    """Keep the validated sampling arguments independent of the SWE CLI."""
+    return dict(
+        econfig=asdict(config.econfig),
+        gen_args=dict(
+            temperature=config.gconfig.temperature,
+            top_p=config.gconfig.top_p,
+            top_k=config.gconfig.top_k,
+            max_completion_tokens=config.gconfig.max_new_tokens,
+        ),
+        timeout=config.econfig.timeout,
+    )
 
 
 def select_training_rows(rows, split):
@@ -242,7 +257,7 @@ def main(argv):
             )
         trainer.train(
             workflow="qwen_claude_audit.ClaudeArenaWorkflow",
-            workflow_kwargs=entry._build_workflow_kwargs(config),
+            workflow_kwargs=build_workflow_kwargs(config),
             dynamic_filter_fn=None,
         )
 

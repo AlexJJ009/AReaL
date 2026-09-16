@@ -6,6 +6,7 @@ import os
 from math_verify import parse, verify
 from openai import AsyncOpenAI
 from openai.types.chat import ChatCompletion
+from qwen_template_defaults import with_template_defaults
 
 from areal.api import AsyncRewardWrapper
 
@@ -19,6 +20,9 @@ def math_reward_fn(completions: str, answer: str) -> float:
 class MathAgent:
     def __init__(self, **kwargs):
         self.kwargs = kwargs.copy()
+        self.kwargs["extra_body"] = with_template_defaults(
+            self.kwargs.get("extra_body")
+        )
         self.kwargs.pop("max_tokens", None)
         self.kwargs.pop("max_turns", None)
         self._reward_fn = AsyncRewardWrapper(math_reward_fn)

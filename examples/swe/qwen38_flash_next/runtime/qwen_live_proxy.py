@@ -51,9 +51,13 @@ def wrap_token_capture(original, root):
 
 
 def main():
+    from qwen_template_defaults import wrap_create
+
     from areal.engine.sglang_remote import RemoteSGLangEngine
+    from areal.experimental.openai.client import AsyncCompletionsWithReward
     from areal.experimental.openai.proxy import proxy_rollout_server as native
 
+    AsyncCompletionsWithReward.create = wrap_create(AsyncCompletionsWithReward.create)
     root = Path(os.environ["QWEN_ARENA_RAW_AUDIT_DIR"]).parent
     from qwen_wire_audit import install_wire_audit
 

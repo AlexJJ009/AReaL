@@ -850,6 +850,14 @@ class PPOTrainer:
                 "The v2 rollout path does not support actor.min_usable_group_size "
                 "yet; unset it or use a v1 rollout backend."
             )
+        if (
+            not is_v1_rollout
+            and config.gconfig.reward_normalization
+            and not config.gconfig.reward_normalization_use_std
+        ):
+            raise ValueError(
+                "Mean-only rollout reward normalization requires a v1 rollout backend."
+            )
         min_usable_group_size = (
             config.actor.resolve_min_usable_group_size(config.gconfig.n_samples)
             if is_v1_rollout
@@ -941,6 +949,9 @@ class PPOTrainer:
                     drop_incomplete_group=config.gconfig.drop_incomplete_group,
                 )
                 if is_v1_rollout:
+                    prepare_kwargs["reward_normalization_use_std"] = (
+                        config.gconfig.reward_normalization_use_std
+                    )
                     prepare_kwargs["min_usable_group_size"] = min_usable_group_size
                 rollout_batch = _collect_trainable_rollout_batch(
                     functools.partial(

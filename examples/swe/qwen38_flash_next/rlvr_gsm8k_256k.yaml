@@ -3,7 +3,7 @@ trial_name: ${oc.env:QWEN_GSM8K_TRIAL}
 seed: 1234
 enable_offload: false
 total_train_epochs: 10
-total_train_steps: 10
+total_train_steps: ${oc.env:TOTAL_TRAIN_STEPS,10}
 tokenizer_path: ${oc.env:QWEN_MODEL}
 cluster:
   n_nodes: 8
@@ -17,8 +17,6 @@ scheduler:
   type: slurm
 gconfig:
   n_samples: 8
-  min_usable_group_size: 8
-  keep_partial_group_on_error: false
   min_new_tokens: 0
   max_new_tokens: 65536
   max_tokens: 262144
@@ -38,8 +36,6 @@ gconfig:
   drop_incomplete_group: false
 eval_gconfig:
   n_samples: 1
-  min_usable_group_size: 1
-  keep_partial_group_on_error: false
   min_new_tokens: 0
   max_new_tokens: 65536
   max_tokens: 262144
@@ -55,7 +51,6 @@ eval_gconfig:
   lora_name: ''
   use_beam_search: false
   reward_normalization: false
-  reward_normalization_use_std: false
   drop_incomplete_group: false
 rollout:
   backend: sglang:d16t4
@@ -120,12 +115,6 @@ rollout:
     admin_api_key: ${oc.env:QWEN_GSM8K_PROXY_KEY}
     tool_call_parser: qwen3_coder
     reasoning_parser: qwen3
-    chat_template_kwargs:
-      enable_thinking: true
-      reasoning_effort: medium
-      thinking_option: null
-    think_mode: ''
-    think_prob: 1.0
     chat_template_type: hf
     engine_max_tokens: 262144
     export_style: individual
@@ -135,6 +124,7 @@ rollout:
   return_routed_experts: false
   _version: v1
 actor:
+  min_usable_group_size: 8
   backend: megatron:(attn:d1p8t8|ffn:d1p8t1e8)
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
