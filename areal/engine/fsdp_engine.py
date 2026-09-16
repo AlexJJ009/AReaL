@@ -61,6 +61,7 @@ from areal.api.cli_args import OptimizerConfig, PerfTracerConfig, TrainEngineCon
 from areal.api.io_struct import DeviceRuntimeInfo
 from areal.engine.core import (
     aggregate_eval_losses,
+    compute_microbatch_loss_weight,
     compute_total_loss_weight,
     reorder_and_pad_outputs,
 )
@@ -116,6 +117,7 @@ from areal.utils import (
 )
 from areal.utils.constants import DIST_GROUP_DEFAULT_TIMEOUT
 from areal.utils.data import (
+    TRANSPORT_DUMMY_KEY,
     MicroBatchItem,
     MicroBatchList,
     amend_position_ids,
@@ -606,6 +608,7 @@ class FSDPEngine(TrainEngine):
         group_size: int = 1,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        min_usable_group_size: int = 1,
     ) -> list[dict[str, Any]]:
         self._check_rollout_engine_connected()
         return self.rollout_coordinator.rollout_batch(
@@ -613,6 +616,7 @@ class FSDPEngine(TrainEngine):
             workflow=workflow,
             workflow_kwargs=workflow_kwargs,
             group_size=group_size,
+            min_usable_group_size=min_usable_group_size,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
         )
@@ -627,6 +631,7 @@ class FSDPEngine(TrainEngine):
         dynamic_bs: bool = False,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        min_usable_group_size: int = 1,
     ) -> list[dict[str, Any]]:
         self._check_rollout_engine_connected()
         return self.rollout_coordinator.prepare_batch(
@@ -635,6 +640,7 @@ class FSDPEngine(TrainEngine):
             workflow_kwargs=workflow_kwargs,
             should_accept_fn=should_accept_fn,
             group_size=group_size,
+            min_usable_group_size=min_usable_group_size,
             dynamic_bs=dynamic_bs,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
@@ -771,9 +777,27 @@ class FSDPEngine(TrainEngine):
             if counts[1]:
                 raise ValueError("FSDP requires at least one real micro-batch per rank")
             n_micro_batches = int(counts[0])
-        # Keep real packing and output metadata intact. Short ranks still need
-        # to participate in every FSDP forward/backward collective. Reusing the
-        # shortest valid input also preserves multimodal and SP/TP input layout.
+
+        # Model configuration is shared by all ranks, including text-only peers.
+        if self.is_vision_model:
+            has_dummy = torch.tensor(
+                n_micro_batches > len(mb_items)
+                or any(mb.get(TRANSPORT_DUMMY_KEY) is True for mb in mb_list.mbs),
+                dtype=torch.int32,
+                device="cpu",
+            )
+            dist.all_reduce(has_dummy, op=dist.ReduceOp.MAX, group=self.cpu_group)
+            if has_dummy.item():
+                raise ValueError(
+                    "FSDP transport padding is not supported for vision-language "
+                    "models: text-only dummies can skip sharded vision layers "
+                    "and mismatch collectives. Use batches and microbatch settings "
+                    "that require no transport padding. All training ranks stopped "
+                    "before model execution."
+                )
+
+        # Preserve real packing and output metadata while short ranks participate
+        # in every FSDP forward/backward with their shortest valid input.
         dummy_index = min(range(len(mb_items)), key=mb_list.group_lens.__getitem__)
         for mb_index in range(n_micro_batches):
             is_dummy = mb_index >= len(mb_items)
@@ -827,7 +851,9 @@ class FSDPEngine(TrainEngine):
             self.optimizer_zero_grad()
 
             # Step 1: Prepare micro-batches
-            mb_list = self._prepare_mb_list(input_batched).to(self.device)
+            mb_list = self._prepare_mb_list(
+                input_batched, allow_transport_padding=True
+            ).to(self.device)
 
             # Step 2: Compute total loss weight
             total_loss_weight = compute_total_loss_weight(
@@ -867,7 +893,9 @@ class FSDPEngine(TrainEngine):
         input_batched, _ = self._normalize_batch_input(input_)
 
         # Step 1: Prepare micro-batches
-        mb_list = self._prepare_mb_list(input_batched).to(self.device)
+        mb_list = self._prepare_mb_list(input_batched, allow_transport_padding=True).to(
+            self.device
+        )
 
         # Step 2: Compute total loss weight
         total_loss_weight = compute_total_loss_weight(
@@ -925,7 +953,9 @@ class FSDPEngine(TrainEngine):
         batch_size = len(output_seqlens)
 
         # Step 2: Prepare micro-batches
-        mb_list = self._prepare_mb_list(input_batched).to(self.device)
+        mb_list = self._prepare_mb_list(input_batched, allow_transport_padding=True).to(
+            self.device
+        )
 
         # Step 3: Forward using process_output_fn callback, collecting results
         outputs: list[torch.Tensor] = []
@@ -1932,7 +1962,12 @@ class FSDPEngine(TrainEngine):
         self.optimizer.load_state_dict(optimizer_state_dict)
         dist.barrier(group=self.cpu_group)
 
-    def _prepare_mb_list(self, input_: dict[str, Any]) -> MicroBatchList:
+    def _prepare_mb_list(
+        self,
+        input_: dict[str, Any],
+        *,
+        allow_transport_padding: bool = False,
+    ) -> MicroBatchList:
         assert "attention_mask" in input_ and "input_ids" in input_
         input_ = input_.copy()
 
@@ -1996,7 +2031,10 @@ class FSDPEngine(TrainEngine):
             input_ = amend_position_ids(input_)
 
         mb_list = split_padded_tensor_dict_into_mb_list(
-            input_, self.config.mb_spec, sync_mbs=False
+            input_,
+            self.config.mb_spec,
+            allow_transport_padding=allow_transport_padding,
+            sync_mbs=False,
         )
         mb_list.mbs = [pack_tensor_dict(mb) for mb in mb_list.mbs]
         mb_list = pad_mb_list(
@@ -2209,7 +2247,7 @@ class FSDPEngine(TrainEngine):
         loss_multiplier: float = 1.0,
     ) -> torch.Tensor:
         """Compute logprobs/entropy and return scaled loss."""
-        local_weight = loss_weight_fn(ctx.mb_input)
+        local_weight = compute_microbatch_loss_weight(ctx.mb_input, loss_weight_fn)
         if local_weight == 0:
             return logits.mean() * 0.0
 

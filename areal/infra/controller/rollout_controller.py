@@ -47,7 +47,16 @@ from areal.utils.network import find_free_ports, format_hostport, gethostip
 from areal.utils.perf_tracer import trace_perf
 
 from ..staleness_manager import StalenessManager
-from ..workflow_executor import BatchTaskDispatcher, TaskIdGenerator
+from ..workflow_executor import (
+    BatchTaskDispatcher,
+    TaskIdGenerator,
+    WorkflowContractFailure,
+    WorkflowTaskResult,
+    _RolloutResult,
+    get_workflow_result_error,
+    unwrap_workflow_result,
+    validate_rollout_group_sizes,
+)
 
 logger = logging.getLogger("RolloutController")
 
@@ -57,14 +66,18 @@ def _merge_worker_stats(
 ) -> dict[str, float]:
     """Merge independently aggregated stats from rollout workers.
 
-    Scalar means carry a ``__count`` companion. PRM structured count/sum
-    metrics have explicitly known SUM semantics. Other tensor statistics
-    lack reduction metadata in the export, so retain the existing behavior
-    of omitting them rather than guessing their denominator or reduction.
+    Scalar means carry a ``__count`` companion. Distributions using the
+    ``<base>_count`` convention retain weighted averages and extrema. PRM
+    count/sum metrics have explicit SUM semantics; omit other tensor metrics
+    whose reduction or denominator cannot be determined from the export.
     """
     sums = defaultdict(float)
     scalar_weighted_sums = defaultdict(float)
     scalar_counts = defaultdict(float)
+    distribution_weighted_sums = defaultdict(float)
+    distribution_counts = defaultdict(float)
+    distribution_mins: dict[str, float] = {}
+    distribution_maxes: dict[str, float] = {}
 
     for raw_stats in all_raw_stats:
         for key, value in raw_stats.items():
@@ -78,20 +91,53 @@ def _merge_worker_stats(
                 scalar_counts[key] += count
                 continue
 
+            base, separator, reduction = key.rpartition("/")
+            distribution_count_key = f"{base}_count"
+            if (
+                separator
+                and reduction in {"avg", "min", "max"}
+                and distribution_count_key in raw_stats
+            ):
+                count = raw_stats[distribution_count_key]
+                if count <= 0:
+                    continue
+                if reduction == "avg":
+                    distribution_weighted_sums[key] += value * count
+                    distribution_counts[key] += count
+                elif reduction == "min":
+                    distribution_mins[key] = min(
+                        value, distribution_mins.get(key, value)
+                    )
+                else:
+                    distribution_maxes[key] = max(
+                        value, distribution_maxes.get(key, value)
+                    )
+                continue
+
             metric_key = key.removeprefix("rollout/").removeprefix("eval-rollout/")
             segments = metric_key.split("/")
-            if (
+            is_prm_sum = (
                 len(segments) == 5
                 and segments[0] == "prm_metric"
                 and segments[1] in {"turn", "trajectory"}
                 and segments[-1] in {"count", "sum", "observed_count"}
-            ):
+            )
+            is_distribution_count = key.endswith("_count") and any(
+                f"{key.removesuffix('_count')}/{reduction}" in raw_stats
+                for reduction in ("avg", "min", "max")
+            )
+            if is_prm_sum or is_distribution_count:
                 sums[key] += value
 
     merged = dict(sums)
     for key, weighted_sum in scalar_weighted_sums.items():
         if scalar_counts[key] > 0:
             merged[key] = weighted_sum / scalar_counts[key]
+    for key, weighted_sum in distribution_weighted_sums.items():
+        if distribution_counts[key] > 0:
+            merged[key] = weighted_sum / distribution_counts[key]
+    merged.update(distribution_mins)
+    merged.update(distribution_maxes)
     return merged
 
 
@@ -107,15 +153,10 @@ class _RemoteRolloutTaskInput:
     mopd_route: str | None = None
     is_eval: bool = False
     group_size: int = 1
+    min_usable_group_size: int = 1
     proxy_addr: str | None = None
     reward_normalization: bool = False
     drop_incomplete_group: bool = False
-
-
-@dataclass
-class _RemoteRolloutResult:
-    task_id: int
-    trajectory: dict[str, Any]
 
 
 class RolloutController:
@@ -154,7 +195,7 @@ class RolloutController:
 
         # Dispatcher will be initialized in initialize() after staleness_manager is ready
         self._dispatcher: (
-            BatchTaskDispatcher[_RemoteRolloutTaskInput, _RemoteRolloutResult] | None
+            BatchTaskDispatcher[_RemoteRolloutTaskInput, WorkflowTaskResult] | None
         ) = None
 
         # HTTP callback server
@@ -300,12 +341,13 @@ class RolloutController:
         # Create and initialize the dispatcher
         qsize = self.config.queue_size or max_concurrent_rollouts * 16
         self._dispatcher = BatchTaskDispatcher[
-            _RemoteRolloutTaskInput, _RemoteRolloutResult
+            _RemoteRolloutTaskInput, WorkflowTaskResult
         ](
             max_queue_size=qsize,
             task_factory=self._create_submit_callback,
             staleness_manager=self._staleness_manager,
             enable_tracing=self.config.enable_rollout_tracing,
+            terminal_error_fn=get_workflow_result_error,
             deterministic_order=getattr(self.config, "deterministic_sampling", False),
         )
         # Initialize the dispatcher's async task runner
@@ -1013,7 +1055,7 @@ class RolloutController:
         )
 
     def _create_submit_callback(self, pending_task: _RemoteRolloutTaskInput):
-        async def _submit_then_wait() -> _RemoteRolloutResult | None:
+        async def _submit_then_wait() -> WorkflowTaskResult | None:
             # Choose worker via round-robin
             worker, rank = self._choose_worker()
             engine_name = self._engine_name(rank)
@@ -1045,6 +1087,7 @@ class RolloutController:
                     http_timeout=self.config.request_timeout,
                     is_eval=pending_task.is_eval,
                     group_size=pending_task.group_size,
+                    min_usable_group_size=pending_task.min_usable_group_size,
                     task_id=task_id,
                     callback_addr=f"http://{self.callback_addr}/callback/rollout_complete",
                     proxy_addr=proxy_addr,
@@ -1060,13 +1103,17 @@ class RolloutController:
                 # Fetch the result
                 result = await self.scheduler.async_call_engine(
                     worker.id,
-                    "wait_for_task",
+                    "_wait_for_task_result",
                     engine_name=engine_name,
                     task_id=engine_task_id,
                     timeout=0.1,  # A short time to prevent blocking other requests
                     raise_timeout=False,
                     http_timeout=self.config.request_timeout,
                 )
+
+                if isinstance(result, WorkflowContractFailure):
+                    manager.on_rollout_rejected()
+                    return result
 
                 traj = result
                 if traj is not None:
@@ -1076,7 +1123,7 @@ class RolloutController:
                         logger.info(
                             f"Finish and accept rollout. {self._rollout_stats()}"
                         )
-                    return _RemoteRolloutResult(task_id=task_id, trajectory=traj)
+                    return _RolloutResult(task_id=task_id, trajectory=traj)
 
                 manager.on_rollout_rejected()
                 if self.config.enable_rollout_tracing:
@@ -1115,7 +1162,10 @@ class RolloutController:
         proxy_addr: str | None = None,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        min_usable_group_size: int = 1,
     ) -> int:
+        validate_rollout_group_sizes(group_size, min_usable_group_size)
+
         data, mopd_route = self._extract_mopd_route(
             data, required=self._mopd_routing_enabled and not is_eval
         )
@@ -1138,6 +1188,7 @@ class RolloutController:
             mopd_route=mopd_route,
             is_eval=is_eval,
             group_size=group_size,
+            min_usable_group_size=min_usable_group_size,
             proxy_addr=proxy_addr,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
@@ -1151,7 +1202,10 @@ class RolloutController:
         self, count: int, timeout: float | None = None, raise_timeout: bool = True
     ) -> list[dict[str, Any] | None]:
         # Delegate to dispatcher and extract trajectories
-        results = self.dispatcher.wait_results(count, timeout, raise_timeout)
+        results = [
+            unwrap_workflow_result(result)
+            for result in self.dispatcher.wait_results(count, timeout, raise_timeout)
+        ]
         # Log and trace
         if self.config.enable_rollout_tracing:
             logger.info("Rollout results are ready!")
@@ -1168,6 +1222,7 @@ class RolloutController:
         group_size: int = 1,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        min_usable_group_size: int = 1,
     ) -> list[dict[str, Any]]:
         perf_tracer.instant(
             "rollout_controller.rollout_batch",
@@ -1181,6 +1236,7 @@ class RolloutController:
                 workflow_kwargs=workflow_kwargs,
                 should_accept_fn=should_accept_fn,
                 group_size=group_size,
+                min_usable_group_size=min_usable_group_size,
                 reward_normalization=reward_normalization,
                 drop_incomplete_group=drop_incomplete_group,
             )
@@ -1199,6 +1255,7 @@ class RolloutController:
         dynamic_bs: bool = False,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        min_usable_group_size: int = 1,
     ) -> list[dict[str, Any]]:
         """Prepare a batch with controlled staleness.
 
@@ -1208,6 +1265,7 @@ class RolloutController:
         See :meth:`~areal.api.engine_api.InferenceEngine.prepare_batch` for parameters.
         """
 
+        validate_rollout_group_sizes(group_size, min_usable_group_size)
         workflow_str = self._resolve_workflow_str(workflow)
         if workflow_kwargs is None:
             workflow_kwargs = {}
@@ -1226,6 +1284,7 @@ class RolloutController:
                         task_id=self._task_id_generator.next(),
                         mopd_route=mopd_route,
                         group_size=group_size,
+                        min_usable_group_size=min_usable_group_size,
                         reward_normalization=reward_normalization,
                         drop_incomplete_group=drop_incomplete_group,
                     )
@@ -1235,9 +1294,14 @@ class RolloutController:
 
         # Delegate to dispatcher
         assert dataloader.batch_size is not None
-        results = self.dispatcher.active_submit_and_wait(
-            self.data_generator, batch_size=dataloader.batch_size, dynamic_bs=dynamic_bs
-        )
+        results = [
+            unwrap_workflow_result(result)
+            for result in self.dispatcher.active_submit_and_wait(
+                self.data_generator,
+                batch_size=dataloader.batch_size,
+                dynamic_bs=dynamic_bs,
+            )
+        ]
 
         # Return list of trajectories
         trajectories = [r.trajectory if r is not None else None for r in results]
@@ -1420,7 +1484,7 @@ class RolloutController:
     @property
     def dispatcher(
         self,
-    ) -> BatchTaskDispatcher[_RemoteRolloutTaskInput, _RemoteRolloutResult]:
+    ) -> BatchTaskDispatcher[_RemoteRolloutTaskInput, WorkflowTaskResult]:
         """Get the task dispatcher, ensuring initialization has been called."""
         if self._dispatcher is None:
             raise RuntimeError(

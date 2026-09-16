@@ -41,6 +41,7 @@ from areal.engine.core.distributed import (
 )
 from areal.engine.core.train_engine import (
     aggregate_eval_losses,
+    compute_microbatch_loss_weight,
     compute_total_loss_weight,
     reorder_and_pad_outputs,
 )
@@ -549,7 +550,9 @@ class ArchonEngine(TrainEngine):
         with record_training_batch(self, input_batched, self.model_config):
             self.optimizer_zero_grad()
 
-            mb_list = self._prepare_mb_list(input_batched).to(self.device)
+            mb_list = self._prepare_mb_list(
+                input_batched, allow_transport_padding=True
+            ).to(self.device)
 
             total_loss_weight = compute_total_loss_weight(
                 mb_list, loss_weight_fn, self.data_parallel_group
@@ -586,7 +589,9 @@ class ArchonEngine(TrainEngine):
 
         input_batched, _ = self._normalize_batch_input(input_)
 
-        mb_list = self._prepare_mb_list(input_batched).to(self.device)
+        mb_list = self._prepare_mb_list(input_batched, allow_transport_padding=True).to(
+            self.device
+        )
 
         total_loss_weight = compute_total_loss_weight(
             mb_list, loss_weight_fn, self.data_parallel_group
@@ -644,7 +649,9 @@ class ArchonEngine(TrainEngine):
         assert output_seqlens is not None
         batch_size = len(output_seqlens)
 
-        mb_list = self._prepare_mb_list(input_batched).to(self.device)
+        mb_list = self._prepare_mb_list(input_batched, allow_transport_padding=True).to(
+            self.device
+        )
 
         def process_output(
             logits: torch.Tensor, ctx_dict: dict[str, Any]
@@ -707,6 +714,7 @@ class ArchonEngine(TrainEngine):
         group_size: int = 1,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        min_usable_group_size: int = 1,
     ) -> list[dict[str, Any]]:
         """Perform rollout using connected inference engine."""
         self._check_rollout_engine_connected()
@@ -715,6 +723,7 @@ class ArchonEngine(TrainEngine):
             workflow=workflow,
             workflow_kwargs=workflow_kwargs,
             group_size=group_size,
+            min_usable_group_size=min_usable_group_size,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
         )
@@ -729,6 +738,7 @@ class ArchonEngine(TrainEngine):
         dynamic_bs: bool = False,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        min_usable_group_size: int = 1,
     ) -> list[dict[str, Any]]:
         """Prepare batch from dataloader with rollout."""
         self._check_rollout_engine_connected()
@@ -738,6 +748,7 @@ class ArchonEngine(TrainEngine):
             workflow_kwargs=workflow_kwargs,
             should_accept_fn=should_accept_fn,
             group_size=group_size,
+            min_usable_group_size=min_usable_group_size,
             dynamic_bs=dynamic_bs,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
@@ -1209,7 +1220,12 @@ class ArchonEngine(TrainEngine):
             return concat_batch(input_)
         return input_, None
 
-    def _prepare_mb_list(self, input_: dict[str, Any]) -> MicroBatchList:
+    def _prepare_mb_list(
+        self,
+        input_: dict[str, Any],
+        *,
+        allow_transport_padding: bool = False,
+    ) -> MicroBatchList:
         assert "attention_mask" in input_ and "input_ids" in input_
         input_ = input_.copy()
 
@@ -1237,7 +1253,7 @@ class ArchonEngine(TrainEngine):
             stages_per_rank = len(self.pp_stages)
             num_total_stages = pp_size * stages_per_rank
             n_seqs = input_["attention_mask"].shape[0]
-            if n_seqs < num_total_stages:
+            if n_seqs < num_total_stages and not allow_transport_padding:
                 raise RuntimeError(
                     f"Pipeline parallelism requires at least {num_total_stages} "
                     f"sequences (pp_size={pp_size} * stages_per_rank="
@@ -1253,7 +1269,12 @@ class ArchonEngine(TrainEngine):
         else:
             mb_spec = self.config.mb_spec
 
-        mb_list = split_padded_tensor_dict_into_mb_list(input_, mb_spec)
+        mb_list = split_padded_tensor_dict_into_mb_list(
+            input_,
+            mb_spec,
+            group=self.data_parallel_group if allow_transport_padding else None,
+            allow_transport_padding=allow_transport_padding,
+        )
         mb_list.mbs = [pack_tensor_dict(mb) for mb in mb_list.mbs]
 
         # LCM ensures page-aligned memory and exact CP slicing without extra padding.
@@ -1301,7 +1322,7 @@ class ArchonEngine(TrainEngine):
         loss_multiplier: float = 1.0,
     ) -> torch.Tensor:
         """Compute logprobs/entropy and return scaled loss."""
-        local_weight = loss_weight_fn(ctx.mb_input)
+        local_weight = compute_microbatch_loss_weight(ctx.mb_input, loss_weight_fn)
         if local_weight == 0:
             return logits.mean() * 0.0
 

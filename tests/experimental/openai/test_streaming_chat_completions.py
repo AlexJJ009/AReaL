@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -23,7 +25,7 @@ from openai.types.completion_usage import CompletionUsage
 from starlette.responses import StreamingResponse
 
 from areal.api import ModelResponse
-from areal.experimental.openai.client import AsyncCompletionsWithReward
+from areal.experimental.openai.client import ArealOpenAI, AsyncCompletionsWithReward
 from areal.experimental.openai.proxy import proxy_rollout_server as srv
 from areal.experimental.openai.types import InteractionWithTokenLogpReward
 
@@ -50,6 +52,214 @@ def _session_headers(api_key: str):
     return {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
+    }
+
+
+@pytest.fixture
+def qwen_reasoning_parser(monkeypatch):
+    """Model the pinned detector's handling of a prefilled, unclosed think block."""
+
+    class ReasoningParser:
+        def __init__(self, *args, force_reasoning=None, **kwargs):
+            self.force_reasoning = force_reasoning
+            self.detector = SimpleNamespace(think_start_token="<think>")
+
+        def parse_non_stream(self, text):
+            if text.startswith("<think>") or self.force_reasoning:
+                text = text.removeprefix("<think>")
+                if "</think>" in text:
+                    return text.split("</think>", 1)
+                return text, ""
+            return "", text
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sglang.srt.parser.reasoning_parser",
+        SimpleNamespace(ReasoningParser=ReasoningParser),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    "text,force_reasoning,expected_reasoning,expected_content,has_tool",
+    [
+        ("<think>thinking</think>answer", False, "thinking", "answer", False),
+        ("thinking</think>answer", True, "thinking", "answer", False),
+        ("unfinished reasoning", True, "unfinished reasoning", "", False),
+        ("plain answer", False, "", "plain answer", False),
+        (
+            "inspect first<tool_call><function=read><parameter=path>README.md"
+            "</parameter></function></tool_call>",
+            True,
+            "inspect first",
+            "",
+            True,
+        ),
+        (
+            "<think>thinking</think><tool_call><function=read>"
+            "<parameter=path>README.md</parameter></function></tool_call>",
+            False,
+            "thinking",
+            "",
+            True,
+        ),
+    ],
+)
+async def test_create_preserves_reasoning_tools_and_cache(
+    qwen_reasoning_parser,
+    stream,
+    text,
+    force_reasoning,
+    expected_reasoning,
+    expected_content,
+    has_tool,
+):
+    """Exercise create, real XML tool parsing, and cache before stream consumption."""
+    tokenizer = MagicMock(eos_token_id=2, pad_token_id=0)
+    tokenizer.apply_chat_template.return_value = {"input_ids": [1]}
+    tokenizer.decode.return_value = text
+
+    class Engine:
+        async def agenerate(self, request):
+            return ModelResponse(
+                input_tokens=request.input_ids,
+                output_tokens=[3, 2],
+                output_logprobs=[-0.1, -0.1],
+                output_versions=[0, 0],
+                stop_reason="stop",
+                tokenizer=request.tokenizer,
+            )
+
+    client = ArealOpenAI(
+        engine=Engine(),
+        tokenizer=tokenizer,
+        api_key="test",
+        tool_call_parser="qwen3_coder",
+        reasoning_parser="qwen3",
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                },
+            },
+        }
+    ]
+    try:
+        result = await client.chat.completions.create(
+            model="test-model",
+            messages=[{"role": "user", "content": "inspect"}],
+            stream=stream,
+            tools=tools if has_tool else [],
+            max_tokens=32,
+            extra_body={"chat_template_kwargs": {"enable_thinking": force_reasoning}},
+        )
+        interaction = next(iter(client._cache.values()))
+        message = interaction.completion.choices[0].message
+        assert message.content == expected_content
+        assert getattr(message, "reasoning_content", "") == expected_reasoning
+        assert interaction.output_message_list == [
+            message.model_dump(exclude_none=True)
+        ]
+        assert bool(message.tool_calls) is has_tool
+        if has_tool:
+            assert message.tool_calls[0].function.name == "read"
+            assert json.loads(message.tool_calls[0].function.arguments) == {
+                "path": "README.md"
+            }
+            assert interaction.completion.choices[0].finish_reason == "tool_calls"
+        if stream:
+            chunks = [chunk async for chunk in result]
+            assert (
+                "".join(
+                    getattr(c.choices[0].delta, "reasoning_content", "") or ""
+                    for c in chunks
+                )
+                == expected_reasoning
+            )
+            assert (
+                "".join(c.choices[0].delta.content or "" for c in chunks)
+                == expected_content
+            )
+            assert (
+                chunks[-1].choices[0].finish_reason
+                == interaction.completion.choices[0].finish_reason
+            )
+            tool_deltas = [
+                tc for c in chunks for tc in c.choices[0].delta.tool_calls or []
+            ]
+            if has_tool:
+                assert tool_deltas[0].id == message.tool_calls[0].id
+                assert (
+                    "".join(tc.function.arguments or "" for tc in tool_deltas)
+                    == message.tool_calls[0].function.arguments
+                )
+            else:
+                assert not tool_deltas
+        else:
+            assert result == interaction.completion
+
+        followup = await client.chat.completions.create(
+            model="test-model",
+            messages=[
+                {"role": "user", "content": "inspect"},
+                message.model_dump(exclude_none=True),
+                {"role": "user", "content": "continue"},
+            ],
+            max_tokens=32,
+            extra_body={"chat_template_kwargs": {"enable_thinking": force_reasoning}},
+        )
+        assert client.get_interaction(followup.id).parent is interaction
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_areal_stream_emits_reasoning_before_content():
+    client = object.__new__(AsyncCompletionsWithReward)
+    response = ModelResponse(input_tokens=[1], output_tokens=[2], stop_reason="stop")
+    chunks = [
+        chunk
+        async for chunk in client._create_stream(
+            completion_id="chatcmpl-test",
+            current_time=0,
+            model="test-model",
+            reasoning_text="thinking",
+            output_text="answer",
+            tool_calls=None,
+            response=response,
+        )
+    ]
+    deltas = [chunk.choices[0].delta.model_dump(exclude_none=True) for chunk in chunks]
+    assert deltas[1:3] == [
+        {"reasoning_content": "thinking"},
+        {"content": "answer"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_areal_stream_reasoning_only_is_not_empty():
+    client = object.__new__(AsyncCompletionsWithReward)
+    response = ModelResponse(input_tokens=[1], output_tokens=[2], stop_reason="length")
+    chunks = [
+        chunk
+        async for chunk in client._create_stream(
+            completion_id="chatcmpl-test",
+            current_time=0,
+            model="test-model",
+            reasoning_text="unfinished reasoning",
+            output_text="",
+            tool_calls=None,
+            response=response,
+        )
+    ]
+    assert chunks[1].choices[0].delta.model_dump(exclude_none=True) == {
+        "reasoning_content": "unfinished reasoning"
     }
 
 

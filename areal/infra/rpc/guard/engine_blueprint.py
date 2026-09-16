@@ -633,10 +633,13 @@ def call_engine_method():
         is_init = is_train and engine.initialized
         if not is_train or not is_init or engine.is_data_parallel_head():
             state = get_state()
-            # wait_for_task is the v1 rollout boundary that returns the grouped
+            # These v1 rollout boundaries return the grouped
             # trajectory. Preserve its shared image tensors as RTensor shards;
             # unrelated engine results keep the existing behavior.
-            preserve_output_tensor_aliases = method_name == "wait_for_task"
+            preserve_output_tensor_aliases = method_name in {
+                "wait_for_task",
+                "_wait_for_task_result",
+            }
             result = RTensor.remotize(
                 result,
                 node_addr=state.node_addr,

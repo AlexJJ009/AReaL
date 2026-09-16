@@ -264,8 +264,10 @@ def test_process_weighting_shapes_normalized_advantage_without_changing_returns(
     """Process weighting runs after normalization and leaves critic targets intact."""
 
     class _ShiftNegative:
-        def __call__(self, advantages, loss_mask, group_sizes=None):
-            del loss_mask, group_sizes
+        def __call__(
+            self, advantages, loss_mask, group_sizes=None, group_member_counts=None
+        ):
+            del loss_mask, group_sizes, group_member_counts
             return advantages - 2.0
 
     batch = _batch()
@@ -344,8 +346,10 @@ def test_gvpo_shapes_after_gae_without_changing_critic_targets(gae_timestep_unit
 @pytest.mark.parametrize("gae_timestep_unit", ["token", "turn"])
 def test_gvpo_uses_normalized_advantage_for_piecewise_branch(gae_timestep_unit):
     class _CenterAtOne:
-        def __call__(self, advantages, loss_mask, group_sizes=None):
-            del loss_mask, group_sizes
+        def __call__(
+            self, advantages, loss_mask, group_sizes=None, group_member_counts=None
+        ):
+            del loss_mask, group_sizes, group_member_counts
             return advantages - 1.0
 
     actor = _actor(direct=True, gae_timestep_unit=gae_timestep_unit)

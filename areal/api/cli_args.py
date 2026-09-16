@@ -80,6 +80,11 @@ class NormConfig:
         default=1, metadata={"help": "Group size for group-level normalization"}
     )
 
+    @property
+    def uses_group_statistics(self) -> bool:
+        """Whether normalization derives statistics from prompt groups."""
+        return self.mean_level == "group" or self.std_level == "group"
+
     def __post_init__(self):
         """Validate normalization configuration."""
         valid_levels = {"batch", "group", None}
@@ -1818,6 +1823,18 @@ class PPOActorConfig(TrainEngineConfig):
         },
     )
 
+    # Partial rollout groups
+    min_usable_group_size: int | None = field(
+        default=None,
+        metadata={
+            "help": "Minimum usable rollout slots a prompt group must keep to stay "
+            "trainable when some slots fail or are filtered. None derives the "
+            "minimum from reward_norm/adv_norm: 2 when either uses group "
+            "statistics (1 for a singleton target group), else 1. Only the v1 "
+            "rollout path consumes this option."
+        },
+    )
+
     # KL Control
     kl_ctl: float = field(default=0.1, metadata={"help": "KL divergence coefficient"})
     kl_estimator: str = field(
@@ -1909,6 +1926,34 @@ class PPOActorConfig(TrainEngineConfig):
         metadata={"help": "Maximum number of new tokens to generate"},
     )
 
+    def _uses_group_statistics(self) -> bool:
+        for normalization in (self.reward_norm, self.adv_norm):
+            if normalization is None:
+                continue
+            if isinstance(normalization, (dict, DictConfig)):
+                if (
+                    normalization.get("mean_level") == "group"
+                    or normalization.get("std_level") == "group"
+                ):
+                    return True
+            elif normalization.uses_group_statistics:
+                return True
+        return False
+
+    def resolve_min_usable_group_size(self, target_group_size: int) -> int:
+        """Minimum usable rollout slots a group must keep to stay trainable.
+
+        An explicit ``min_usable_group_size`` wins. Otherwise group-relative
+        normalization needs at least two group members before partial groups
+        become a hazard; a singleton target group is complete by definition,
+        so it keeps the minimum of one.
+        """
+        if self.min_usable_group_size is not None:
+            return self.min_usable_group_size
+        if self._uses_group_statistics():
+            return min(2, target_group_size)
+        return 1
+
     def should_compute_prox_logp(self) -> bool:
         """Determine if forward pass is needed for proximal log-probabilities.
 
@@ -1939,6 +1984,20 @@ class PPOActorConfig(TrainEngineConfig):
                 "gae_timestep_unit must be 'token' or 'turn', got "
                 f"{self.gae_timestep_unit!r}"
             )
+
+        if self.min_usable_group_size is not None:
+            if self.min_usable_group_size < 1:
+                raise ValueError(
+                    "min_usable_group_size must be a positive integer, "
+                    f"got {self.min_usable_group_size}"
+                )
+            if self.min_usable_group_size < 2 and self._uses_group_statistics():
+                raise ValueError(
+                    "min_usable_group_size must be at least 2 when reward_norm or "
+                    "adv_norm uses group statistics: a lone surviving rollout has "
+                    "no group peers to normalize against. Leave it unset to derive "
+                    "the minimum instead."
+                )
 
         reward_norm = self.reward_norm
         if isinstance(reward_norm, (dict, DictConfig)):
@@ -2233,6 +2292,7 @@ class SGLangConfig:
     enable_memory_saver: bool = False
     allow_auto_truncate: bool = False
     attention_backend: str | None = "fa3"
+    mm_attention_backend: str | None = None
     enable_deterministic_inference: bool = False
     enable_multimodal: bool = False
     sampling_backend: str | None = None
@@ -2248,6 +2308,9 @@ class SGLangConfig:
     cpu_offload_gb: int = 0
     dtype: str = "bfloat16"
     kv_cache_dtype: str = "auto"
+    mamba_scheduler_strategy: str | None = None
+    mamba_ssm_dtype: str | None = None
+    max_mamba_cache_size: int | None = None
     dp_size: int = 1  # only used for dp attention
     ep_size: int = 1
     # lora
@@ -2288,6 +2351,7 @@ class SGLangConfig:
     log_level_http: str | None = "warning"
     log_requests: bool = False
     log_requests_level: int = 0
+    enable_cache_report: bool = False
     show_time_cost: bool = False
     enable_metrics: bool = True  # Exports Prometheus-like metrics
     # The interval (in decoding iterations) to log throughput

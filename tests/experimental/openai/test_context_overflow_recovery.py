@@ -5,14 +5,22 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
+import torch
 
+from areal.api import ModelResponse
+from areal.experimental.openai.cache import InteractionCache
 from areal.experimental.openai.proxy import workflow as workflow_module
+from areal.experimental.openai.proxy.proxy_gateway import CompletedSessionInfo
 from areal.experimental.openai.proxy.server import (
     derive_session_gateway_api_key,
     derive_session_gateway_token,
 )
 from areal.experimental.openai.proxy.workflow import OpenAIProxyWorkflow
-from areal.experimental.openai.types import InteractionWithTokenLogpReward
+from areal.experimental.openai.types import (
+    InteractionWithTokenLogpReward,
+    concat_tensor_interactions,
+    normalize_logical_rollout_rewards,
+)
 from areal.infra import workflow_context
 from areal.infra.workflow_context import WorkflowContext
 from areal.utils import stats_tracker
@@ -90,6 +98,81 @@ class _FakeProxyClient:
         if self.interaction_count == 0:
             return {}
         return {"completion-1": self.interaction}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["inline", "online"])
+@pytest.mark.parametrize("explicit_reference", [None, 2.0])
+async def test_discounted_individual_export_supplies_terminal_reference(
+    monkeypatch, mode, explicit_reference
+):
+    interactions = {}
+    for key, reward in [("first", 0.0), ("last", 1.0)]:
+        interaction = InteractionWithTokenLogpReward(
+            reward=reward,
+            output_message_list=[],
+            model_response=ModelResponse(
+                input_tokens=[1],
+                output_tokens=[2],
+                output_logprobs=[0.0],
+                output_versions=[0],
+            ),
+        )
+        interaction.interaction_id = key
+        interactions[key] = interaction
+    interactions["first"].rollout_reward = explicit_reference
+    cache = InteractionCache.from_dict(interactions)
+
+    class DiscountedProxyClient(_FakeProxyClient):
+        context_overflow = False
+
+        async def export_interactions(self, *, discount, style, **kwargs):
+            return cache.export_interactions(style=style, reward_discount=discount)
+
+    fake_client = DiscountedProxyClient()
+    monkeypatch.setattr(
+        workflow_module, "OpenAIProxyClient", lambda *args, **kwargs: fake_client
+    )
+    workflow = OpenAIProxyWorkflow(
+        mode=mode,
+        agent=_SuccessfulAgent(),
+        discount=0.5,
+        proxy_gateway_addr="http://localhost",
+    )
+    if mode == "online":
+        monkeypatch.setattr(
+            workflow,
+            "_run_agent",
+            AsyncMock(
+                return_value=CompletedSessionInfo(
+                    session_api_key="session-key",
+                    session_id="session-1",
+                    worker_addr="",
+                )
+            ),
+        )
+    monkeypatch.setattr(workflow, "_grant_capacity", AsyncMock())
+    monkeypatch.setattr(
+        workflow_context, "get_aiohttp_session", AsyncMock(return_value=object())
+    )
+    workflow_context.set(WorkflowContext(task_id=1))
+    try:
+        result = await workflow.arun_episode(engine=None, data={})
+    finally:
+        workflow_context.set(WorkflowContext())
+        stats_tracker.export_all(reset=True)
+
+    assert [v.reward for v in result.values()] == [0.5, 1.0]
+    reference = explicit_reference if explicit_reference is not None else 1.0
+    assert concat_tensor_interactions(result)["rollout_group"].rewards == (reference,)
+    peer = InteractionWithTokenLogpReward(reward=3.0)
+    assert normalize_logical_rollout_rewards([result, {"peer": peer}])
+    expected = (torch.tensor([0.5, 1.0]) - (reference + 3.0) / 2) / (
+        (3.0 - reference) / 2
+    )
+    torch.testing.assert_close(
+        concat_tensor_interactions(result)["rewards"], expected, rtol=1e-6, atol=1e-6
+    )
 
 
 @pytest.mark.asyncio

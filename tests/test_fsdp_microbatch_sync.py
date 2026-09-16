@@ -32,6 +32,7 @@ class _TinyModel(torch.nn.Module):
 
 class _LoopHarness:
     enable_tree_training = False
+    is_vision_model = False
 
     def __init__(self, model):
         self.model = model
