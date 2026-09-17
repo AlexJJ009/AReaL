@@ -139,22 +139,6 @@ Controller `export_stats()` includes live gauges `rollout/sample_inflight`,
 finished member and at least one unfinished member. Local executors expose the same
 snapshot through `dispatcher.sample_stats()`.
 
-### Validating the benefit
-
-Run `python -m pytest -q tests/test_sample_level_refill.py` for correctness and
-`python -m benchmark.sample_level_refill --output sample-refill.json` for the CPU
-dispatcher A/B benchmark. Both arms complete the same finite cohort, including all long
-episodes; uniform service times provide a control. Synthetic scheduling gains are not
-GPU throughput measurements.
-
-For real workloads, hold the checkpoint, prompt IDs, seeds, group size, hardware,
-timeouts, filtering and staleness settings fixed. Compare four groups of 12 in the
-baseline with 48 sample slots in the treatment. Measure accepted logical episodes per
-second, complete-cohort makespan, group tail latency, long-task acceptance,
-rejection/timeouts, version age and memory. Repeat frozen-checkpoint rollout trials
-first, then short training trials comparing reward and evaluation at equal consumed
-sample counts. Reserved sample capacity is not GPU utilization.
-
 ## Trajectory Dumping
 
 When `InferenceEngineConfig.dump_to_file=True`, trajectories are automatically saved to

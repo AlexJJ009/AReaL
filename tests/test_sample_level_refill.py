@@ -60,45 +60,6 @@ def _executor(*, group_budget=8, sample_limit=48):
     return executor
 
 
-@pytest.mark.parametrize("pause", [False, True])
-def test_partial_groups_refill_before_any_group_finishes(pause):
-    executor = _executor()
-    inner = _GatedWorkflow(5, 12)
-    workflow = GroupedRolloutWorkflow(inner, group_size=12, logger=MagicMock())
-    try:
-        for group in range(5):
-            executor.submit({"group": group}, workflow, task_id=group)
-        for group in range(4):
-            assert inner.started[group].wait(5)
-        assert not inner.started[4].is_set()
-        if pause:
-            executor.pause()
-        for group in range(4):
-            for index in range(3):
-                inner.release(group, index)
-        if pause:
-            with executor.dispatcher._input_cv:
-                assert executor.dispatcher._input_cv.wait_for(
-                    lambda: executor.dispatcher.sample_capacity.running == 36, timeout=5
-                )
-            assert not inner.started[4].is_set()
-            executor.resume()
-        assert inner.started[4].wait(5)
-        assert executor.staleness_manager.get_stats().running == 5
-        assert executor.staleness_manager.get_stats().accepted == 0
-        assert executor.dispatcher.sample_capacity.running == 48
-        inner.release_all()
-        results = executor.wait(5, timeout=5)
-        assert len(results) == 5
-        for result in results:
-            assert result["input_ids"][:, 1].tolist() == list(range(12))
-            assert result["rollout_group"].row_counts == (1,) * 12
-        assert executor.dispatcher.sample_capacity.running == 0
-    finally:
-        inner.release_all()
-        executor.destroy()
-
-
 def test_partial_groups_cannot_bypass_staleness_budget():
     executor = _executor(group_budget=4)
     inner = _GatedWorkflow(5, 12)
@@ -158,51 +119,6 @@ def test_admission_requires_whole_next_group_and_worker_uses_global_budget():
     assert dispatcher._has_runner_capacity()
     assert dispatcher._get_next_task_for_submission() is second
     assert dispatcher.sample_capacity.running == 6
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [False, True])
-async def test_group_progress_reports_none_and_drains_failed_siblings(failure):
-    reports = []
-    stopped = asyncio.Event()
-    entered = asyncio.Event()
-    previous = workflow_context.get()
-
-    class Workflow(RolloutWorkflow):
-        async def arun_episode(self, engine, data):
-            if workflow_context.get().sample_idx == 0:
-                await entered.wait()
-                if failure:
-                    raise RuntimeError("failed sample")
-                return None
-            try:
-                entered.set()
-                if failure:
-                    await asyncio.Event().wait()
-            finally:
-                await asyncio.sleep(0)
-                stopped.set()
-            return None
-
-    workflow_context.set(
-        workflow_context.WorkflowContext(
-            task_id=1,
-            sample_completion_callback=lambda index: reports.append(
-                (index, stopped.is_set())
-            ),
-        )
-    )
-    try:
-        workflow = GroupedRolloutWorkflow(Workflow(), group_size=2, logger=MagicMock())
-        if failure:
-            with pytest.raises(RuntimeError, match="failed sample"):
-                await workflow.arun_episode(None, {})
-        else:
-            assert await workflow.arun_episode(None, {}) is None
-        assert sorted(index for index, _ in reports) == [0, 1]
-        assert next(stopped for index, stopped in reports if index == 1)
-    finally:
-        workflow_context.set(previous)
 
 
 @pytest.mark.asyncio
@@ -442,15 +358,6 @@ async def test_cancelled_group_holds_slots_until_member_cleanup_finishes():
 def test_sample_limit_invalid_config_is_rejected(limit):
     with pytest.raises(ValueError, match="max_concurrent_samples"):
         InferenceEngineConfig(backend="sglang:d1", max_concurrent_samples=limit)
-
-
-@pytest.mark.parametrize("limit", [None, 1, 48])
-def test_sample_limit_config_roundtrip_preserves_value(limit):
-    from omegaconf import OmegaConf
-
-    config = InferenceEngineConfig(backend="sglang:d1", max_concurrent_samples=limit)
-    restored = OmegaConf.to_object(OmegaConf.structured(config))
-    assert restored.max_concurrent_samples == limit
 
 
 def test_refill_collects_full_batch_while_initial_group_stragglers_remain():

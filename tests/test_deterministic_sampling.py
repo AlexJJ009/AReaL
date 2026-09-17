@@ -425,7 +425,6 @@ def test_select_results_is_arrival_ordered_and_shuffled_by_default(monkeypatch):
 
 def test_wait_results_selects_completed_tasks_when_deterministic():
     dispatcher = object.__new__(BatchTaskDispatcher)
-    dispatcher.terminal_error_fn = None
     dispatcher.deterministic_order = True
     dispatcher.terminal_error_fn = None
     dispatcher._result_cv = threading.Condition()
@@ -445,7 +444,6 @@ def test_wait_results_selects_completed_tasks_when_deterministic():
 
 def test_wait_for_task_removes_result_before_deterministic_batch_selection():
     dispatcher = object.__new__(BatchTaskDispatcher)
-    dispatcher.terminal_error_fn = None
     dispatcher.deterministic_order = True
     dispatcher.terminal_error_fn = None
     dispatcher._result_cv = threading.Condition()

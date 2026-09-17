@@ -123,17 +123,6 @@ controller 的 `export_stats()` 新增实时指标 `rollout/sample_inflight`、`
 和 `rollout/partial_groups`。半成品组指至少完成一条且仍有成员未完成的组。直接运行的 executor 可通过
 `dispatcher.sample_stats()` 获取同样的快照。
 
-### 如何验证收益
-
-先运行 `python -m pytest -q tests/test_sample_level_refill.py` 验证补位、并发上限、组完整性和失败语义，再运行
-`python -m benchmark.sample_level_refill --output sample-refill.json`。后者调用真实执行器，以固定的长短
-episode 耗时做 CPU 对照；两组都必须完成同一批全部样本，不能通过丢弃长任务提高表面吞吐。默认包含等长任务对照，输出三轮原始计时、平均在途数和中位数加速比。
-
-CPU 结果只说明调度机会。真实验证需在相同 checkpoint、任务 ID、seed、group size、GPU、超时、过滤和 staleness
-配置下比较两种准入；旧模式 4 组 × 12 条应对比新模式 48 个样本额度，而不是把 48 组与 48 条比较。 先做固定权重 rollout A/B，再做短程训练
-A/B。重点比较最终接受的有效逻辑样本/秒、同一批任务总耗时、组延迟 p95/p99、 长任务接受率、拒绝/超时率、版本年龄和显存峰值。训练 reward
-和评测应按相同已消费样本数比较，并重复多轮排除运行间波动。 `sample_inflight` 是预留额度，不能直接等同于 GPU 利用率。
-
 ## 轨迹转储
 
 当 `InferenceEngineConfig.dump_to_file=True` 时，轨迹自动保存到磁盘用于调试和分析。
