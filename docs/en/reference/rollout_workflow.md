@@ -104,6 +104,57 @@ async def arun_episode(self, engine, data):
     scope = workflow_context.stat_scope()
 ```
 
+## Sample-level refill
+
+Set `rollout.max_concurrent_samples` to a positive integer to bound concurrent complete
+rollout episodes. For example, `max_concurrent_samples: 48` and group size 12 initially
+admit four prompt groups. If each group finishes three episodes, the 12 released slots
+admit a fifth group before any of the original groups finishes. A sample means one
+complete rollout or agent episode, not one LLM request or tensor row. The whole next
+group must fit; an oversized group raises `ValueError`.
+
+The setting replaces the `max_concurrent_rollouts` group concurrency limit for
+admission. Leaving it unset preserves group-level admission. `consumer_batch_size`,
+accepted/running counters and `max_head_offpolicyness` remain in prompt-group units: a
+free sample slot does not release a group's staleness budget. Pause and runner queue
+limits still apply. Direct distributed executors divide the sample limit by the training
+data-parallel size; v1 and v2 controllers enforce a global limit.
+
+Grouped workflows keep their gather, sample ordering, filtering and reward
+normalization. Returning `None` releases the sample slot without creating training data.
+v2 offline agents report each completed episode, including when group samples run
+serially; not-yet-started serial members retain their reservations. Online v2 workflows
+release their reservation when the delivered workflow completes.
+
+Worker progress identifies the task, execution attempt and sample index. Duplicate and
+stale-attempt notifications cannot release capacity twice. Remote submission is not
+retried automatically in this mode: a lost response may hide a running group. A remote
+timeout does not cancel the worker or free its unconfirmed slots. Late progress and
+confirmed group completion can still free those slots; if the worker is lost
+permanently, restart the rollout runtime rather than assuming its work has stopped.
+Group failure drains sibling cancellation handlers before releasing their reservations.
+
+Controller `export_stats()` includes live gauges `rollout/sample_inflight`,
+`rollout/sample_capacity` and `rollout/partial_groups`. Partial groups have at least one
+finished member and at least one unfinished member. Local executors expose the same
+snapshot through `dispatcher.sample_stats()`.
+
+### Validating the benefit
+
+Run `python -m pytest -q tests/test_sample_level_refill.py` for correctness and
+`python -m benchmark.sample_level_refill --output sample-refill.json` for the CPU
+dispatcher A/B benchmark. Both arms complete the same finite cohort, including all long
+episodes; uniform service times provide a control. Synthetic scheduling gains are not
+GPU throughput measurements.
+
+For real workloads, hold the checkpoint, prompt IDs, seeds, group size, hardware,
+timeouts, filtering and staleness settings fixed. Compare four groups of 12 in the
+baseline with 48 sample slots in the treatment. Measure accepted logical episodes per
+second, complete-cohort makespan, group tail latency, long-task acceptance,
+rejection/timeouts, version age and memory. Repeat frozen-checkpoint rollout trials
+first, then short training trials comparing reward and evaluation at equal consumed
+sample counts. Reserved sample capacity is not GPU utilization.
+
 ## Trajectory Dumping
 
 When `InferenceEngineConfig.dump_to_file=True`, trajectories are automatically saved to

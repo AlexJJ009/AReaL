@@ -99,6 +99,41 @@ async def arun_episode(self, engine, data):
     scope = workflow_context.stat_scope()
 ```
 
+## 样本级补位
+
+将 `rollout.max_concurrent_samples` 设置为正整数，即可按完整 rollout episode 限制并发。例如上限为 48、group size
+为 12 时，先启动四个 prompt 组；每组各完成三条后，释放的 12 个位置即可启动第五组，无须等待旧组全部结束。 这里的 sample 指完整 rollout 或
+agent episode，不是一次 LLM 请求或一行训练张量。下一组必须能整体放入空余额度，组大小超过上限会报错。
+
+启用后，准入使用样本上限替代 `max_concurrent_rollouts` 的组并发上限；未设置时保持原有组级准入。
+`consumer_batch_size`、accepted/running 计数和 `max_head_offpolicyness` 仍使用 prompt
+组单位：sample 完成不会释放该组的 staleness 预算。暂停和 runner 队列限制仍然生效。直接运行的分布式 executor 会按训练 DP
+规模拆分样本上限，v1、v2 controller 则执行全局限制。
+
+Grouped workflow 保留 gather、组内排序、过滤和 reward normalization。返回 `None` 会释放样本额度，但不产生有效训练数据。
+v2 离线 agent 在每条完整 episode 结束后上报进度；串行组也按整组预留，尚未执行的成员继续占用预留额度。 v2 在线 workflow 在交付的
+workflow 完成后释放预留额度。
+
+worker 的进度通知携带 task、执行 attempt 和 sample index，重复或过期通知不会重复释放额度。 该模式不自动重试远端
+submit，因为响应丢失时任务可能已在 worker 上执行。远端超时只结束等待，不会取消 worker
+或释放未确认停止的额度；迟到的进度通知或整组完成确认仍可释放额度。如果 worker 永久失联，应重启 rollout
+运行时，而不能假定其执行已经停止。组内失败会等待其他成员的取消清理结束，再释放对应预留额度。
+
+controller 的 `export_stats()` 新增实时指标 `rollout/sample_inflight`、`rollout/sample_capacity`
+和 `rollout/partial_groups`。半成品组指至少完成一条且仍有成员未完成的组。直接运行的 executor 可通过
+`dispatcher.sample_stats()` 获取同样的快照。
+
+### 如何验证收益
+
+先运行 `python -m pytest -q tests/test_sample_level_refill.py` 验证补位、并发上限、组完整性和失败语义，再运行
+`python -m benchmark.sample_level_refill --output sample-refill.json`。后者调用真实执行器，以固定的长短
+episode 耗时做 CPU 对照；两组都必须完成同一批全部样本，不能通过丢弃长任务提高表面吞吐。默认包含等长任务对照，输出三轮原始计时、平均在途数和中位数加速比。
+
+CPU 结果只说明调度机会。真实验证需在相同 checkpoint、任务 ID、seed、group size、GPU、超时、过滤和 staleness
+配置下比较两种准入；旧模式 4 组 × 12 条应对比新模式 48 个样本额度，而不是把 48 组与 48 条比较。 先做固定权重 rollout A/B，再做短程训练
+A/B。重点比较最终接受的有效逻辑样本/秒、同一批任务总耗时、组延迟 p95/p99、 长任务接受率、拒绝/超时率、版本年龄和显存峰值。训练 reward
+和评测应按相同已消费样本数比较，并重复多轮排除运行间波动。 `sample_inflight` 是预留额度，不能直接等同于 GPU 利用率。
+
 ## 轨迹转储
 
 当 `InferenceEngineConfig.dump_to_file=True` 时，轨迹自动保存到磁盘用于调试和分析。
