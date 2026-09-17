@@ -246,3 +246,15 @@ def test_swe_recovery_requires_matching_checkpoint_and_version(monkeypatch, tmp_
     monkeypatch.setenv("QWEN_SWE_START_MODE", "typo")
     with pytest.raises(ValueError, match="fresh or recover"):
         entry.read_start_source()
+
+
+def test_training_pool_scope_includes_all_nonheldout_tasks():
+    entry = load_entry()
+    split = json.loads((RECIPE / "fixtures/split.json").read_text())
+    rows = [{"data_id": key} for key in split["all_data_ids"]]
+    actual = entry.select_training_rows(rows, split, "training_pool")
+    assert {row["data_id"] for row in actual} == set(split["training_pool"])
+    assert not {row["data_id"] for row in actual}.intersection(split["heldout"])
+    assert len(actual) == len(split["training_pool"])
+    with pytest.raises(ValueError, match="task scope"):
+        entry.select_training_rows(rows, split, "typo")

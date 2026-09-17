@@ -157,3 +157,13 @@ CUDA illegal access.
 
 Use CLI `total_train_steps=...` to change RL duration. The historical SWE
 `rollout_only_steps` field is unused by this PPO entrypoint.
+
+### Full training pool
+
+Set `QWEN_SWE_START_MODE=fresh`, `QWEN_SWE_TASK_SCOPE=training_pool` and
+`TOTAL_TRAIN_STEPS=11` for eleven updates from the initial model over the entire pinned
+training pool. The heldout partition remains excluded. The default
+`QWEN_SWE_TASK_SCOPE=acceptance` retains the historical sixteen-task subset for
+compatibility. `training-inventory.json` records the selected scope and task IDs.
+Compare training rewards with evaluation on matched tasks; the historical fast subset
+and asynchronous completion can substantially bias aggregate rewards.

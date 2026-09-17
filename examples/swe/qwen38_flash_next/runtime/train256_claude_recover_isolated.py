@@ -25,7 +25,7 @@ def build_workflow_kwargs(config):
     )
 
 
-def select_training_rows(rows, split):
+def select_training_rows(rows, split, scope="acceptance"):
     ids = [row["data_id"] for row in rows]
     if sorted(ids) != split["all_data_ids"]:
         raise ValueError("Live inventory differs from pinned benchmark")
@@ -33,6 +33,10 @@ def select_training_rows(rows, split):
     selected = [row for row in rows if row["data_id"] not in heldout]
     if set(row["data_id"] for row in selected) != set(split["training_pool"]):
         raise ValueError("Training/heldout partition mismatch")
+    if scope == "training_pool":
+        return selected
+    if scope != "acceptance":
+        raise ValueError("SWE task scope must be acceptance or training_pool")
     acceptance_ids = split["rl_acceptance_ids"]
     if len(acceptance_ids) != 16 or len(set(acceptance_ids)) != 16:
         raise ValueError("RL acceptance requires sixteen unique tasks")
@@ -159,11 +163,12 @@ def main(argv):
     split["rl_acceptance_ids"] = json.loads(
         (root.parent / "fixtures/parallel-canary-split.json").read_text()
     )["selected"]
+    task_scope = os.environ.get("QWEN_SWE_TASK_SCOPE", "acceptance")
     original_resolver = entry._resolve_arena_stream
 
     def resolve(client, configured):
         stream, rows = original_resolver(client, configured)
-        return stream, select_training_rows(rows, split)
+        return stream, select_training_rows(rows, split, task_scope)
 
     entry._resolve_arena_stream = resolve
     dataset, streams = entry.get_arena_mixture_dataset(
@@ -177,7 +182,8 @@ def main(argv):
         "benchmark": split["benchmark"],
         "training_count": len(ids),
         "training_pool_count": len(split["training_pool"]),
-        "selection": "historically fast sixteen-task RL acceptance subset",
+        "selection": task_scope,
+        "unique_training_count": len(set(ids)),
         "heldout_count": len(split["heldout"]),
         "heldout_overlap": 0,
         "ordered_training_ids": ids,
