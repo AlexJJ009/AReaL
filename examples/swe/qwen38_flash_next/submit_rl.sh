@@ -17,11 +17,21 @@ for name in QWEN_OUTPUT_ROOT QWEN_MODEL QWEN_ACTOR_IMAGE QWEN_ROLLOUT_IMAGE \
   export "$name"
 done
 if [[ $profile == swe ]]; then
-  for name in QWEN_PRIVATE_ENV QWEN_RECOVER_SOURCE QWEN_REPLAY64_ACCEPTANCE QWEN_CC_PROTOCOL_ACCEPTANCE; do
+  for name in QWEN_PRIVATE_ENV QWEN_REPLAY64_ACCEPTANCE QWEN_CC_PROTOCOL_ACCEPTANCE; do
     : "${!name:?Set $name for SWE recovery}"
     test -f "${!name}"
     export "$name"
   done
+  export QWEN_SWE_START_MODE=${QWEN_SWE_START_MODE:-recover}
+  case "$QWEN_SWE_START_MODE" in
+    fresh) ;;
+    recover)
+      : "${QWEN_RECOVER_SOURCE:?Set QWEN_RECOVER_SOURCE for SWE recovery}"
+      test -f "$QWEN_RECOVER_SOURCE"
+      export QWEN_RECOVER_SOURCE
+      ;;
+    *) echo 'QWEN_SWE_START_MODE must be fresh or recover' >&2; exit 2 ;;
+  esac
 else
   : "${QWEN_GSM8K_DATA:?Set the GSM8K dataset path}"
   export QWEN_GSM8K_DATA

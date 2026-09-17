@@ -53,20 +53,21 @@ All entrypoints below are committed with their runtime helpers in `runtime/`.
 unmodified AWEX in the inference environment; do not reuse a historically patched AWEX
 overlay without restoring its upstream source.
 
-| Workload         | Configuration                     | Submit entry                             |
-| ---------------- | --------------------------------- | ---------------------------------------- |
-| SWE RL, recovery | `swe_rl_256k.yaml`                | `bash submit_rl.sh swe`                  |
-| GSM8K RLVR       | `rlvr_gsm8k_256k.yaml`            | `bash submit_rl.sh rlvr`                 |
-| SWE SFT          | `sft_qwen38_flash_next.yaml`      | `sbatch sbatch_sft_qwen38_flash_next.sh` |
-| Math SFT         | `sft_qwen38_flash_next_math.yaml` | Same SFT submit script, set `SFT_CONFIG` |
+| Workload   | Configuration                     | Submit entry                             |
+| ---------- | --------------------------------- | ---------------------------------------- |
+| SWE RL     | `swe_rl_256k.yaml`                | `bash submit_rl.sh swe`                  |
+| GSM8K RLVR | `rlvr_gsm8k_256k.yaml`            | `bash submit_rl.sh rlvr`                 |
+| SWE SFT    | `sft_qwen38_flash_next.yaml`      | `sbatch sbatch_sft_qwen38_flash_next.sh` |
+| Math SFT   | `sft_qwen38_flash_next_math.yaml` | Same SFT submit script, set `SFT_CONFIG` |
 
 Run the commands from this directory. Both RL recipes preserve 8 nodes / 64 GPUs, actor
 TP8/PP8/EP8/CP1, rollout 16 replicas at TP4/EP4, 16 groups x 8 samples, 262144 context
-tokens, 65536 output tokens, temperature 1, and inference static memory fraction 0.65.
-SWE uses the pinned sixteen-task acceptance subset, not a full Verified evaluation. Its
-rollout queue, cache isolation, diagnostics, harness and recovery checks are retained.
-RLVR preserves its own queue and cache settings. The historical RLVR entry disables
-evaluation even though a validation dataset is present in its YAML.
+tokens, 65536 output tokens, temperature 1, and inference static memory fraction 0.70
+(SWE) / 0.65 (RLVR). SWE uses the pinned sixteen-task acceptance subset, not a full
+Verified evaluation. Its rollout queue, cache isolation, diagnostics, harness and
+recovery checks are retained. RLVR preserves its own queue and cache settings. The
+historical RLVR entry disables evaluation even though a validation dataset is present in
+its YAML.
 
 ### Open-source main compatibility
 
@@ -100,9 +101,9 @@ them (the submit wrapper exports variables sourced from that file):
   installed in the inference/proxy runtime; `dependencies.json` also records the three
   historical math package versions. Include their overlay in
   `QWEN_INFER_EXTRA_PYTHONPATH` when needed. No installation happens at launch.
-- SWE: `QWEN_PRIVATE_ENV`, `QWEN_RECOVER_SOURCE`, `QWEN_REPLAY64_ACCEPTANCE`,
-  `QWEN_CC_PROTOCOL_ACCEPTANCE`. The private environment supplies credentials,
-  `ARENA_OPENAPI_BASE`, and `QWEN_ARENA_LLM_BASE`. Never commit that file.
+- SWE: `QWEN_PRIVATE_ENV`, `QWEN_REPLAY64_ACCEPTANCE`, `QWEN_CC_PROTOCOL_ACCEPTANCE`.
+  The private environment supplies credentials, `ARENA_OPENAPI_BASE`, and
+  `QWEN_ARENA_LLM_BASE`. Never commit that file.
 
 The bundled frozen-weight contract and task/probe fixtures are specific to the
 historical model. Set `QWEN_AWEX_FROZEN_CONTRACT` to override the contract for a
@@ -112,6 +113,18 @@ recovery source JSON must contain `fileroot`, `experiment_name`, `trial_name`,
 existing checkpoint. Both acceptance files must come from real validation; the
 entrypoint checks their status and the Claude harness version. It refuses a missing
 recovery checkpoint or a mismatching restored step/version.
+
+Set `QWEN_SWE_START_MODE=fresh` for a complete run from the initial HF model:
+
+```bash
+QWEN_SWE_START_MODE=fresh bash submit_rl.sh swe total_train_steps=10
+```
+
+Use a new output directory/trial. Fresh mode rejects any automatically discovered
+checkpoint or nonzero initial weight version. The default `recover` mode requires
+`QWEN_RECOVER_SOURCE`; its step limit is the final total step, not the number of
+additional steps. Restoring completed step 5 with `total_train_steps=10` runs only five
+new steps and validates recovery, not a fresh ten-step training run.
 
 Training overrides are forwarded intact, for example:
 
@@ -138,8 +151,9 @@ scripts use the explicitly selected bridge for both. The `QWEN_QSA_STABLE_TOPK` 
 implemented on inference only; the trainer still uses native `scores.topk`. SWE applies
 the QSA startup patch; the historical RLVR recipe did not, and that behavior is
 preserved. Changing these numerical choices requires separate validation. The packaged
-recipes have not yet completed a new multi-node training run and do not establish a
-hardware cause for the historical CUDA illegal access.
+recipes require runtime validation for the chosen start mode; a completed recovery run
+does not validate a fresh ten-step run or establish a hardware cause for the historical
+CUDA illegal access.
 
 Use CLI `total_train_steps=...` to change RL duration. The historical SWE
 `rollout_only_steps` field is unused by this PPO entrypoint.

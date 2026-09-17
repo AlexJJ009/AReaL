@@ -81,6 +81,33 @@ def decorate_controller(controller):
     return controller
 
 
+def read_start_source():
+    """Keep fresh-model training separate from explicit checkpoint recovery."""
+    mode = os.environ.get("QWEN_SWE_START_MODE", "recover")
+    if mode == "fresh":
+        return None
+    if mode != "recover":
+        raise ValueError("QWEN_SWE_START_MODE must be fresh or recover")
+    return json.loads(Path(os.environ["QWEN_RECOVER_SOURCE"]).read_text())
+
+
+def validate_start_state(recover_info, weight_version, source):
+    if source is None:
+        if recover_info is not None or weight_version != 0:
+            raise ValueError(
+                "Fresh SWE training must start without checkpoint at version 0"
+            )
+        return None
+    if recover_info is None:
+        raise ValueError("Required source checkpoint was not restored")
+    actual_step = recover_info.last_step_info.global_step
+    if actual_step != source["expected_saved_global_step"]:
+        raise ValueError("Restored checkpoint step differs from audited source")
+    if weight_version != source["expected_restored_weight_version"]:
+        raise ValueError("Restored rollout weight version differs from source")
+    return actual_step
+
+
 def main(argv):
     import examples.swe.train_swe_rl as entry
 
@@ -163,10 +190,11 @@ def main(argv):
     RemoteSGLangEngine.as_controller = staticmethod(
         lambda *a, **kw: decorate_controller(factory(*a, **kw))
     )
-    source = json.loads(Path(os.environ["QWEN_RECOVER_SOURCE"]).read_text())
+    source = read_start_source()
     destination_recover = copy.deepcopy(config.recover)
-    for key in ("fileroot", "experiment_name", "trial_name"):
-        setattr(config.recover, key, source[key])
+    if source is not None:
+        for key in ("fileroot", "experiment_name", "trial_name"):
+            setattr(config.recover, key, source[key])
     from areal.infra.scheduler.slurm import SlurmScheduler
 
     class SWERecoveryTrainer(PPOTrainer):
@@ -178,13 +206,9 @@ def main(argv):
     with SWERecoveryTrainer(
         config, train_dataset=dataset, valid_dataset=None
     ) as trainer:
-        if trainer.recover_info is None:
-            raise ValueError("Required source checkpoint was not restored")
-        actual_step = trainer.recover_info.last_step_info.global_step
-        if actual_step != source["expected_saved_global_step"]:
-            raise ValueError("Restored checkpoint step differs from audited source")
-        if trainer.rollout.get_version() != source["expected_restored_weight_version"]:
-            raise ValueError("Restored rollout weight version differs from source")
+        actual_step = validate_start_state(
+            trainer.recover_info, trainer.rollout.get_version(), source
+        )
         # Loading uses the existing checkpoint; subsequent saves use the new
         # trial. Preserve the original checkpoint and its evidence in place.
         if trainer.recover_handler.config is not config.recover:
@@ -194,6 +218,7 @@ def main(argv):
         Path(os.environ["QWEN_ARENA_OUTPUT"], "recovery-lineage.json").write_text(
             json.dumps(
                 {
+                    "start_mode": "fresh" if source is None else "recover",
                     "source": source,
                     "restored_global_step": actual_step,
                     "restored_weight_version": trainer.rollout.get_version(),
@@ -201,7 +226,8 @@ def main(argv):
                         key: getattr(config.recover, key)
                         for key in ("fileroot", "experiment_name", "trial_name")
                     },
-                    "optimizer_load_enabled": not config.recover.no_load_optim,
+                    "optimizer_load_enabled": source is not None
+                    and not config.recover.no_load_optim,
                 },
                 indent=2,
             )

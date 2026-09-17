@@ -37,8 +37,10 @@ def test_pinned_swe_subset_excludes_heldout_and_rejects_inventory_drift():
         entry.select_training_rows(rows[:-1], split)
 
 
-@pytest.mark.parametrize("profile", ["swe", "rlvr"])
-def test_submit_preserves_arguments_and_packages_runtime(tmp_path, profile):
+@pytest.mark.parametrize(
+    "profile,start_mode", [("swe", "recover"), ("swe", "fresh"), ("rlvr", "recover")]
+)
+def test_submit_preserves_arguments_and_packages_runtime(tmp_path, profile, start_mode):
     recorder = tmp_path / "sbatch"
     capture = tmp_path / "captured.json"
     recorder.write_text(
@@ -74,6 +76,9 @@ def test_submit_preserves_arguments_and_packages_runtime(tmp_path, profile):
         "QWEN_CC_PROTOCOL_ACCEPTANCE",
     ):
         env[key] = str(fixture)
+    env["QWEN_SWE_START_MODE"] = start_mode
+    if start_mode == "fresh":
+        env.pop("QWEN_RECOVER_SOURCE")
     env["QWEN_OUTPUT_ROOT"] = str(tmp_path / "output with spaces")
     env["QWEN_REPO"] = str(ROOT)
     env.pop("QWEN_LAUNCH_ENV", None)
@@ -126,7 +131,9 @@ def test_rl_profiles_preserve_sampling_and_memory_settings(monkeypatch):
             config["gconfig"]["n_samples"] * config["train_dataset"]["batch_size"]
             == 128
         )
-        assert config["sglang"]["mem_fraction_static"] == 0.65
+        assert config["sglang"]["mem_fraction_static"] == (
+            0.70 if name.startswith("swe") else 0.65
+        )
         assert config["actor"]["megatron"]["freeze_ple_table"] is True
 
 
@@ -198,3 +205,44 @@ def test_sft_structured_schema_rejects_invalid_split_mode():
                 OmegaConf.create({"swe": {"split_mode": "typo"}}), SweSFTConfig
             ).swe
         )
+
+
+def test_fresh_swe_start_ignores_recovery_source_and_rejects_recovered_state(
+    monkeypatch,
+):
+    from types import SimpleNamespace
+
+    entry = load_entry()
+    monkeypatch.setenv("QWEN_SWE_START_MODE", "fresh")
+    monkeypatch.setenv("QWEN_RECOVER_SOURCE", "/nonexistent/source.json")
+    assert entry.read_start_source() is None
+    assert entry.validate_start_state(None, 0, None) is None
+    recovered = SimpleNamespace(last_step_info=SimpleNamespace(global_step=4))
+    for info, version in ((recovered, 5), (recovered, 0), (None, 5)):
+        with pytest.raises(ValueError, match="Fresh SWE"):
+            entry.validate_start_state(info, version, None)
+
+
+def test_swe_recovery_requires_matching_checkpoint_and_version(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    entry = load_entry()
+    source = {"expected_saved_global_step": 4, "expected_restored_weight_version": 5}
+    path = tmp_path / "source.json"
+    path.write_text(json.dumps(source))
+    monkeypatch.setenv("QWEN_SWE_START_MODE", "recover")
+    monkeypatch.setenv("QWEN_RECOVER_SOURCE", str(path))
+    assert entry.read_start_source() == source
+    recovered = SimpleNamespace(last_step_info=SimpleNamespace(global_step=4))
+    assert entry.validate_start_state(recovered, 5, source) == 4
+    with pytest.raises(ValueError, match="not restored"):
+        entry.validate_start_state(None, 5, source)
+    with pytest.raises(ValueError, match="version"):
+        entry.validate_start_state(recovered, 0, source)
+    with pytest.raises(ValueError, match="step"):
+        entry.validate_start_state(
+            recovered, 5, dict(source, expected_saved_global_step=9)
+        )
+    monkeypatch.setenv("QWEN_SWE_START_MODE", "typo")
+    with pytest.raises(ValueError, match="fresh or recover"):
+        entry.read_start_source()
