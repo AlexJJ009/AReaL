@@ -109,10 +109,59 @@ async def test_grouped_rollout_workflow_drops_incomplete_group():
 
 
 @pytest.mark.asyncio
-async def test_grouped_rollout_workflow_reward_normalization_requires_full_group():
-    logger = _Logger()
+@pytest.mark.parametrize("failed_slot", [0, 1, 2])
+async def test_grouped_rollout_workflow_normalizes_usable_slots(failed_slot):
+    first = _interaction(1.0)
+    second = _interaction(3.0)
+    results = [{"a": first}, {"b": second}]
+    results.insert(failed_slot, None)
     workflow = GroupedRolloutWorkflow(
-        _ListWorkflow([{"a": _interaction(1.0)}, None]),
+        _ListWorkflow(results),
+        group_size=3,
+        min_usable_group_size=2,
+        logger=_Logger(),
+        reward_normalization=True,
+    )
+
+    result = await workflow.arun_episode(engine=None, data={})
+
+    assert result == {"a": first, "b": second}
+    assert first.reward == pytest.approx(-1.0)
+    assert second.reward == pytest.approx(1.0)
+    assert first.original_reward == pytest.approx(1.0)
+    assert second.original_reward == pytest.approx(3.0)
+    assert first._cache["rewards"].item() == pytest.approx(-1.0)
+    assert second._cache["rewards"].item() == pytest.approx(1.0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("minimum", "drop_incomplete"), [(3, False), (2, True)])
+async def test_grouped_rollout_reward_normalization_preserves_group_filters(
+    minimum, drop_incomplete
+):
+    first = _interaction(1.0)
+    second = _interaction(3.0)
+    workflow = GroupedRolloutWorkflow(
+        _ListWorkflow([{"a": first}, None, {"b": second}]),
+        group_size=3,
+        min_usable_group_size=minimum,
+        drop_incomplete_group=drop_incomplete,
+        logger=_Logger(),
+        reward_normalization=True,
+    )
+
+    assert await workflow.arun_episode(engine=None, data={}) is None
+    assert first.reward == 1.0
+    assert second.reward == 3.0
+
+
+@pytest.mark.asyncio
+async def test_grouped_rollout_reward_normalization_rejects_missing_reward():
+    logger = _Logger()
+    missing_reward = _interaction(3.0)
+    missing_reward.reward = None
+    workflow = GroupedRolloutWorkflow(
+        _ListWorkflow([{"a": _interaction(1.0)}, {"b": missing_reward}]),
         group_size=2,
         logger=logger,
         reward_normalization=True,
@@ -130,7 +179,7 @@ def test_dist_rollout_coordinator_forwards_reward_group_flags(monkeypatch):
     monkeypatch.setattr(
         coordinator,
         "_broadcast_and_redistribute_trajectories",
-        lambda trajectories: trajectories,
+        lambda trajectories, preparation_error=None: trajectories,
     )
     monkeypatch.setattr(dist_rollout.current_platform, "current_device", lambda: "cpu")
     monkeypatch.setattr(dist_rollout, "tensor_container_to", lambda data, device: data)
@@ -144,6 +193,7 @@ def test_dist_rollout_coordinator_forwards_reward_group_flags(monkeypatch):
     coordinator.rollout_batch(
         data=[{}],
         workflow=object(),
+        min_usable_group_size=2,
         reward_normalization=True,
         drop_incomplete_group=True,
     )
@@ -152,6 +202,83 @@ def test_dist_rollout_coordinator_forwards_reward_group_flags(monkeypatch):
     assert rollout_engine.prepare_kwargs["drop_incomplete_group"] is True
     assert rollout_engine.rollout_kwargs["reward_normalization"] is True
     assert rollout_engine.rollout_kwargs["drop_incomplete_group"] is True
+    assert rollout_engine.rollout_kwargs["min_usable_group_size"] == 2
+
+
+def test_ragged_trajectory_gather_routes_to_batched_ragged_gather(monkeypatch):
+    monkeypatch.setattr(dist_rollout.dist, "get_world_size", lambda _: 2)
+    monkeypatch.setattr(
+        dist_rollout.dist,
+        "all_gather_object",
+        lambda output, value, group=None: output.__setitem__(slice(None), [1, 2]),
+    )
+    expected = [
+        [{"rank": 0, "item": 0}],
+        [{"rank": 1, "item": 0}, {"rank": 1, "item": 1}],
+    ]
+    monkeypatch.setattr(
+        dist_rollout,
+        "all_gather_ragged_tensor_container",
+        lambda items, group=None: expected,
+    )
+
+    gathered = dist_rollout._all_gather_ragged_trajectory_lists(
+        [{"rank": 0, "item": 0}], group=object()
+    )
+
+    assert gathered == expected
+
+
+def test_equal_trajectory_gather_keeps_fast_path(monkeypatch):
+    monkeypatch.setattr(dist_rollout.dist, "get_world_size", lambda _: 2)
+    monkeypatch.setattr(
+        dist_rollout.dist,
+        "all_gather_object",
+        lambda output, value, group=None: output.__setitem__(slice(None), [1, 1]),
+    )
+    expected = [[{"rank": 0}], [{"rank": 1}]]
+    monkeypatch.setattr(
+        dist_rollout,
+        "all_gather_tensor_container",
+        lambda items, group=None: expected,
+    )
+
+    gathered = dist_rollout._all_gather_ragged_trajectory_lists(
+        [{"rank": 0}], group=object()
+    )
+
+    assert gathered == expected
+
+
+def test_stalled_dynamic_preparation_fails_instead_of_spinning(monkeypatch):
+    class _EmptyRolloutEngine:
+        def __init__(self):
+            self.calls = 0
+
+        def prepare_batch(self, *args, **kwargs):
+            self.calls += 1
+            return []
+
+    rollout_engine = _EmptyRolloutEngine()
+    coordinator = DistRolloutCoordinator(rollout_engine, _TrainEngine())
+    monkeypatch.setattr(dist_rollout, "ROLLOUT_COLLECTION_STALL_TIMEOUT_SECONDS", 0.0)
+    captured = {}
+    monkeypatch.setattr(
+        coordinator,
+        "_broadcast_and_redistribute_trajectories",
+        lambda trajectories, preparation_error=None: captured.setdefault(
+            "error", preparation_error
+        ),
+    )
+
+    coordinator.prepare_batch(
+        dataloader=object(),
+        workflow=object(),
+        dynamic_bs=True,
+    )
+
+    assert rollout_engine.calls == 8
+    assert "added no trainable group" in captured["error"]
 
 
 @pytest.mark.asyncio
@@ -204,3 +331,44 @@ async def test_group_failure_cancels_siblings_before_finalizing(failure):
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_group_metrics_include_failed_slots_before_propagating_error():
+    """Completed rewards survive a sibling error in attempted-group metrics."""
+    completed = asyncio.Event()
+    metrics = []
+
+    class Workflow(RolloutWorkflow):
+        async def arun_episode(self, engine, data):
+            if workflow_context.get().sample_idx == 0:
+                completed.set()
+                return {"completion": _interaction(0.75)}
+            await completed.wait()
+            raise ValueError("failed slot")
+
+        def record_group_metrics(self, data, rewards, group_size):
+            metrics.append((rewards, group_size))
+
+    workflow = GroupedRolloutWorkflow(Workflow(), group_size=2, logger=_Logger())
+    with pytest.raises(ValueError, match="failed slot"):
+        await workflow.arun_episode(engine=None, data={})
+
+    assert metrics == [([0.75, None], 2)]
+
+
+@pytest.mark.asyncio
+async def test_group_metrics_observe_rewards_before_normalization():
+    """Per-Stream pass rates must use terminal rewards, not normalized values."""
+    metrics = []
+    agent = _ListWorkflow([{"first": _interaction(0.0)}, {"second": _interaction(1.0)}])
+    agent.record_group_metrics = lambda data, rewards, size: metrics.append(rewards)
+    workflow = GroupedRolloutWorkflow(
+        agent, group_size=2, logger=_Logger(), reward_normalization=True
+    )
+
+    result = await workflow.arun_episode(engine=None, data={})
+
+    assert metrics == [[0.0, 1.0]]
+    assert result["first"].reward == pytest.approx(-1.0)
+    assert result["second"].reward == pytest.approx(1.0)
