@@ -189,3 +189,26 @@ used SGLang `0.5.19.dev125+g119b5ffe4`, retaining the stable top-k patch and app
 upstream compress-gather fix #38346, commit `1cdc5bca5e97b7134136a535c90c6037bd2001fa`.
 This was not a patch-free stable-tag validation. Reward is from the acceptance training
 subset, not an independent SWE-bench evaluation.
+
+### Reproduce the validated SGLang bounds fix
+
+`patch_sglang_qsa_compress_gather.py` packages the exact one-line upstream #38346 fix
+used by the ten-step run. It clamps padded compress-gather indices to the available
+source keys. This is separate from `patch_sglang_qsa_topk.py`, which controls tied-score
+selection. Both remain experiment-specific helpers here; SGLang itself is an external
+dependency.
+
+Run both helpers only in the disposable inference environment, before workers start. The
+bounds-fix helper verifies the original and patched SHA256 hashes, rejects unknown or
+already-patched source, and writes provenance to a new audit file. It does not modify
+the launcher's behavior automatically.
+
+```bash
+python3 examples/swe/qwen38_flash_next/patch_sglang_qsa_compress_gather.py \
+  --audit compress-gather-fix.json
+```
+
+For an isolated source copy, pass `--target /path/to/qsa_indexer.py`. Do not run against
+a shared installation. A newer stable SGLang tag containing this fix still requires
+separate compatibility and training validation; this result does not establish that
+either helper can be removed.
