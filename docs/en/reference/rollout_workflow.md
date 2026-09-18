@@ -114,11 +114,39 @@ complete rollout or agent episode, not one LLM request or tensor row. The whole 
 group must fit; an oversized group raises `ValueError`.
 
 The setting replaces the `max_concurrent_rollouts` group concurrency limit for
-admission. Leaving it unset preserves group-level admission. `consumer_batch_size`,
-accepted/running counters and `max_head_offpolicyness` remain in prompt-group units: a
-free sample slot does not release a group's staleness budget. Pause and runner queue
-limits still apply. Direct distributed executors divide the sample limit by the training
-data-parallel size; v1 and v2 controllers enforce a global limit.
+admission. Leaving it unset preserves group-level admission. `consumer_batch_size` and
+accepted/running counters remain in prompt-group units; `max_head_offpolicyness` still
+controls the version-based admission budget. A free sample slot does not release a
+group's staleness budget. Pause and runner queue limits still apply. Direct distributed
+executors divide the sample limit by the training data-parallel size; v1 and v2
+controllers enforce a global limit.
+
+The admission budget alone does not bound the age of a slow group that later groups keep
+overtaking. When this setting is enabled, `PPOTrainer` also masks actor and critic loss
+targets whose `current_version - token_version > max_head_offpolicyness`. Equality is
+allowed; for example, at version 3 with a limit of 2, version-0 targets are masked while
+version-1 targets remain eligible. Missing, unknown, or future versions on otherwise
+trainable tokens are errors. Custom training loops must pass
+`max_token_staleness=rollout.max_head_offpolicyness` to `ppo_update` themselves.
+
+This is token-level objective filtering, not whole-group deletion or a promise that
+every delivered trajectory is fresh. Complete groups still determine reward baselines
+and advantages; masking happens afterwards, before optimizer minibatch packing.
+Sequence-level importance ratios use the retained targets, and loss weights count those
+same targets. Old tokens remain available as context; model auxiliary losses are not
+filtered by this policy. All DP ranks skip a globally empty optimizer minibatch,
+including its optimizer update; a locally empty rank still participates when other ranks
+have valid targets. The outer training iteration, LR schedule and published version
+continue to advance even if all optimizer minibatches are skipped.
+`stale_token_fraction` reports the masked fraction and `stale_empty_minibatch` reports
+skipped optimizer minibatches under the actor/critic metric scopes.
+
+This follows the token-loss masking principle described in
+[DeepSeek-V4.1 section 5.2.2](https://arxiv.org/html/2609.19969v1#S5.SS2.SSS2). The
+integer version threshold here is an AReaL policy, not a published DeepSeek threshold.
+Dataset concurrency controls and early-short-sample filtering from that report are
+separate mechanisms. Throughput measurements with frozen weights cannot validate the
+retained training-token throughput or quality under this filter.
 
 Grouped workflows keep their gather, sample ordering, filtering and reward
 normalization. Returning `None` releases the sample slot without creating training data.
