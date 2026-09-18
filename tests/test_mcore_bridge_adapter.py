@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
-import hashlib
 import importlib.util
-import json
 from dataclasses import dataclass
 from datetime import timedelta
 from types import SimpleNamespace
@@ -16,9 +14,7 @@ from safetensors.torch import save_file
 from areal.models.mcore.mcore_bridge_adapter import (
     MCoreBridgeAdapter,
     _configure_qwen4_exp_parameters,
-    _require_trainable_ple_export,
     _validate_config_fields,
-    _validate_ple_checkpoint,
     qwen4_exp_optimizer_overrides,
 )
 
@@ -50,107 +46,8 @@ def ple_checkpoint():
     return config, tensors
 
 
-@pytest.mark.parametrize("indexed", [False, True])
-def test_ple_checkpoint_complete_assets_validate_without_loading_tables(
-    tmp_path, ple_checkpoint, indexed
-):
-    config, tensors = ple_checkpoint
-    save_file(tensors, tmp_path / "model.safetensors")
-    if indexed:
-        (tmp_path / "model.safetensors.index.json").write_text(
-            json.dumps({"weight_map": dict.fromkeys(tensors, "model.safetensors")})
-        )
-
-    manifest = _validate_ple_checkpoint(str(tmp_path), config, LAYERS_PREFIX)
-
-    assert set(manifest) == set(tensors)
-    buffer_key = PLE_PREFIX + "layer_multipliers"
-    assert (
-        manifest[buffer_key]["sha256"]
-        == hashlib.sha256(tensors[buffer_key].numpy().tobytes()).hexdigest()
-    )
-    shard_key = PLE_PREFIX + "ngram_embedding.shard_0.weight"
-    assert manifest[shard_key] == {"shape": [4, 2], "dtype": "F8_E4M3"}
-
-
-@pytest.mark.parametrize(
-    "missing_key",
-    [
-        "ngram_embedding.shard_1.weight",
-        "ngram_embedding.weight_scale",
-        "layer_multipliers",
-    ],
-)
-def test_ple_checkpoint_missing_required_asset_raises(
-    tmp_path, ple_checkpoint, missing_key
-):
-    config, tensors = ple_checkpoint
-    del tensors[PLE_PREFIX + missing_key]
-    save_file(tensors, tmp_path / "model.safetensors")
-
-    with pytest.raises(ValueError, match="Missing required PLE checkpoint tensor"):
-        _validate_ple_checkpoint(str(tmp_path), config, LAYERS_PREFIX)
-
-
-def test_ple_checkpoint_index_ghost_tensor_raises(tmp_path, ple_checkpoint):
-    config, tensors = ple_checkpoint
-    weight_map = dict.fromkeys(tensors, "model.safetensors")
-    del tensors[PLE_PREFIX + "ngram_embedding.shard_1.weight"]
-    save_file(tensors, tmp_path / "model.safetensors")
-    (tmp_path / "model.safetensors.index.json").write_text(
-        json.dumps({"weight_map": weight_map})
-    )
-
-    with pytest.raises(ValueError, match="index points to an absent tensor"):
-        _validate_ple_checkpoint(str(tmp_path), config, LAYERS_PREFIX)
-
-
-@pytest.mark.parametrize(
-    ("key", "replacement", "message"),
-    [
-        ("ngram_embedding.shard_1.weight", torch.ones(3, 2), "Invalid PLE shard shape"),
-        ("ngram_heads_offsets", torch.tensor([0, 4]), "Invalid PLE hash-table"),
-        (
-            "layer_multipliers",
-            torch.tensor([11, 13, 17], dtype=torch.int32),
-            "hash-buffer",
-        ),
-        (
-            "ngram_embedding.weight_scale",
-            torch.tensor(float("nan")),
-            "finite and positive",
-        ),
-        ("ngram_embedding.weight_scale", torch.tensor(0.0), "finite and positive"),
-        ("ngram_embedding.weight_scale", torch.ones(2), "must be scalar"),
-    ],
-)
-def test_ple_checkpoint_corrupt_metadata_raises(
-    tmp_path, ple_checkpoint, key, replacement, message
-):
-    config, tensors = ple_checkpoint
-    tensors[PLE_PREFIX + key] = replacement
-    save_file(tensors, tmp_path / "model.safetensors")
-
-    with pytest.raises(ValueError, match=message):
-        _validate_ple_checkpoint(str(tmp_path), config, LAYERS_PREFIX)
-
-
-def test_ple_checkpoint_dequantized_table_without_scale_is_valid(
-    tmp_path, ple_checkpoint
-):
-    config, tensors = ple_checkpoint
-    del tensors[PLE_PREFIX + "ngram_embedding.weight_scale"]
-    for key in tensors:
-        if ".shard_" in key:
-            tensors[key] = tensors[key].to(torch.bfloat16)
-    save_file(tensors, tmp_path / "model.safetensors")
-
-    manifest = _validate_ple_checkpoint(str(tmp_path), config, LAYERS_PREFIX)
-
-    assert manifest[PLE_PREFIX + "ngram_embedding.shard_0.weight"]["dtype"] == "BF16"
-
-
 def test_load_missing_ple_shard_fails_before_bridge_io(tmp_path, ple_checkpoint):
+    pytest.importorskip("mcore_bridge")
     config, tensors = ple_checkpoint
     del tensors[PLE_PREFIX + "ngram_embedding.shard_0.weight"]
     save_file(tensors, tmp_path / "model.safetensors")
@@ -382,55 +279,10 @@ def test_qwen_mcore_optimizer_groups_train_embeddings_with_ple_zero_decay(
     torch.testing.assert_close(ple_table.weight[0], before_ple[0], atol=0, rtol=0)
 
 
-@pytest.mark.parametrize("missing", ["table", "bridge", "non_callable"])
-def test_unpatched_trainable_ple_exporter_is_rejected_before_model_creation(missing):
-    class Table:
-        def iter_trainable_table_to_hf(self):
-            yield 0, torch.ones(2)
-
-    bridge = SimpleNamespace(_export_trainable_ple_tables=lambda *_args: None)
-    if missing == "table":
-        del Table.iter_trainable_table_to_hf
-    elif missing == "bridge":
-        del bridge._export_trainable_ple_tables
-    else:
-        Table.iter_trainable_table_to_hf = True
-
-    with pytest.raises(ImportError, match="Set MCORE_BRIDGE_ROOT"):
-        _require_trainable_ple_export(Table, bridge)
-
-
-def test_trainable_ple_exporter_requires_both_callable_entrypoints():
-    class Table:
-        def iter_trainable_table_to_hf(self):
-            yield 0, torch.ones(2)
-
-    bridge = SimpleNamespace(_export_trainable_ple_tables=lambda *_args: None)
-
-    _require_trainable_ple_export(Table, bridge)
-
-
-def test_ple_checkpoint_hash_must_match_model_configuration(tmp_path, ple_checkpoint):
-    config, tensors = ple_checkpoint
-    save_file(tensors, tmp_path / "model.safetensors")
-    layer = torch.nn.Module()
-    layer.layer_number = 2
-    layer.ple = torch.nn.Module()
-    layer.ple.ple_embedding = torch.nn.Module()
-    for key, value in tensors.items():
-        name = key.removeprefix(PLE_PREFIX)
-        if "." not in name:
-            layer.ple.ple_embedding.register_buffer(name, value.clone())
-    _validate_ple_checkpoint(str(tmp_path), config, LAYERS_PREFIX, [layer])
-    layer.ple.ple_embedding.layer_multipliers[0] += 1
-
-    with pytest.raises(ValueError, match="disagrees with the model configuration"):
-        _validate_ple_checkpoint(str(tmp_path), config, LAYERS_PREFIX, [layer])
-
-
 def test_save_missing_table_does_not_claim_complete_checkpoint(
     tmp_path, ple_checkpoint
 ):
+    pytest.importorskip("mcore_bridge")
     config, tensors = ple_checkpoint
     del tensors[PLE_PREFIX + "ngram_embedding.shard_1.weight"]
     save_file(tensors, tmp_path / "model.safetensors")

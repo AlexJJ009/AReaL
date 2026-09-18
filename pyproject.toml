@@ -163,7 +163,7 @@ megatron = [
     "megatron-bridge==0.4.0; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
     # Qwen4Exp/Qwen3.8-Flash-Next backend. Keep this commit aligned with the
     # adapter's tested ModelScope bridge contract.
-    "mcore-bridge @ git+https://github.com/dingzhiqiang/mcore-bridge.git@03f56345d9f599fcedc147881b08072c4f2c51f9; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "mcore-bridge @ git+https://github.com/dingzhiqiang/mcore-bridge.git@4374a56cc38dff9fb64b22c267831ef641be1ba2; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 # Convenience extra for CUDA training packages (no inference backend)
 cuda-train = [

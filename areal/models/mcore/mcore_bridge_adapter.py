@@ -9,44 +9,14 @@ The package is intentionally optional: importing AReaL does not require
 from __future__ import annotations
 
 import dataclasses
-import hashlib
-import json
 from collections.abc import Iterator
-from contextlib import ExitStack
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.distributed as dist
-from safetensors import safe_open
 
 if TYPE_CHECKING:
     from transformers import PretrainedConfig
-
-
-def _allow_qwen4_exp_gdn_cp() -> None:
-    """Bypass the stale MCore config guard when mcore-bridge owns GDN CP."""
-    from megatron.core.transformer.transformer_config import TransformerConfig
-
-    if getattr(TransformerConfig, "_areal_qwen4_exp_cp_guard", False):
-        return
-    original = TransformerConfig.__post_init__
-
-    def patched(self):
-        cp_size = getattr(self, "context_parallel_size", 1)
-        has_gdn = getattr(self, "linear_num_key_heads", None) is not None
-        has_gdn = has_gdn and getattr(self, "linear_num_value_heads", None) is not None
-        if cp_size > 1 and has_gdn:
-            self.context_parallel_size = 1
-            try:
-                original(self)
-            finally:
-                self.context_parallel_size = cp_size
-            return
-        original(self)
-
-    TransformerConfig.__post_init__ = patched
-    TransformerConfig._areal_qwen4_exp_cp_guard = True
 
 
 def _validate_config_fields(config_cls: type, config_kwargs: dict[str, Any]) -> None:
@@ -105,151 +75,6 @@ def qwen4_exp_optimizer_overrides(config: Any) -> dict[Any, Any]:
     overrides = get_standard_config_overrides(config)
     overrides[ParamKey(attr="no_weight_decay")] = ParamGroupOverride(wd_mult=0.0)
     return overrides
-
-
-def _require_trainable_ple_export(embedding_type: type, bridge: Any) -> None:
-    if not callable(
-        getattr(embedding_type, "iter_trainable_table_to_hf", None)
-    ) or not callable(getattr(bridge, "_export_trainable_ple_tables", None)):
-        raise ImportError(
-            "Qwen4-Exp training requires the mcore-bridge trainable PLE exporter "
-            "patch (iter_trainable_table_to_hf and _export_trainable_ple_tables). "
-            "Set MCORE_BRIDGE_ROOT to the pinned task fork containing this patch; "
-            "the unpatched upstream revision cannot export trained PLE weights."
-        )
-
-
-def _validate_ple_checkpoint(
-    path: str,
-    config: Any,
-    layers_prefix: str,
-    models: list[torch.nn.Module] | None = None,
-) -> dict[str, dict[str, Any]]:
-    """Check PLE assets without materializing the large embedding tables.
-
-    Hashes cover the small lookup buffers, not the table contents. Full checkpoint
-    file hashes belong to the experiment's source manifest.
-    """
-    model_dir = Path(path)
-    index_path = model_dir / "model.safetensors.index.json"
-    if index_path.is_file():
-        with index_path.open() as stream:
-            weight_map = json.load(stream)["weight_map"]
-    else:
-        with safe_open(
-            model_dir / "model.safetensors", framework="pt", device="cpu"
-        ) as handle:
-            weight_map = dict.fromkeys(handle.keys(), "model.safetensors")
-
-    heads = (config.ngram_size - 1) * config.heads_per_ngram
-    parts = config.split_ngram_parts
-    divisor = config.make_ngram_vocab_size_divisible_by
-    if heads <= 0 or parts <= 0 or divisor <= 0 or config.ple_embed_dim % heads:
-        raise ValueError("Invalid Qwen4-Exp PLE head, shard, or embedding dimensions.")
-    head_dim = config.ple_embed_dim // heads
-    manifest = {}
-    with ExitStack() as stack:
-        files = {}
-
-        def tensor_handle(key: str):
-            if key not in weight_map:
-                raise ValueError(f"Missing required PLE checkpoint tensor: {key}")
-            filename = weight_map[key]
-            if filename not in files:
-                files[filename] = stack.enter_context(
-                    safe_open(model_dir / filename, framework="pt", device="cpu")
-                )
-            handle = files[filename]
-            if key not in handle.keys():
-                raise ValueError(
-                    f"PLE checkpoint index points to an absent tensor: {key}"
-                )
-            return handle
-
-        for layer_id in config.ple_layer_ids:
-            prefix = f"{layers_prefix}.{layer_id - 1}.ple.ple_embedding."
-            buffers = {}
-            for name, length in (
-                ("layer_multipliers", config.ngram_size),
-                ("ngram_heads_offsets", heads),
-                ("ngram_heads_vocab_sizes", heads),
-            ):
-                key = prefix + name
-                handle = tensor_handle(key)
-                metadata = handle.get_slice(key)
-                if metadata.get_shape() != [length] or metadata.get_dtype() != "I64":
-                    raise ValueError(f"Invalid PLE hash-buffer shape or dtype: {key}")
-                buffer = handle.get_tensor(key)
-                buffers[name] = buffer
-                manifest[key] = {
-                    "shape": [length],
-                    "dtype": "I64",
-                    "sha256": hashlib.sha256(buffer.numpy().tobytes()).hexdigest(),
-                }
-            sizes = buffers["ngram_heads_vocab_sizes"]
-            offsets = buffers["ngram_heads_offsets"]
-            expected_offsets = torch.cat((sizes.new_zeros(1), sizes.cumsum(0)[:-1]))
-            if not bool(torch.all(sizes > 0)) or not torch.equal(
-                offsets, expected_offsets
-            ):
-                raise ValueError(f"Invalid PLE hash-table sizes or offsets: {prefix}")
-            total = ((int(sizes.sum()) + divisor - 1) // divisor) * divisor
-            shard_size = (total + parts - 1) // parts
-            shard_dtypes = set()
-            for part in range(parts):
-                key = f"{prefix}ngram_embedding.shard_{part}.weight"
-                metadata = tensor_handle(key).get_slice(key)
-                expected_shape = [
-                    max(0, min(shard_size, total - part * shard_size)),
-                    head_dim,
-                ]
-                shape = metadata.get_shape()
-                dtype = metadata.get_dtype()
-                if shape != expected_shape:
-                    raise ValueError(
-                        f"Invalid PLE shard shape for {key}: expected {expected_shape}, got {shape}"
-                    )
-                if dtype not in ("BF16", "F16", "F32", "F8_E4M3"):
-                    raise ValueError(f"Unsupported PLE shard dtype for {key}: {dtype}")
-                shard_dtypes.add(dtype)
-                manifest[key] = {"shape": shape, "dtype": dtype}
-            if len(shard_dtypes) != 1:
-                raise ValueError(f"Mixed PLE shard dtypes: {prefix}")
-            scale_key = f"{prefix}ngram_embedding.weight_scale"
-            if "F8_E4M3" in shard_dtypes or scale_key in weight_map:
-                handle = tensor_handle(scale_key)
-                metadata = handle.get_slice(scale_key)
-                if metadata.get_shape() not in ([], [1]):
-                    raise ValueError(f"PLE weight scale must be scalar: {scale_key}")
-                scale = handle.get_tensor(scale_key).float()
-                if not bool(torch.all(torch.isfinite(scale) & (scale > 0))):
-                    raise ValueError(
-                        f"PLE weight scale must be finite and positive: {scale_key}"
-                    )
-                manifest[scale_key] = {
-                    "shape": metadata.get_shape(),
-                    "dtype": metadata.get_dtype(),
-                }
-    # These buffers are deterministic functions of config/seed. Check the local
-    # model before loading can overwrite a mismatched hash function from disk.
-    for model in models or []:
-        for layer in model.modules():
-            ple = getattr(layer, "ple", None)
-            if ple is None or not hasattr(layer, "layer_number"):
-                continue
-            prefix = f"{layers_prefix}.{layer.layer_number - 1}.ple.ple_embedding."
-            for name in (
-                "layer_multipliers",
-                "ngram_heads_offsets",
-                "ngram_heads_vocab_sizes",
-            ):
-                buffer = getattr(ple.ple_embedding, name).detach().cpu().contiguous()
-                fingerprint = hashlib.sha256(buffer.numpy().tobytes()).hexdigest()
-                if fingerprint != manifest[prefix + name]["sha256"]:
-                    raise ValueError(
-                        f"PLE hash buffer disagrees with the model configuration: {prefix}{name}"
-                    )
-    return manifest
 
 
 class MCoreBridgeAdapter:
@@ -317,7 +142,6 @@ class MCoreBridgeAdapter:
             ),
         )
         if self.hf_config.model_type == "qwen4_exp" and context_parallel_size > 1:
-            _allow_qwen4_exp_gdn_cp()
             config_kwargs["cp_comm_type"] = "all_gather"
         if gradient_checkpointing:
             config_kwargs.update(
@@ -366,11 +190,6 @@ class MCoreBridgeAdapter:
                 "mcore-bridge adapter does not yet support "
                 "overlap_param_gather_with_optimizer_step."
             )
-        if self.config.hf_model_type == "qwen4_exp":
-            from mcore_bridge.model.modules.ple import Qwen4ExpTextNGramEmbedding
-
-            if not self.freeze_ple_table:
-                _require_trainable_ple_export(Qwen4ExpTextNGramEmbedding, self.bridge)
         from mcore_bridge import get_mcore_model
         from megatron.core import tensor_parallel
         from megatron.core.distributed import DistributedDataParallel as DDP
@@ -408,7 +227,9 @@ class MCoreBridgeAdapter:
 
     def load_weights(self, models: list[torch.nn.Module], path: str) -> None:
         if self.config.hf_model_type == "qwen4_exp":
-            self.ple_checkpoint_metadata = _validate_ple_checkpoint(
+            from mcore_bridge.utils.qwen4_exp_checkpoint import validate_ple_checkpoint
+
+            self.ple_checkpoint_metadata = validate_ple_checkpoint(
                 path, self.config, self.bridge.hf_layers_prefix, models
             )
         self.bridge.load_weights(models, path)
@@ -440,7 +261,11 @@ class MCoreBridgeAdapter:
         error = None
         try:
             if self.config.hf_model_type == "qwen4_exp":
-                _validate_ple_checkpoint(
+                from mcore_bridge.utils.qwen4_exp_checkpoint import (
+                    validate_ple_checkpoint,
+                )
+
+                validate_ple_checkpoint(
                     path, self.config, self.bridge.hf_layers_prefix, models
                 )
         except Exception as exc:

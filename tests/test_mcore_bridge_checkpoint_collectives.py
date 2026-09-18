@@ -2,7 +2,6 @@
 
 """CPU save contracts: real Gloo error propagation and export config isolation."""
 
-import importlib.util
 import json
 import time
 from datetime import timedelta
@@ -20,7 +19,6 @@ from areal.models.mcore.mcore_bridge_adapter import MCoreBridgeAdapter
 from areal.models.mcore.mcore_bridge_checkpoint import (
     _preserve_hf_auxiliary_files,
     finalize_mcore_bridge_checkpoint,
-    qwen4_exp_export_config,
 )
 
 
@@ -40,49 +38,6 @@ def _source_config():
             mtp_use_dedicated_embeddings=False,
         )
     )
-
-
-def test_export_config_removes_mtp_on_a_copy_only(tmp_path):
-    config = _source_config()
-    before = config.to_dict()
-
-    exported = qwen4_exp_export_config(config, mtp_enabled=False)
-    exported.save_pretrained(tmp_path)
-
-    saved = json.loads((tmp_path / "config.json").read_text())
-    assert saved["text_config"]["mtp"] is None
-    assert saved["text_config"]["mtp_num_hidden_layers"] == 0
-    assert config.to_dict() == before
-    assert exported.text_config is not config.text_config
-
-
-def test_enabled_mtp_export_preserves_configuration_without_aliasing():
-    config = _source_config()
-
-    exported = qwen4_exp_export_config(config, mtp_enabled=True)
-
-    assert exported.to_dict() == config.to_dict()
-    exported.text_config.mtp["num_hidden_layers"] = 9
-    assert config.text_config.mtp["num_hidden_layers"] == 1
-
-
-@pytest.mark.parametrize("mtp_enabled", [False, True])
-def test_export_qsa_uses_portable_layer_names_without_mutating_runtime(
-    tmp_path, mtp_enabled
-):
-    config = _source_config()
-    config.text_config.layer_types = ["linear_attention", "qwen_sparse_attention"]
-    before = config.to_dict()
-
-    exported = qwen4_exp_export_config(config, mtp_enabled=mtp_enabled)
-    exported.save_pretrained(tmp_path)
-
-    saved = json.loads((tmp_path / "config.json").read_text())
-    assert saved["text_config"]["layer_types"] == [
-        "linear_attention",
-        "full_attention",
-    ]
-    assert config.to_dict() == before
 
 
 def test_auxiliary_assets_fill_tokenizer_files_without_overwriting_saved_config(
@@ -292,6 +247,7 @@ def _checkpoint_collective_worker(rank: int, directory: str):
 @pytest.mark.slow
 @pytest.mark.ci
 def test_checkpoint_finalization_errors_reach_all_cpu_ranks(tmp_path):
+    pytest.importorskip("mcore_bridge.utils.qwen4_exp_checkpoint")
     source = tmp_path / "source"
     source.mkdir()
     (source / "config.json").write_text(json.dumps({"model_type": "qwen4_exp"}))
@@ -325,71 +281,3 @@ def test_checkpoint_finalization_errors_reach_all_cpu_ranks(tmp_path):
             if process.is_alive():
                 process.terminate()
             process.join(timeout=5)
-
-
-def test_exact_qwen4_exp_hf_tiny_export_config_has_no_mtp(tmp_path):
-    if importlib.util.find_spec("transformers.models.qwen4_exp") is None:
-        pytest.skip("Qwen4-Exp requires the pinned Transformers runtime")
-    from transformers.models.qwen4_exp.configuration_qwen4_exp import Qwen4ExpConfig
-    from transformers.models.qwen4_exp.modeling_qwen4_exp import (
-        Qwen4ExpForConditionalGeneration,
-    )
-
-    config = Qwen4ExpConfig(
-        text_config={
-            "vocab_size": 32,
-            "hidden_size": 16,
-            "num_hidden_layers": 4,
-            "num_attention_heads": 2,
-            "num_key_value_heads": 1,
-            "head_dim": 8,
-            "linear_key_head_dim": 8,
-            "linear_value_head_dim": 8,
-            "linear_num_key_heads": 1,
-            "linear_num_value_heads": 1,
-            "num_experts": 2,
-            "num_experts_per_tok": 1,
-            "moe_intermediate_size": 8,
-            "shared_expert_intermediate_size": 8,
-            "hc_count": 2,
-            "hc_lowrank": 4,
-            "ple_layer_ids": [2],
-            "ple_embed_dim": 4,
-            "heads_per_ngram": 1,
-            "ngram_vocab_size_base": 11,
-            "make_ngram_vocab_size_divisible_by": 4,
-            "split_ngram_parts": 2,
-            "eos_token_id": 2,
-            "indexer_n_heads": 1,
-            "indexer_kv_heads": 1,
-            "indexer_head_dim": 8,
-            "indexer_budget": 4,
-            "indexer_compress_ratio": 2,
-            "mtp": {"num_hidden_layers": 1},
-            "mtp_num_hidden_layers": 1,
-            "rope_parameters": {"rope_type": "default", "rope_theta": 10000.0},
-        },
-        vision_config={
-            "depth": 1,
-            "hidden_size": 16,
-            "intermediate_size": 16,
-            "num_heads": 4,
-            "patch_size": 2,
-            "temporal_patch_size": 1,
-            "out_hidden_size": 16,
-            "num_position_embeddings": 16,
-        },
-    )
-    before = config.to_dict()
-    exported = qwen4_exp_export_config(config, mtp_enabled=False)
-    exported.save_pretrained(tmp_path)
-    reloaded = Qwen4ExpConfig.from_pretrained(tmp_path)
-
-    model = Qwen4ExpForConditionalGeneration._from_config(
-        reloaded, attn_implementation="eager"
-    )
-
-    assert not any("mtp" in name.split(".") for name, _ in model.named_modules())
-    assert reloaded.text_config.mtp is None
-    assert reloaded.text_config.mtp_num_hidden_layers == 0
-    assert config.to_dict() == before
