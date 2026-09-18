@@ -29,7 +29,7 @@ overrides = [
     { name = "mamba-ssm", marker = "sys_platform == 'never'" },
     { name = "megatron-core", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.19.0" },
     { name = "nv-grouped-gemm", marker = "sys_platform == 'never'" },
-    { name = "nvidia-cudnn-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==9.16.0.29" },
+    { name = "nvidia-cudnn-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==9.19.0.56" },
     { name = "nvidia-resiliency-ext", marker = "sys_platform == 'never'" },
     { name = "openai", specifier = ">=2.8.0" },
     { name = "soundfile", specifier = ">=0.12.1,<0.13.0" },
@@ -578,7 +578,7 @@ requires-dist = [
     { name = "ninja" },
     { name = "nltk" },
     { name = "numba" },
-    { name = "nvidia-cudnn-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'sglang'", specifier = "==9.16.0.29" },
+    { name = "nvidia-cudnn-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'sglang'", specifier = "==9.19.0.56" },
     { name = "nvidia-ml-py", marker = "sys_platform == 'linux'" },
     { name = "nvidia-modelopt", extras = ["hf"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'cuda-train'" },
     { name = "omegaconf", specifier = "==2.4.0.dev2" },
@@ -4254,13 +4254,13 @@ wheels = [
 
 [[package]]
 name = "nvidia-cudnn-cu12"
-version = "9.16.0.29"
+version = "9.19.0.56"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "nvidia-cublas-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/73/ad/bf4d7b6b097b53f0b36551466cbc196b84e27a0252d89d6a9d2afc5f7c5f/nvidia_cudnn_cu12-9.16.0.29-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:78d05b4434dacc7dd9bc903d5c33a2f28a5f0064d02568ef7b2418f89f6c5922", size = 647663273, upload-time = "2025-11-14T20:33:10.601Z" },
+    { url = "https://files.pythonhosted.org/packages/c5/41/65225d42fba06fb3dd3972485ea258e7dd07a40d6e01c95da6766ad87354/nvidia_cudnn_cu12-9.19.0.56-py3-none-manylinux_2_27_x86_64.whl", hash = "sha256:ac6ad90a075bb33a94f2b4cf4622eac13dd4dc65cf6dd9c7572a318516a36625", size = 657906812, upload-time = "2026-02-03T20:44:12.638Z" },
 ]
 
 [[package]]

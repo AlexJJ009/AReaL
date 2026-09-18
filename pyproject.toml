@@ -146,7 +146,7 @@ dependencies = [
 # See pyproject.vllm.toml for the vLLM variant.
 sglang = [
     "sglang[tracing]==0.5.10.post1; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "nvidia-cudnn-cu12==9.16.0.29; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cudnn-cu12==9.19.0.56; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torch; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torchaudio; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "torchvision; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -241,7 +241,7 @@ override-dependencies = [
     "openai>=2.8.0",
     "soundfile>=0.12.1,<0.13.0",
     "torchao==0.15.0",
-    "nvidia-cudnn-cu12==9.16.0.29; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "nvidia-cudnn-cu12==9.19.0.56; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "flash-attn-4>=4.0.0b4",
 
     # Required by megatron-bridge but are optional (as per docs) cuda-based installs
