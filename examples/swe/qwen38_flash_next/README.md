@@ -167,3 +167,25 @@ training pool. The heldout partition remains excluded. The default
 compatibility. `training-inventory.json` records the selected scope and task IDs.
 Compare training rewards with evaluation on matched tasks; the historical fast subset
 and asynchronous completion can substantially bias aggregate rewards.
+
+### Fresh 256K SWE validation (2026-09-18)
+
+Both branches completed ten fresh training steps without OOM, using 16 groups x 8
+samples, 262144 context tokens and 65536 output tokens. The ten-step aggregate training
+reward matched exactly: 1198/1280 (0.9359375) for both branches.
+
+| Metric                                 |  Internal | Open-source |
+| -------------------------------------- | --------: | ----------: |
+| First-step absolute logp difference    |  0.038508 |    0.038055 |
+| Ten-step mean absolute logp difference | 0.0487336 |   0.0544257 |
+
+These are `ppo_actor/update/logp_abs_diff/avg` values, of order 1e-2. The actual
+training trajectories differ; matching aggregate reward does not mean identical tokens
+or numerical equivalence. Initial fixed probes matched tokens and logprobs exactly.
+Post-update probe discrepancies remain unresolved.
+
+Validated source revisions: open-source `3426e938c`, internal `3ccb512ff`. The runtime
+used SGLang `0.5.19.dev125+g119b5ffe4`, retaining the stable top-k patch and applying
+upstream compress-gather fix #38346, commit `1cdc5bca5e97b7134136a535c90c6037bd2001fa`.
+This was not a patch-free stable-tag validation. Reward is from the acceptance training
+subset, not an independent SWE-bench evaluation.
