@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Usage: bash submit_rl.sh swe|rlvr [training config overrides...]
+# Inference: SGLang 0.5.19.dev125+g119b5ffe4 in a fresh writable container layer.
+# Both QSA patches run before rollout startup and reject other/already-patched sources.
 set -euo pipefail
 recipe_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 export QWEN_REPO=${QWEN_REPO:-$(cd "$recipe_dir/../../.." && pwd)}

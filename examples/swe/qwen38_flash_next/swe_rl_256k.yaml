@@ -81,6 +81,7 @@ rollout:
       TMS_INIT_ENABLE_CPU_BACKUP: '0'
       QWEN_AWEX_FROZEN_CONTRACT: ${oc.env:QWEN_AWEX_FROZEN_CONTRACT}
       QWEN_QSA_QUERY_CHUNK_SIZE: '1024'
+      QWEN_QSA_STABLE_TOPK: '1'
       QWEN_ISOLATE_REQUEST_CACHE: '1'
       QWEN_PRIVATE_ENV: ${oc.env:QWEN_PRIVATE_ENV}
       ARENA_OPENAPI_BASE: ${oc.env:ARENA_OPENAPI_BASE}
@@ -103,6 +104,9 @@ rollout:
     - test "$TMS_INIT_ENABLE" = 0
     - test "$TMS_INIT_ENABLE_CPU_BACKUP" = 0
     - cd ${oc.env:QWEN_REPO}
+    # Requires a fresh writable layer of SGLang 0.5.19.dev125+g119b5ffe4.
+    - python3 -m examples.swe.qwen38_flash_next.patch_sglang_qsa_topk
+    - python3 -m examples.swe.qwen38_flash_next.patch_sglang_qsa_compress_gather
     image: ${oc.env:QWEN_ROLLOUT_IMAGE}
   scheduling_strategy:
     type: colocation
