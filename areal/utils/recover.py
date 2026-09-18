@@ -465,6 +465,7 @@ class RecoverHandler:
             )
             return None
         logger.info(f"Loading recover info from {source.manifest}")
+        colocate_restore_started = False
         try:
             recover_info: RecoverInfo = RecoverInfo.load(source.manifest)
             logger.info(
@@ -505,6 +506,8 @@ class RecoverHandler:
                 versioned_meta = weight_update_meta.with_version(recovery_version)
                 update_engine.connect_engine(inference_engine, versioned_meta)
                 inference_engine.pause()
+                colocate_restore_started = is_awex_colocate
+                can_resume_inference = not is_awex_colocate
                 try:
                     # AWEX colocate transfer requires the full engine-level
                     # pause/offload protocol, not just the controller pause. The
@@ -515,8 +518,7 @@ class RecoverHandler:
                     # Without this the recover-path transfer deadlocks: reader
                     # never consumes the queued version marker, writer blocks on
                     # weights_update_finished forever.
-                    # Mirror the trainer's handover on both sides of the update;
-                    # the actor update only transfers weights, not rollout state.
+                    # Restore rollout after every actor worker has returned.
                     if is_awex_colocate:
                         inference_engine.pause_generation_sync()
                         inference_engine.offload(tags=["kv_cache"])
@@ -538,16 +540,20 @@ class RecoverHandler:
                         inference_engine.onload(tags=["cuda_graph"])
                         inference_engine.onload(tags=["kv_cache"])
                         call_maybe_async(inference_engine.continue_generation)
+                        can_resume_inference = True
                 finally:
-                    # Always resume: leaving rollout paused after a failed
-                    # checkpoint load or transfer would hang every later step.
-                    inference_engine.resume()
+                    # Do not admit work to partially restored colocated workers.
+                    if can_resume_inference:
+                        inference_engine.resume()
             return recover_info
         except (FileNotFoundError, InValidRecoverInfo) as e:
             if source.transactional:
                 raise checkpoint_pointer.CheckpointConsistencyError(
                     f"Published checkpoint {source.label} is not loadable: {e}"
                 ) from e
+            if colocate_restore_started:
+                # A failed restore must not fall back to training while paused.
+                raise
             logger.warning(
                 f"Resume info not found at {source.manifest}. "
                 f"This should not be a resumed experiment!"

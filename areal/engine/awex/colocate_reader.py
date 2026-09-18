@@ -52,12 +52,15 @@ from areal.utils.logging import getLogger  # noqa: E402
 logger = getLogger("AwexColocateReader")
 
 
-class _SGLangNCCLWorkerWeightsReader(NCCLWorkerWeightsReader):
-    """Select the CUDA device even when SGLang omits scheduler.gpu_id."""
+class _DeviceBoundWeightsReader(NCCLWorkerWeightsReader):
+    """Bind communication to the model's logical CUDA device, not a rank id."""
 
-    def __init__(self, *args, physical_gpu_id: int, **kwargs):
-        self._physical_gpu_id = physical_gpu_id
-        super().__init__(*args, **kwargs)
+    def __init__(self, *args, model: torch.nn.Module, **kwargs):
+        device = next(model.parameters()).device
+        if device.type != "cuda" or device.index is None:
+            raise RuntimeError("AWEX reader requires model weights resumed on CUDA")
+        self._model_device = device
+        super().__init__(*args, model=model, **kwargs)
 
     def _init_reader_in_colocate_mode(self):
         from areal.engine.awex.colocate_transport import (
@@ -69,34 +72,19 @@ class _SGLangNCCLWorkerWeightsReader(NCCLWorkerWeightsReader):
             self.transfer_rank, self.infer_world_size
         )
 
-    def _set_device(self):
-        visible = [
-            entry.strip()
-            for entry in os.environ.get("CUDA_VISIBLE_DEVICES", "").split(",")
-            if entry.strip()
-        ]
-        if visible:
-            if str(self._physical_gpu_id) not in visible:
-                raise ValueError(
-                    f"AWEX physical GPU {self._physical_gpu_id} is not in "
-                    f"CUDA_VISIBLE_DEVICES={visible!r}"
-                )
-            logical_gpu_id = visible.index(str(self._physical_gpu_id))
-        else:
-            logical_gpu_id = self._physical_gpu_id
-        if not 0 <= logical_gpu_id < torch.cuda.device_count():
-            raise ValueError(f"AWEX CUDA device index out of range: {logical_gpu_id}")
-        torch.cuda.set_device(logical_gpu_id)
-        self.barrier_device = logical_gpu_id
+    def _set_device(self) -> None:
+        # TODO(agent): This adapter is CUDA-only; physical ids remain metadata
+        # identities and must not be used as CUDA_VISIBLE_DEVICES indices.
+        torch.cuda.set_device(self._model_device)
+        self.barrier_device = self._model_device.index
         self.backend = "nccl"
         self.ready_tensor = torch.tensor(
-            1, dtype=torch.int64, device=torch.device("cuda", logical_gpu_id)
+            1, dtype=torch.int64, device=self._model_device
         )
         logger.info(
-            "AWEX reader rank %s uses logical CUDA device %d (physical GPU %d)",
+            "Bound AWEX reader rank %s to model device %s",
             self.transfer_rank,
-            logical_gpu_id,
-            self._physical_gpu_id,
+            self._model_device,
         )
 
 
@@ -319,41 +307,43 @@ class AwexColocateReader:
         pp_size = int(getattr(server_args, "pp_size", 1))
         dp_size = int(getattr(server_args, "dp_size", 1))
 
-        # SGLang versions expose parallel state on different scheduler/worker
-        # objects. Never default to rank zero: each reader needs its own shard.
         from areal.engine.sglang_fork_contract import resolve_scheduler_parallel_attr
 
-        def _rank_attr(name: str) -> int | None:
+        def rank_attr(name: str) -> int | None:
             return resolve_scheduler_parallel_attr(scheduler, name)
 
-        tp_rank = _rank_attr("tp_rank")
+        tp_rank = rank_attr("tp_rank")
         if tp_rank is None and self._instance_local_rank is not None:
-            tp_rank = int(self._instance_local_rank) % max(tp_size, 1)
-        if tp_rank is None:
-            raise RuntimeError(
-                "Cannot resolve tp_rank from scheduler/tp_worker and "
-                "instance_local_rank is unset; refusing to default to 0 "
-                "(would silently corrupt the AWEX transfer plan)"
+            tp_rank = self._instance_local_rank % tp_size
+        if tp_rank is None or not 0 <= tp_rank < tp_size:
+            raise RuntimeError("Cannot resolve a valid AWEX inference TP rank")
+        pp_rank = rank_attr("pp_rank")
+        if pp_rank is None:
+            pp_rank = (
+                self._instance_local_rank // tp_size
+                if self._instance_local_rank is not None
+                else (0 if pp_size == 1 else None)
             )
+        if pp_rank is None or not 0 <= pp_rank < pp_size:
+            raise RuntimeError("Cannot resolve a valid AWEX inference PP rank")
 
         if self._infer_instance_world_size is not None:
             world_size = self._infer_instance_world_size
             global_rank = self._instance_local_rank
         else:
             world_size = tp_size * pp_size
-            global_rank = tp_rank
+            global_rank = pp_rank * tp_size + tp_rank
 
-        pp_rank = _rank_attr("pp_rank")
-        attn_tp_rank = _rank_attr("attn_tp_rank")
-        attn_tp_size = _rank_attr("attn_tp_size")
-        attn_dp_rank = _rank_attr("attn_dp_rank")
+        attn_tp_rank = rank_attr("attn_tp_rank")
+        attn_tp_size = rank_attr("attn_tp_size")
+        attn_dp_rank = rank_attr("attn_dp_rank")
 
         return {
             "scheduler": scheduler,
             "infer_engine_config": server_args,
             "tp_rank": tp_rank,
             "tp_size": tp_size,
-            "pp_rank": 0 if pp_rank is None else pp_rank,
+            "pp_rank": pp_rank,
             "pp_size": pp_size,
             "dp_size": dp_size,
             "world_size": world_size,
@@ -608,8 +598,7 @@ class AwexColocateReader:
         logger.info("Got training_params_meta from MetaServer")
 
         model_context = self._build_model_context()
-        reader = _SGLangNCCLWorkerWeightsReader(
-            physical_gpu_id=self._local_gpu_id,
+        reader = _DeviceBoundWeightsReader(
             engine_name="sglang",
             model=self._get_model(),
             model_context=model_context,

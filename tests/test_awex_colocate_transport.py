@@ -440,7 +440,7 @@ def test_bounded_transport_unpacks_expert_receives(monkeypatch):
 def test_reader_installs_bounded_transport_after_native_initialization(monkeypatch):
     from areal.engine.awex.colocate_reader import (
         NCCLWorkerWeightsReader,
-        _SGLangNCCLWorkerWeightsReader,
+        _DeviceBoundWeightsReader,
     )
 
     events = []
@@ -464,7 +464,7 @@ def test_reader_installs_bounded_transport_after_native_initialization(monkeypat
         "_BoundedMemoryNcclColocateStreamBatchTransport",
         bounded_transport,
     )
-    reader = object.__new__(_SGLangNCCLWorkerWeightsReader)
+    reader = object.__new__(_DeviceBoundWeightsReader)
     reader.transfer_rank = 7
     reader.infer_world_size = 64
     reader._init_reader_in_colocate_mode()

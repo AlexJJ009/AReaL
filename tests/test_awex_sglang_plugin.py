@@ -113,7 +113,24 @@ def test_awex_config_preserves_nested_router_and_vision_metadata(monkeypatch):
     assert config.architectures == ["SimpleNamespace"]
 
 
-def test_memory_transitions_are_idempotent():
+def test_memory_transitions_are_idempotent(monkeypatch):
+    import sys
+
+    class ReleaseOutput:
+        pass
+
+    class ResumeOutput:
+        pass
+
+    monkeypatch.setitem(
+        sys.modules,
+        "sglang.srt.managers.io_struct",
+        SimpleNamespace(
+            ReleaseMemoryOccupationReqOutput=ReleaseOutput,
+            ResumeMemoryOccupationReqOutput=ResumeOutput,
+        ),
+    )
+
     class Scheduler:
         def __init__(self):
             self.offload_tags = set()
@@ -132,9 +149,9 @@ def test_memory_transitions_are_idempotent():
     request = SimpleNamespace(tags=["kv_cache"])
 
     scheduler.release_memory_occupation(request)
-    scheduler.release_memory_occupation(request)
+    assert isinstance(scheduler.release_memory_occupation(request), ReleaseOutput)
     scheduler.resume_memory_occupation(request)
-    scheduler.resume_memory_occupation(request)
+    assert isinstance(scheduler.resume_memory_occupation(request), ResumeOutput)
 
     assert scheduler.calls == [
         ("release", ["kv_cache"]),
@@ -325,50 +342,37 @@ def test_unverified_sglang_build_is_rejected(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("visible", "physical", "device_count", "logical"),
-    [
-        (None, 0, 8, 0),
-        (None, 7, 8, 7),
-        ("7", 7, 1, 0),
-        ("4,5,6,7", 6, 4, 2),
-        ("2,6,1", 6, 3, 1),
-    ],
+    "visible,logical", [(None, 7), ("7", 0), ("4,5,6,7", 2), ("GPU-uuid", 0)]
 )
-def test_awex_reader_selects_correct_device_without_scheduler_gpu_id(
-    monkeypatch, visible, physical, device_count, logical
+def test_awex_reader_uses_model_device_independent_of_physical_ids(
+    monkeypatch, visible, logical
 ):
-    from areal.engine.awex.colocate_reader import _SGLangNCCLWorkerWeightsReader
+    from areal.engine.awex.colocate_reader import _DeviceBoundWeightsReader
 
     if visible is None:
         monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     else:
         monkeypatch.setenv("CUDA_VISIBLE_DEVICES", visible)
-    reader = _SGLangNCCLWorkerWeightsReader.__new__(_SGLangNCCLWorkerWeightsReader)
-    reader._physical_gpu_id = physical
+    reader = _DeviceBoundWeightsReader.__new__(_DeviceBoundWeightsReader)
+    reader._model_device = torch.device("cuda", logical)
     reader.transfer_rank = 7
-    reader.scheduler = SimpleNamespace()
     devices = []
-    monkeypatch.setattr(torch.cuda, "device_count", lambda: device_count)
     monkeypatch.setattr(torch.cuda, "set_device", devices.append)
     monkeypatch.setattr(torch, "tensor", lambda value, **kwargs: kwargs["device"])
 
     reader._set_device()
 
-    assert devices == [logical]
+    assert devices == [reader._model_device]
     assert reader.barrier_device == logical
     assert reader.backend == "nccl"
-    assert reader.ready_tensor == torch.device("cuda", logical)
+    assert reader.ready_tensor == reader._model_device
 
 
-def test_awex_reader_rejects_invisible_physical_device(monkeypatch):
-    from areal.engine.awex.colocate_reader import _SGLangNCCLWorkerWeightsReader
+def test_awex_reader_rejects_model_weights_still_on_cpu():
+    from areal.engine.awex.colocate_reader import _DeviceBoundWeightsReader
 
-    reader = _SGLangNCCLWorkerWeightsReader.__new__(_SGLangNCCLWorkerWeightsReader)
-    reader._physical_gpu_id = 7
-    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2,6")
-
-    with pytest.raises(ValueError, match="not in CUDA_VISIBLE_DEVICES"):
-        reader._set_device()
+    with pytest.raises(RuntimeError, match="model weights resumed on CUDA"):
+        _DeviceBoundWeightsReader(model=torch.nn.Linear(2, 2))
 
 
 def test_receiver_initialization_failure_reaches_scheduler_loop():
