@@ -5,8 +5,6 @@ exec singularity exec --nv --no-home --writable-tmpfs --bind "$QWEN_MOUNTS" \
   --env PYTHONPATH="$QWEN_SFT_OVERLAY:$QWEN_SFT_MCORE/src:$QWEN_SFT_ROOT" \
   --env AREAL_SPMD_MODE=1 --env AREAL_DIR="$QWEN_SFT_ROOT" \
   --env MCORE_BRIDGE_ROOT="$QWEN_SFT_MCORE" --env PLE_CPU_OFFLOAD=0 \
-  --env AREAL_DUMP_LOGP="${AREAL_DUMP_LOGP:-}" \
-  --env AREAL_DUMP_ROUTING="${AREAL_DUMP_ROUTING:-}" \
   --env TMPDIR=/tmp --env CUDA_DEVICE_MAX_CONNECTIONS=1 \
   --env PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   "$QWEN_SFT_IMAGE" bash -c '

@@ -319,15 +319,8 @@ class AwexColocateReader:
         pp_size = int(getattr(server_args, "pp_size", 1))
         dp_size = int(getattr(server_args, "dp_size", 1))
 
-        # incident 15: the v3 fork keeps tp_rank on scheduler.tp_worker, NOT on the
-        # Scheduler itself. `getattr(scheduler, "tp_rank", 0)` silently
-        # returned 0 on EVERY rank, so every reader's rank_info claimed
-        # tp_rank=0, the sharding strategy computed offset-0 slices for all 64
-        # ranks, and the whole engine ended up with shard 0 of every tensor
-        # (942397 sentinel: identical norm/first4 across all ranks; MetaServer
-        # raw meta: gr=0..7 but tp=0 everywhere). Resolve through tp_worker
-        # and fall back to the instance-local rank (== tp rank for pp=1);
-        # never silently default to 0.
+        # SGLang versions expose parallel state on different scheduler/worker
+        # objects. Never default to rank zero: each reader needs its own shard.
         from areal.engine.sglang_fork_contract import resolve_scheduler_parallel_attr
 
         def _rank_attr(name: str) -> int | None:
@@ -340,7 +333,7 @@ class AwexColocateReader:
             raise RuntimeError(
                 "Cannot resolve tp_rank from scheduler/tp_worker and "
                 "instance_local_rank is unset; refusing to default to 0 "
-                "(would silently corrupt the AWEX transfer plan, incident 15)"
+                "(would silently corrupt the AWEX transfer plan)"
             )
 
         if self._infer_instance_world_size is not None:

@@ -81,8 +81,7 @@ rollout:
       TMS_INIT_ENABLE_CPU_BACKUP: '0'
       QWEN_AWEX_FROZEN_CONTRACT: ${oc.env:QWEN_AWEX_FROZEN_CONTRACT}
       QWEN_QSA_QUERY_CHUNK_SIZE: '1024'
-      QWEN_QSA_STABLE_TOPK: '1'
-      QWEN_ARENA_RAW_AUDIT_DIR: ${oc.env:QWEN_ARENA_RAW_AUDIT_DIR}
+      QWEN_ISOLATE_REQUEST_CACHE: '1'
       QWEN_PRIVATE_ENV: ${oc.env:QWEN_PRIVATE_ENV}
       ARENA_OPENAPI_BASE: ${oc.env:ARENA_OPENAPI_BASE}
       NO_PROXY: '*'
@@ -98,16 +97,12 @@ rollout:
       TRANSFORMERS_OFFLINE: '1'
       PYTHONUNBUFFERED: '1'
       PYTHONPATH: ${oc.env:QWEN_ROLLOUT_PYTHONPATH}
-      QWEN_ARENA_LLM_BASE: ${oc.env:QWEN_ARENA_LLM_BASE}
-      AREAL_SGLANG_FORCE_LAUNCH_MODULE: qwen_sglang_exit_audit
-      QWEN_SGLANG_EXIT_AUDIT_DIR: ${oc.env:QWEN_ARENA_OUTPUT}/sglang-exit-audit
     additional_bash_cmds:
     - set -euo pipefail
     - set -a; source "$QWEN_PRIVATE_ENV"; set +a
     - test "$TMS_INIT_ENABLE" = 0
     - test "$TMS_INIT_ENABLE_CPU_BACKUP" = 0
     - cd ${oc.env:QWEN_REPO}
-    - python3 examples/swe/qwen38_flash_next/patch_sglang_qsa_topk.py
     image: ${oc.env:QWEN_ROLLOUT_IMAGE}
   scheduling_strategy:
     type: colocation
@@ -233,7 +228,7 @@ actor:
     cpu: 4
     mem: 64
     mount: ${oc.env:QWEN_MOUNTS}
-    cmd: python3 -m logp_tail_audit
+    cmd: python3 -m examples.swe.qwen38_flash_next.actor_worker
     reservation: ${oc.env:QWEN_RESERVATION}
     nodelist: ${oc.env:QWEN_NODELIST}
     exclusive: false
@@ -244,8 +239,7 @@ actor:
       TMS_INIT_ENABLE_CPU_BACKUP: '0'
       QWEN_AWEX_FROZEN_CONTRACT: ${oc.env:QWEN_AWEX_FROZEN_CONTRACT}
       QWEN_QSA_QUERY_CHUNK_SIZE: '1024'
-      QWEN_QSA_STABLE_TOPK: '1'
-      QWEN_ARENA_RAW_AUDIT_DIR: ${oc.env:QWEN_ARENA_RAW_AUDIT_DIR}
+      QWEN_ISOLATE_REQUEST_CACHE: '1'
       QWEN_PRIVATE_ENV: ${oc.env:QWEN_PRIVATE_ENV}
       ARENA_OPENAPI_BASE: ${oc.env:ARENA_OPENAPI_BASE}
       NO_PROXY: '*'
@@ -265,12 +259,6 @@ actor:
       TRANSFORMERS_OFFLINE: '1'
       PYTHONUNBUFFERED: '1'
       PYTHONPATH: ${oc.env:QWEN_ACTOR_PYTHONPATH}
-      QWEN_REPLAY_ENABLE_ALLOCATOR_GC: '1'
-      QWEN_GEMM_AUDIT_DIR: ${oc.env:QWEN_ARENA_OUTPUT}/gemm-audit
-      QWEN_GSM8K_FLASH_ATTN: '1'
-      QWEN_LOGP_TAIL_DIR: ${oc.env:QWEN_ARENA_OUTPUT}/logp-tail-audit
-      QWEN_GSM8K_GRAD_AUDIT: '1'
-      QWEN_GSM8K_DETECT_ANOMALY: '0'
     additional_bash_cmds:
     - set -euo pipefail
     - set -a; source "$QWEN_PRIVATE_ENV"; set +a
@@ -291,17 +279,7 @@ econfig:
   arena_request_retries: 1
   arena_poll_interval: 5.0
   timeout: 15000.0
-  arena_streams:
-  - name: verified
-    stream_id: swe-bench-verified
-    harness: claude-code-with-skills@5.0.2
-    llm_protocol: anthropic
-    task_envs: {}
-    expected_reward_ref:
-      key: swebench-verified-reward
-      version: 1.1.1
-    reward_threshold: 0.98
-    reward_transform_fn: examples.swe.reward_transforms.identity_reward
+  arena_streams_file: ${oc.env:QWEN_ARENA_STREAMS_FILE}
   arena_mixture_epoch_size: 0
 sglang:
   model_path: ${tokenizer_path}

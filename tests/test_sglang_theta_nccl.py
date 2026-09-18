@@ -197,14 +197,3 @@ def test_theta_pause_update_resume_sends_native_protocol(monkeypatch):
         ),
         ("/continue_generation", {}),
     ]
-
-
-@pytest.mark.parametrize("override", ["qwen_sglang_exit_audit", "", "  "])
-def test_awex_launch_honors_diagnostic_module_override(
-    monkeypatch, launched_servers, override
-):
-    monkeypatch.setenv("AREAL_SGLANG_FORCE_LAUNCH_MODULE", override)
-    SGLangBackend().launch_server({"model_path": "model", "awex_colocate_mode": True})
-    assert launched_servers[0][0][2] == (
-        override.strip() or "areal.engine.awex.sglang_plugin"
-    )

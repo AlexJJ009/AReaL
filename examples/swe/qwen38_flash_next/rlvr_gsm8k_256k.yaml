@@ -79,7 +79,6 @@ rollout:
       TMS_INIT_ENABLE_CPU_BACKUP: '0'
       QWEN_AWEX_FROZEN_CONTRACT: ${oc.env:QWEN_AWEX_FROZEN_CONTRACT}
       QWEN_QSA_QUERY_CHUNK_SIZE: '1024'
-      QWEN_QSA_STABLE_TOPK: '1'
       NO_PROXY: '*'
       no_proxy: '*'
       TOKENIZERS_PARALLELISM: 'false'
@@ -212,7 +211,7 @@ actor:
     cpu: 4
     mem: 64
     mount: ${oc.env:QWEN_MOUNTS}
-    cmd: python3 -m guarded_actor
+    cmd: python3 -m examples.swe.qwen38_flash_next.actor_worker
     reservation: ${oc.env:QWEN_RESERVATION}
     nodelist: ${oc.env:QWEN_NODELIST}
     exclusive: false
@@ -222,7 +221,6 @@ actor:
       TMS_INIT_ENABLE_CPU_BACKUP: '0'
       QWEN_AWEX_FROZEN_CONTRACT: ${oc.env:QWEN_AWEX_FROZEN_CONTRACT}
       QWEN_QSA_QUERY_CHUNK_SIZE: '1024'
-      QWEN_QSA_STABLE_TOPK: '1'
       NO_PROXY: '*'
       no_proxy: '*'
       TOKENIZERS_PARALLELISM: 'false'
@@ -240,11 +238,6 @@ actor:
       TRANSFORMERS_OFFLINE: '1'
       PYTHONUNBUFFERED: '1'
       PYTHONPATH: ${oc.env:QWEN_ACTOR_PYTHONPATH}
-      QWEN_REPLAY_ENABLE_ALLOCATOR_GC: '1'
-      QWEN_GEMM_AUDIT_DIR: ${cluster.fileroot}/optimizer-audit
-      QWEN_GSM8K_GRAD_AUDIT: '1'
-      QWEN_GSM8K_FLASH_ATTN: ${oc.env:QWEN_GSM8K_FLASH_ATTN,0}
-      QWEN_GSM8K_DETECT_ANOMALY: ${oc.env:QWEN_GSM8K_DETECT_ANOMALY,0}
     additional_bash_cmds:
     - set -euo pipefail
     - test "$TMS_INIT_ENABLE" = 0

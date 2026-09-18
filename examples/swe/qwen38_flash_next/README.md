@@ -1,214 +1,98 @@
-# Qwen3.8 Flash Next runtime dependencies
+# Qwen3.8 Flash Next recipes
 
-The 256K SWE experiment uses the Qwen model integration in AReaL and
-[mcore-bridge's query-chunk branch](https://github.com/dingzhiqiang/mcore-bridge/tree/fix/qwen38-qsa-query-chunk),
-commit `03f5634`. That bridge includes trainable PLE export, bounded QSA query
-workspace, and shorter PLE backward temporary lifetimes. The tested Megatron-Core
-version is `0.17.0`.
+These recipes use 8 nodes / 64 GPUs for RL: actor TP8/PP8/EP8, rollout 16 replicas at
+TP4/EP4, batch 16 × 8 samples, context 262144 tokens and generation limit 65536. SFT
+uses 3 nodes / 24 GPUs, TP8/PP3/EP8. All paths and cluster placement are external.
 
-## SGLang startup patch
+| Workload | Entry                                    | Configuration                     |
+| -------- | ---------------------------------------- | --------------------------------- |
+| SWE RL   | `bash submit_rl.sh swe`                  | `swe_rl_256k.yaml`                |
+| GSM8K RL | `bash submit_rl.sh rlvr`                 | `rlvr_gsm8k_256k.yaml`            |
+| SWE SFT  | `sbatch sbatch_sft_qwen38_flash_next.sh` | `sft_qwen38_flash_next.yaml`      |
+| Math SFT | Same, set `SFT_CONFIG`                   | `sft_qwen38_flash_next_math.yaml` |
 
-The tested SGLang package is `0.5.19.dev125+g119b5ffe4`. The experiment applies
-`patch_sglang_qsa_topk.py` to its disposable inference environment before spawning
-SGLang workers:
+## Dependencies
 
-```bash
-export QWEN_QSA_STABLE_TOPK=1
-python3 examples/swe/qwen38_flash_next/patch_sglang_qsa_topk.py
-```
+Use the model integration from
+[mcore-bridge](https://github.com/dingzhiqiang/mcore-bridge/tree/fix/qwen38-qsa-query-chunk)
+(commit `03f5634`), Megatron-Core `0.17.0`, and unmodified AWEX `0.8.1`. Megatron-Core
+must also be importable by inference workers because AWEX imports its writer eagerly.
+Model implementation changes belong in mcore-bridge, not copied into these recipes.
 
-Run this in the rollout worker's startup commands, after configuring its Python
-environment and before starting inference. The script finds the installed package;
-`--target PATH` supports an explicit disposable source copy. It checks the original
-source SHA256 and function signature and refuses unknown or already-patched source. Use
-a fresh disposable runtime for each launch; do not patch a shared installation.
+The validated Qwen runtime is SGLang `0.5.19.dev125+g119b5ffe4` with stable QSA top-k
+and the compress-gather bounds fix prepared in the inference image. Patch scripts are
+not shipped or applied by these recipes. An unmodified image at that version is
+insufficient; obtain the prepared runtime from the model provider.
 
-Stable selection resolves equal scores by lower relative key index while preserving
-causal bounds. Without the environment flag, the wrapper returns native selection. This
-patch preserves the previous experiment's behavior; it is not a demonstrated fix for the
-CUDA illegal access observed after AWEX resume.
+Upstream [#39446](https://github.com/sgl-project/sglang/pull/39446), commit
+`d72e59508b7554045cb51827f9b8d0f08c7a3abc`, is a candidate for replacing the bounds
+patch. It is not yet an accepted AWEX runtime or a validated patch-free replacement. Do
+not bypass the runtime version check to use it.
 
-The project metadata and lockfiles pin this experiment-specific bridge revision. The
-launch wrapper also accepts its checkout through `MCORE_BRIDGE_ROOT`.
+## RL launch
 
-## AWEX inference imports
+Set `QWEN_LAUNCH_ENV` to a private shell file, or export:
 
-Use unmodified AWEX `0.8.1` and make Megatron-Core available in the inference Python
-environment. AWEX eagerly imports its writer at package initialization; that writer
-imports `TransformerConfig` from Megatron even when only the reader is needed. Importing
-a reader submodule does not bypass package initialization.
-
-The historical experiment used lazy AWEX exports to work around missing Megatron in the
-inference image. An isolated check in the same SGLang image succeeded with unmodified
-AWEX and Megatron-LM revision `f007db77b` available on `PYTHONPATH`: `awex`,
-`awex.reader.nccl_reader`, and `areal.engine.awex.colocate_reader` all imported
-successfully. The alternative needs no AWEX source patch. This verifies imports only;
-GPU weight transfer and generation must still be validated with that environment before
-a full run.
-
-## Training recipes
-
-All entrypoints below are committed with their runtime helpers in `runtime/`.
-`dependencies.json` records the experimental bridge and installed package versions. Use
-unmodified AWEX in the inference environment; do not reuse a historically patched AWEX
-overlay without restoring its upstream source.
-
-| Workload   | Configuration                     | Submit entry                             |
-| ---------- | --------------------------------- | ---------------------------------------- |
-| SWE RL     | `swe_rl_256k.yaml`                | `bash submit_rl.sh swe`                  |
-| GSM8K RLVR | `rlvr_gsm8k_256k.yaml`            | `bash submit_rl.sh rlvr`                 |
-| SWE SFT    | `sft_qwen38_flash_next.yaml`      | `sbatch sbatch_sft_qwen38_flash_next.sh` |
-| Math SFT   | `sft_qwen38_flash_next_math.yaml` | Same SFT submit script, set `SFT_CONFIG` |
-
-Run the commands from this directory. Both RL recipes preserve 8 nodes / 64 GPUs, actor
-TP8/PP8/EP8/CP1, rollout 16 replicas at TP4/EP4, 16 groups x 8 samples, 262144 context
-tokens, 65536 output tokens, temperature 1, and inference static memory fraction 0.70
-(SWE) / 0.65 (RLVR). SWE uses the pinned sixteen-task acceptance subset, not a full
-Verified evaluation. Its rollout queue, cache isolation, diagnostics, harness and
-recovery checks are retained. RLVR preserves its own queue and cache settings. The
-historical RLVR entry disables evaluation even though a validation dataset is present in
-its YAML.
-
-### Open-source main compatibility
-
-The recipes use main's `actor.min_usable_group_size=8` and retain rollout-time mean-only
-reward normalization with `gconfig.reward_normalization_use_std=false`. This option
-defaults to true for existing workflows; mean-only normalization requires the v1 rollout
-backend. `TOTAL_TRAIN_STEPS` controls the training limit (default 10).
-
-The runtime helpers explicitly supply thinking template defaults through
-`extra_body.chat_template_kwargs` (`enable_thinking=true`, `reasoning_effort=medium`,
-`thinking_option=null`). A request-level thinking switch overrides the default switches.
-SWE installs these defaults in its diagnostic proxy; RLVR supplies them in the MathAgent
-request. These replace inner-source-only AgentConfig fields.
-
-### RL launch environment
-
-Export these variables, or set `QWEN_LAUNCH_ENV` to an untracked shell file defining
-them (the submit wrapper exports variables sourced from that file):
-
-- Paths: `QWEN_OUTPUT_ROOT`, `QWEN_MODEL`, `QWEN_ACTOR_IMAGE`, `QWEN_ROLLOUT_IMAGE`,
-  `MCORE_BRIDGE_ROOT`, `MEGATRON_ROOT`.
-- Placement: `QWEN_PARTITION`, `QWEN_RESERVATION`, `QWEN_NODELIST` (eight worker nodes),
+- Paths: `QWEN_REPO`, `QWEN_OUTPUT_ROOT`, `QWEN_MODEL`, `QWEN_ACTOR_IMAGE`,
+  `QWEN_ROLLOUT_IMAGE`, `MCORE_BRIDGE_ROOT`, `MEGATRON_ROOT`.
+- Placement: `QWEN_PARTITION`, `QWEN_RESERVATION`, `QWEN_NODELIST` (eight nodes),
   `QWEN_CONTROLLER_NODE`.
-- Mounts: `QWEN_MOUNTS` for workers; `QWEN_CONTROLLER_MOUNTS` for the controller.
-  Include the shared repository, data, outputs, dependency paths, and container access
-  to the site's Slurm/munge configuration, sockets, commands and libraries.
-- Optional overlays: `QWEN_TRAIN_EXTRA_PYTHONPATH`, `QWEN_INFER_EXTRA_PYTHONPATH`. The
-  wrapper prepends committed runtime helpers and adds the bridge/repository. The
-  inference path also includes `MEGATRON_ROOT` for unmodified AWEX imports.
-- RLVR: `QWEN_GSM8K_DATA`. `math_verify` and OpenAI client dependencies must be
-  installed in the inference/proxy runtime; `dependencies.json` also records the three
-  historical math package versions. Include their overlay in
-  `QWEN_INFER_EXTRA_PYTHONPATH` when needed. No installation happens at launch.
-- SWE: `QWEN_PRIVATE_ENV`, `QWEN_REPLAY64_ACCEPTANCE`, `QWEN_CC_PROTOCOL_ACCEPTANCE`.
-  The private environment supplies credentials, `ARENA_OPENAPI_BASE`, and
-  `QWEN_ARENA_LLM_BASE`. Never commit that file.
+- Mounts: `QWEN_MOUNTS` and `QWEN_CONTROLLER_MOUNTS`, including shared files and the
+  site's Slurm/munge configuration, sockets, commands and libraries.
+- `QWEN_AWEX_FROZEN_CONTRACT`: a validated frozen-weight manifest for the exact model.
+  Obtain it with the checkpoint from its provider: it binds checkpoint hashes, frozen
+  PLE values and preserved visual parameters for the supported TP sizes. There is
+  currently no public generator or bundled artifact; these recipes are not
+  self-contained without that input. Runtime validation must not be bypassed.
+- Optional prepared dependency paths: `QWEN_TRAIN_EXTRA_PYTHONPATH` and
+  `QWEN_INFER_EXTRA_PYTHONPATH`. No packages are installed at launch.
+- SWE: `QWEN_PRIVATE_ENV` with Arena credentials, `ARENA_OPENAPI_BASE` and
+  `ARENA_LLM_API_KEY`; `QWEN_ARENA_STREAMS_FILE` in the standard
+  [Arena streams format](../README.md). Streams define harness, protocol and reward.
+- GSM8K: `QWEN_GSM8K_DATA`; install the standard MathAgent dependencies in the runtime.
 
-The bundled frozen-weight contract and task/probe fixtures are specific to the
-historical model. Set `QWEN_AWEX_FROZEN_CONTRACT` to override the contract for a
-separately validated model. They are input fixtures, not fresh acceptance results. The
-recovery source JSON must contain `fileroot`, `experiment_name`, `trial_name`,
-`expected_saved_global_step`, and `expected_restored_weight_version` referencing an
-existing checkpoint. Both acceptance files must come from real validation; the
-entrypoint checks their status and the Claude harness version. It refuses a missing
-recovery checkpoint or a mismatching restored step/version.
-
-Set `QWEN_SWE_START_MODE=fresh` for a complete run from the initial HF model:
+SWE trains on the configured streams. For a controlled single-stream comparison,
+`QWEN_ARENA_TASK_IDS_FILE` may point to an external JSON list of data IDs. The entry
+rejects duplicate or missing IDs and preserves the list order. Keep evaluation tasks out
+of the selected training data. No benchmark task IDs are shipped here. Gateway traffic
+defaults to `ARENA_OPENAPI_BASE/api`. When the deployment has a separate LLM gateway,
+set `ARENA_LLM_BASE_URL` in the private environment sourced by the controller and
+rollout workers. Use an absolute HTTP(S) URL; supply credentials separately through
+`ARENA_LLM_API_KEY`.
 
 ```bash
-QWEN_SWE_START_MODE=fresh bash submit_rl.sh swe total_train_steps=10
+bash examples/swe/qwen38_flash_next/submit_rl.sh swe total_train_steps=10
 ```
 
-Use a new output directory/trial. Fresh mode rejects any automatically discovered
-checkpoint or nonzero initial weight version. The default `recover` mode requires
-`QWEN_RECOVER_SOURCE`; its step limit is the final total step, not the number of
-additional steps. Restoring completed step 5 with `total_train_steps=10` runs only five
-new steps and validates recovery, not a fresh ten-step training run.
+Use a new trial/output directory for a fresh run. Recovery uses normal AReaL `recover.*`
+configuration; there are no experiment-specific recovery/acceptance gates. Evaluation is
+disabled in these short RL recipes. Logs and metrics are under `QWEN_OUTPUT_ROOT`.
 
-Training overrides are forwarded intact, for example:
+## Functional helpers
 
-```bash
-bash submit_rl.sh rlvr total_train_steps=11 recover.trial_name=previous-trial \
-  recover.fileroot="$PREVIOUS_RUN_ROOT"
-```
+`train_rl.py` uses standard Arena/MathAgent workflows and sets SGLang PLE embedding CPU
+offload and FlashInfer linear attention. `actor_worker.py` selects FlashAttention and
+full CPU Adam offload to fit the 256K memory budget. These narrowly scoped runtime
+overrides cover options not exposed by the current AReaL configuration schema.
 
-### SFT launch environment
+`proxy.py` and `template_defaults.py` supply thinking defaults (`enable_thinking=true`,
+`reasoning_effort=medium`), honoring explicit request switches. SWE preserves unique
+cache salts per generation request; GSM8K retains native prefix-cache reuse. Neither
+helper captures tokens, gradients, wire payloads or diagnostic snapshots.
+
+## SFT launch
 
 Export `AREAL_DIR`, `MCORE_BRIDGE_ROOT`, `AREAL_IMAGE`, `TRAIN_RUNTIME_DEPS`,
-`MODEL_PATH`, `FILERoot`, `QWEN_MOUNTS`, and `SFT_DATASET` (or `MATH_DATASET` for math
-SFT). Math SFT expects SFT-formatted records; the raw GSM8K dataset belongs to the RLVR
-entry. Set `SFT_CONFIG` to the math YAML's repository-relative path to select it. Pass
-site-specific partition, reservation, nodelist and output path as `sbatch` options. The
-default allocation is 3 nodes, 8 GPUs each, TP8/PP3/EP8/CP1. The worker preserves the
-original SPMD `torchrun` launch and requires a prepared runtime; it does not install or
-upgrade CUDA dependencies. CP greater than one is not enabled by this recipe.
+`MODEL_PATH`, `FILERoot`, `QWEN_MOUNTS`, and `SFT_DATASET` (or `MATH_DATASET`). Set
+`SFT_CONFIG` to the repository-relative math YAML for math SFT. Pass site partition,
+reservation, nodes and log destination as `sbatch` options. Math SFT expects formatted
+SFT records, not the raw GSM8K RL dataset.
 
-### Validation scope
+## Historical validation
 
-The original controller and trainer used different bridge checkouts. These portable RL
-scripts use the explicitly selected bridge for both. The `QWEN_QSA_STABLE_TOPK` flag is
-implemented on inference only; the trainer still uses native `scores.topk`. SWE applies
-the QSA startup patch; the historical RLVR recipe did not, and that behavior is
-preserved. Changing these numerical choices requires separate validation. The packaged
-recipes require runtime validation for the chosen start mode; a completed recovery run
-does not validate a fresh ten-step run or establish a hardware cause for the historical
-CUDA illegal access.
-
-Use CLI `total_train_steps=...` to change RL duration. The historical SWE
-`rollout_only_steps` field is unused by this PPO entrypoint.
-
-### Full training pool
-
-Set `QWEN_SWE_START_MODE=fresh`, `QWEN_SWE_TASK_SCOPE=training_pool` and
-`TOTAL_TRAIN_STEPS=11` for eleven updates from the initial model over the entire pinned
-training pool. The heldout partition remains excluded. The default
-`QWEN_SWE_TASK_SCOPE=acceptance` retains the historical sixteen-task subset for
-compatibility. `training-inventory.json` records the selected scope and task IDs.
-Compare training rewards with evaluation on matched tasks; the historical fast subset
-and asynchronous completion can substantially bias aggregate rewards.
-
-### Fresh 256K SWE validation (2026-09-18)
-
-Both branches completed ten fresh training steps without OOM, using 16 groups x 8
-samples, 262144 context tokens and 65536 output tokens. The ten-step aggregate training
-reward matched exactly: 1198/1280 (0.9359375) for both branches.
-
-| Metric                                 |  Internal | Open-source |
-| -------------------------------------- | --------: | ----------: |
-| First-step absolute logp difference    |  0.038508 |    0.038055 |
-| Ten-step mean absolute logp difference | 0.0487336 |   0.0544257 |
-
-These are `ppo_actor/update/logp_abs_diff/avg` values, of order 1e-2. The actual
-training trajectories differ; matching aggregate reward does not mean identical tokens
-or numerical equivalence. Initial fixed probes matched tokens and logprobs exactly.
-Post-update probe discrepancies remain unresolved.
-
-Validated source revisions: open-source `3426e938c`, internal `3ccb512ff`. The runtime
-used SGLang `0.5.19.dev125+g119b5ffe4`, retaining the stable top-k patch and applying
-upstream compress-gather fix #38346, commit `1cdc5bca5e97b7134136a535c90c6037bd2001fa`.
-This was not a patch-free stable-tag validation. Reward is from the acceptance training
-subset, not an independent SWE-bench evaluation.
-
-### Reproduce the validated SGLang bounds fix
-
-`patch_sglang_qsa_compress_gather.py` packages the exact one-line upstream #38346 fix
-used by the ten-step run. It clamps padded compress-gather indices to the available
-source keys. This is separate from `patch_sglang_qsa_topk.py`, which controls tied-score
-selection. Both remain experiment-specific helpers here; SGLang itself is an external
-dependency.
-
-Run both helpers only in the disposable inference environment, before workers start. The
-bounds-fix helper verifies the original and patched SHA256 hashes, rejects unknown or
-already-patched source, and writes provenance to a new audit file. It does not modify
-the launcher's behavior automatically.
-
-```bash
-python3 examples/swe/qwen38_flash_next/patch_sglang_qsa_compress_gather.py \
-  --audit compress-gather-fix.json
-```
-
-For an isolated source copy, pass `--target /path/to/qsa_indexer.py`. Do not run against
-a shared installation. A newer stable SGLang tag containing this fix still requires
-separate compatibility and training validation; this result does not establish that
-either helper can be removed.
+The earlier source `3426e938c` completed ten fresh 256K SWE steps without OOM. Mean
+training reward was `0.9359375`, matching the internal run; first-step absolute logp
+difference was `0.038055`, ten-step mean `0.0544257`. This used a selected training
+subset and SGLang `0.5.19.dev125+g119b5ffe4` with two local patches. These results do
+**not** validate the cleaned recipes or patch-free upstream source; a new run is
+required.

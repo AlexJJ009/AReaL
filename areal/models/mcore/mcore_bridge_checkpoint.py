@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import struct
 import tempfile
@@ -258,8 +259,43 @@ def restore_qwen4_exp_fixed_assets(
         raise ValueError(
             f"Export contains unknown checkpoint tensors: {sorted(unknown)}"
         )
+    # The bridge exports dequantized PLE tables as current BF16 parameters.
+    # Their original FP8 scale must disappear, but only after every source
+    # shard has been exported with the same shape in the new representation.
+    ple_groups: dict[str, dict[int, str]] = {}
+    for key in source_keys:
+        match = re.fullmatch(
+            r"(model\.language_model\.layers\.\d+\.ple\.ple_embedding"
+            r"\.ngram_embedding)\.shard_(\d+)\.weight",
+            key,
+        )
+        if match:
+            ple_groups.setdefault(match[1], {})[int(match[2])] = key
+    converted_ple_keys: set[str] = set()
+    omitted_ple_scales: set[str] = set()
+    for prefix, shards in ple_groups.items():
+        if not any(
+            source_tensors[key]["dtype"] == "F8_E4M3"
+            and output_tensors.get(key, {}).get("dtype") == "BF16"
+            for key in shards.values()
+        ):
+            continue
+        if set(shards) != set(range(len(shards))) or any(
+            source_tensors[key]["dtype"] != "F8_E4M3"
+            or output_tensors.get(key, {}).get("dtype") != "BF16"
+            or output_tensors[key]["shape"] != source_tensors[key]["shape"]
+            for key in shards.values()
+        ):
+            raise ValueError(f"Incomplete or invalid BF16 PLE conversion: {prefix}")
+        scale_key = f"{prefix}.weight_scale"
+        if scale_key not in source_keys or scale_key in output_keys:
+            raise ValueError(
+                f"BF16 PLE conversion requires removing the source scale: {scale_key}"
+            )
+        converted_ple_keys.update(shards.values())
+        omitted_ple_scales.add(scale_key)
     vision_keys = {key for key in source_keys if key.startswith(_VISION_PREFIX)}
-    missing = source_keys - output_keys - omitted_mtp_keys
+    missing = source_keys - output_keys - omitted_mtp_keys - omitted_ple_scales
     copy_keys = missing & vision_keys if language_model_only else set()
     missing_required = missing - copy_keys
     if missing_required:
@@ -269,7 +305,10 @@ def restore_qwen4_exp_fixed_assets(
     for key in output_keys:
         if output_tensors[key]["shape"] != source_tensors[key]["shape"]:
             raise ValueError(f"Export tensor shape differs from source: {key}")
-        if output_tensors[key]["dtype"] != source_tensors[key]["dtype"]:
+        if (
+            output_tensors[key]["dtype"] != source_tensors[key]["dtype"]
+            and key not in converted_ple_keys
+        ):
             raise ValueError(
                 f"Export tensor dtype differs from source: {key}: "
                 f"{source_tensors[key]['dtype']} -> {output_tensors[key]['dtype']}"

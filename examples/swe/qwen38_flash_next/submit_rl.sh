@@ -17,28 +17,20 @@ for name in QWEN_OUTPUT_ROOT QWEN_MODEL QWEN_ACTOR_IMAGE QWEN_ROLLOUT_IMAGE \
   export "$name"
 done
 if [[ $profile == swe ]]; then
-  for name in QWEN_PRIVATE_ENV QWEN_REPLAY64_ACCEPTANCE QWEN_CC_PROTOCOL_ACCEPTANCE; do
-    : "${!name:?Set $name for SWE recovery}"
+  for name in QWEN_PRIVATE_ENV QWEN_ARENA_STREAMS_FILE; do
+    : "${!name:?Set $name for SWE}"
     test -f "${!name}"
     export "$name"
   done
-  export QWEN_SWE_START_MODE=${QWEN_SWE_START_MODE:-recover}
-  case "$QWEN_SWE_START_MODE" in
-    fresh) ;;
-    recover)
-      : "${QWEN_RECOVER_SOURCE:?Set QWEN_RECOVER_SOURCE for SWE recovery}"
-      test -f "$QWEN_RECOVER_SOURCE"
-      export QWEN_RECOVER_SOURCE
-      ;;
-    *) echo 'QWEN_SWE_START_MODE must be fresh or recover' >&2; exit 2 ;;
-  esac
 else
   : "${QWEN_GSM8K_DATA:?Set the GSM8K dataset path}"
   export QWEN_GSM8K_DATA
 fi
-export QWEN_AWEX_FROZEN_CONTRACT=${QWEN_AWEX_FROZEN_CONTRACT:-$recipe_dir/fixtures/qwen4-exp-frozen-contract-v1.json}
-export QWEN_ACTOR_PYTHONPATH="$recipe_dir/runtime${QWEN_TRAIN_EXTRA_PYTHONPATH:+:$QWEN_TRAIN_EXTRA_PYTHONPATH}:$MCORE_BRIDGE_ROOT/src:$QWEN_REPO"
-export QWEN_ROLLOUT_PYTHONPATH="$recipe_dir/runtime${QWEN_INFER_EXTRA_PYTHONPATH:+:$QWEN_INFER_EXTRA_PYTHONPATH}:$MEGATRON_ROOT:$QWEN_REPO"
+: "${QWEN_AWEX_FROZEN_CONTRACT:?Set a validated frozen-weight contract for this model}"
+test -f "$QWEN_AWEX_FROZEN_CONTRACT"
+export QWEN_AWEX_FROZEN_CONTRACT
+export QWEN_ACTOR_PYTHONPATH="${QWEN_TRAIN_EXTRA_PYTHONPATH:+$QWEN_TRAIN_EXTRA_PYTHONPATH:}$MCORE_BRIDGE_ROOT/src:$QWEN_REPO"
+export QWEN_ROLLOUT_PYTHONPATH="${QWEN_INFER_EXTRA_PYTHONPATH:+$QWEN_INFER_EXTRA_PYTHONPATH:}$MEGATRON_ROOT:$QWEN_REPO"
 export QWEN_CONTROLLER_PYTHONPATH=$QWEN_ACTOR_PYTHONPATH
 export SBATCH_PARTITION=$QWEN_PARTITION SBATCH_RESERVATION=$QWEN_RESERVATION
 export AREAL_APPTAINER_STAGGER_SECONDS=2

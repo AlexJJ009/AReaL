@@ -1,25 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
-"""SGLang fork contract checks for the AWEX colocate integration.
+"""Validate SGLang APIs used by the AWEX colocate integration.
 
-The AWEX colocate plugin reaches into SGLang internals that carry no API
-stability guarantee (scheduler attributes, weight updater, pause/flush
-semantics). Fork upgrades have repeatedly broken these assumptions
-SILENTLY; incidents this guards against:
-
-- incident 12: pause mode default flipped semantics; scheduler never paused.
-- incident 13/14: release_memory_occupation / flush_cache idle gates tightened,
-  asserts killed every server under retract-pause.
-- incident 15: Scheduler.tp_rank moved to tp_worker; getattr default 0 routed
-  train shard 0 to all 64 inference ranks (silent weight corruption).
-
-These checks turn that class of failure into a startup error. Run
-``check_static_contract()`` in the scheduler process BEFORE the Scheduler
-is constructed and ``check_scheduler_contract(scheduler)`` when the plugin
-binds. All violations are collected and raised together.
-
-Escape hatch: ``AREAL_SGLANG_CONTRACT=warn`` downgrades violations to log
-warnings (for bring-up of a new fork); ``off`` skips entirely.
+Check pause/resume, memory residency, and parallel-state interfaces before
+binding the AWEX reader. Missing interfaces fail at startup rather than during
+weight transfer. ``AREAL_SGLANG_CONTRACT`` defaults to ``strict``; ``warn`` logs
+violations and ``off`` disables checks.
 """
 
 from __future__ import annotations
@@ -57,8 +43,7 @@ def check_static_contract() -> None:
         return
     violations: list[str] = []
 
-    # incident 12: /pause_generation must support mode="retract" and the
-    # scheduler must implement the pause handler pair.
+    # Offload requires retract-pause and matching resume handlers.
     try:
         from sglang.srt.managers.io_struct import PauseGenerationReqInput
 
@@ -67,7 +52,7 @@ def check_static_contract() -> None:
         except Exception as exc:
             violations.append(
                 f"PauseGenerationReqInput(mode='retract') rejected: {exc!r} "
-                "(incident 12: AReaL pauses with retract before offload)"
+                "(AReaL pauses with retract before offload)"
             )
     except ImportError as exc:
         violations.append(f"PauseGenerationReqInput import failed: {exc!r}")
@@ -78,7 +63,8 @@ def check_static_contract() -> None:
         for method in ("pause_generation", "continue_generation", "flush_cache"):
             if not callable(getattr(Scheduler, method, None)):
                 violations.append(
-                    f"Scheduler.{method} missing (incident 12/14 depend on it)"
+                    f"Scheduler.{method} missing "
+                    "(required for pause/resume and cache invalidation)"
                 )
         idle_gate_names = ("is_fully_idle", "_is_no_request")
         if not any(
@@ -86,13 +72,12 @@ def check_static_contract() -> None:
         ):
             violations.append(
                 "Scheduler has neither is_fully_idle nor _is_no_request "
-                "(retract-pause idle-gate semantics moved again)"
+                "(required to validate retract-pause before offload)"
             )
     except ImportError as exc:
         violations.append(f"Scheduler import failed: {exc!r}")
 
-    # incident 13: the release_memory_occupation patch target must exist where
-    # we patch it, or the patch silently no-ops and offload kills servers.
+    # Residency hooks require a supported memory-release API.
     try:
         from sglang.srt.managers.scheduler_components.weight_updater import (
             SchedulerWeightUpdaterManager,
@@ -103,7 +88,7 @@ def check_static_contract() -> None:
         ):
             violations.append(
                 "SchedulerWeightUpdaterManager.release_memory_occupation "
-                "missing (incident 13 patch target)"
+                "missing (required by the residency hooks)"
             )
     except ImportError:
         # AReaL pins SGLang 0.5.10, where SchedulerUpdateWeightsMixin exposes
@@ -146,23 +131,22 @@ def check_scheduler_contract(scheduler: Any) -> None:
         return
     violations: list[str] = []
 
-    # incident 12: the scheduler-loop hook gates on _engine_paused.
+    # The scheduler-loop hook gates weight updates on the paused state.
     if not hasattr(scheduler, "_engine_paused"):
         violations.append(
-            "scheduler._engine_paused missing (incident 12: paused AWEX hook "
+            "scheduler._engine_paused missing (paused AWEX hook "
             "never runs; decode races weight transfer)"
         )
 
-    # incident 15: tp_rank must be resolvable without a silent default. This is
-    # the exact lookup chain awex_colocate_reader._build_model_context uses.
+    # Use the same rank lookup as the reader; a default rank can corrupt shards.
     tp_rank = resolve_scheduler_parallel_attr(scheduler, "tp_rank")
     if tp_rank is None:
         violations.append(
-            "tp_rank not found on scheduler/worker parallel state (incident 15: "
+            "tp_rank not found on scheduler/worker parallel state ("
             "a silent 0 here routes train shard 0 to every inference rank)"
         )
 
-    # incident 13/14 patch preconditions.
+    # Retract-pause and memory-residency hook preconditions.
     running_batch = getattr(scheduler, "running_batch", None)
     if running_batch is None or not callable(getattr(running_batch, "is_empty", None)):
         violations.append(
@@ -170,7 +154,7 @@ def check_scheduler_contract(scheduler: Any) -> None:
             "use it to distinguish retract from in_place)"
         )
     if not hasattr(scheduler, "waiting_queue"):
-        violations.append("scheduler.waiting_queue missing (patch logging/guards)")
+        violations.append("scheduler.waiting_queue missing (required by pause guards)")
     has_direct_memory_api = all(
         callable(getattr(scheduler, name, None))
         for name in ("release_memory_occupation", "resume_memory_occupation")
@@ -178,7 +162,7 @@ def check_scheduler_contract(scheduler: Any) -> None:
     if getattr(scheduler, "weight_updater", None) is None and not has_direct_memory_api:
         violations.append(
             "scheduler has neither weight_updater nor direct release/resume "
-            "memory methods (incident 13 patch target unavailable)"
+            "memory methods (required by the residency hooks)"
         )
 
     # Reader model access (AWEX weight write target).

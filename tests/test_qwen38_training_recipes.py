@@ -12,35 +12,8 @@ ROOT = Path(__file__).resolve().parents[1]
 RECIPE = ROOT / "examples/swe/qwen38_flash_next"
 
 
-def load_entry():
-    spec = importlib.util.spec_from_file_location(
-        "qwen_swe_entry", RECIPE / "runtime/train256_claude_recover_isolated.py"
-    )
-    entry = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(entry)
-    return entry
-
-
-def test_pinned_swe_subset_excludes_heldout_and_rejects_inventory_drift():
-    entry = load_entry()
-    split = json.loads((RECIPE / "fixtures/split.json").read_text())
-    selected = json.loads((RECIPE / "fixtures/parallel-canary-split.json").read_text())[
-        "selected"
-    ]
-    split["rl_acceptance_ids"] = selected
-    rows = [{"data_id": key} for key in split["all_data_ids"]]
-    actual = entry.select_training_rows(rows, split)
-    assert [row["data_id"] for row in actual] == selected
-    assert len(actual) == 16
-    assert not set(selected).intersection(split["heldout"])
-    with pytest.raises(ValueError, match="Live inventory"):
-        entry.select_training_rows(rows[:-1], split)
-
-
-@pytest.mark.parametrize(
-    "profile,start_mode", [("swe", "recover"), ("swe", "fresh"), ("rlvr", "recover")]
-)
-def test_submit_preserves_arguments_and_packages_runtime(tmp_path, profile, start_mode):
+@pytest.mark.parametrize("profile", ["swe", "rlvr"])
+def test_submit_preserves_arguments_and_packages_runtime(tmp_path, profile):
     recorder = tmp_path / "sbatch"
     capture = tmp_path / "captured.json"
     recorder.write_text(
@@ -71,14 +44,10 @@ def test_submit_preserves_arguments_and_packages_runtime(tmp_path, profile, star
         env[key] = str(tmp_path / key)
     for key in (
         "QWEN_PRIVATE_ENV",
-        "QWEN_RECOVER_SOURCE",
-        "QWEN_REPLAY64_ACCEPTANCE",
-        "QWEN_CC_PROTOCOL_ACCEPTANCE",
+        "QWEN_ARENA_STREAMS_FILE",
+        "QWEN_AWEX_FROZEN_CONTRACT",
     ):
         env[key] = str(fixture)
-    env["QWEN_SWE_START_MODE"] = start_mode
-    if start_mode == "fresh":
-        env.pop("QWEN_RECOVER_SOURCE")
     env["QWEN_OUTPUT_ROOT"] = str(tmp_path / "output with spaces")
     env["QWEN_REPO"] = str(ROOT)
     env.pop("QWEN_LAUNCH_ENV", None)
@@ -90,7 +59,7 @@ def test_submit_preserves_arguments_and_packages_runtime(tmp_path, profile, star
     )
     result = json.loads(capture.read_text())
     assert result["args"][-2:] == [profile, "trial_name=trial with spaces"]
-    assert result["actor"].split(os.pathsep)[0] == str(RECIPE / "runtime")
+    assert str(RECIPE / "runtime") not in result["actor"].split(os.pathsep)
     assert env["MEGATRON_ROOT"] in result["rollout"].split(os.pathsep)
 
 
@@ -137,25 +106,9 @@ def test_rl_profiles_preserve_sampling_and_memory_settings(monkeypatch):
         assert config["actor"]["megatron"]["freeze_ple_table"] is True
 
 
-def test_swe_workflow_kwargs_preserve_sampling_arguments():
-    from examples.swe.utils import SWEPPOConfig
-
-    config = SWEPPOConfig()
-    config.gconfig.temperature = 0.7
-    config.gconfig.top_p = 0.8
-    config.gconfig.top_k = 42
-    config.gconfig.max_new_tokens = 65536
-    config.econfig.timeout = 1800
-    kwargs = load_entry().build_workflow_kwargs(config)
-    assert kwargs["gen_args"] == dict(
-        temperature=0.7, top_p=0.8, top_k=42, max_completion_tokens=65536
-    )
-    assert kwargs["timeout"] == kwargs["econfig"]["timeout"] == 1800
-
-
 def test_thinking_defaults_respect_explicit_switch_without_mutation():
     spec = importlib.util.spec_from_file_location(
-        "qwen_template_defaults", RECIPE / "runtime/qwen_template_defaults.py"
+        "qwen_template_defaults", RECIPE / "template_defaults.py"
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -207,54 +160,23 @@ def test_sft_structured_schema_rejects_invalid_split_mode():
         )
 
 
-def test_fresh_swe_start_ignores_recovery_source_and_rejects_recovered_state(
-    monkeypatch,
-):
+def test_external_task_selection_preserves_order_and_rejects_drift():
+    from examples.swe.qwen38_flash_next.train_rl import select_task_indices
+
+    assert select_task_indices(["a", "b", "c"], ["c", "a"]) == [2, 0]
+    for selected in ([], ["a", "a"], ["missing"], "a", [None]):
+        with pytest.raises(ValueError):
+            select_task_indices(["a", "b"], selected)
+
+
+def test_cache_isolation_preserves_original_request():
     from types import SimpleNamespace
 
-    entry = load_entry()
-    monkeypatch.setenv("QWEN_SWE_START_MODE", "fresh")
-    monkeypatch.setenv("QWEN_RECOVER_SOURCE", "/nonexistent/source.json")
-    assert entry.read_start_source() is None
-    assert entry.validate_start_state(None, 0, None) is None
-    recovered = SimpleNamespace(last_step_info=SimpleNamespace(global_step=4))
-    for info, version in ((recovered, 5), (recovered, 0), (None, 5)):
-        with pytest.raises(ValueError, match="Fresh SWE"):
-            entry.validate_start_state(info, version, None)
+    from examples.swe.qwen38_flash_next.proxy import wrap_isolated_cache
 
-
-def test_swe_recovery_requires_matching_checkpoint_and_version(monkeypatch, tmp_path):
-    from types import SimpleNamespace
-
-    entry = load_entry()
-    source = {"expected_saved_global_step": 4, "expected_restored_weight_version": 5}
-    path = tmp_path / "source.json"
-    path.write_text(json.dumps(source))
-    monkeypatch.setenv("QWEN_SWE_START_MODE", "recover")
-    monkeypatch.setenv("QWEN_RECOVER_SOURCE", str(path))
-    assert entry.read_start_source() == source
-    recovered = SimpleNamespace(last_step_info=SimpleNamespace(global_step=4))
-    assert entry.validate_start_state(recovered, 5, source) == 4
-    with pytest.raises(ValueError, match="not restored"):
-        entry.validate_start_state(None, 5, source)
-    with pytest.raises(ValueError, match="version"):
-        entry.validate_start_state(recovered, 0, source)
-    with pytest.raises(ValueError, match="step"):
-        entry.validate_start_state(
-            recovered, 5, dict(source, expected_saved_global_step=9)
-        )
-    monkeypatch.setenv("QWEN_SWE_START_MODE", "typo")
-    with pytest.raises(ValueError, match="fresh or recover"):
-        entry.read_start_source()
-
-
-def test_training_pool_scope_includes_all_nonheldout_tasks():
-    entry = load_entry()
-    split = json.loads((RECIPE / "fixtures/split.json").read_text())
-    rows = [{"data_id": key} for key in split["all_data_ids"]]
-    actual = entry.select_training_rows(rows, split, "training_pool")
-    assert {row["data_id"] for row in actual} == set(split["training_pool"])
-    assert not {row["data_id"] for row in actual}.intersection(split["heldout"])
-    assert len(actual) == len(split["training_pool"])
-    with pytest.raises(ValueError, match="task scope"):
-        entry.select_training_rows(rows, split, "typo")
+    original = SimpleNamespace(payload={"input_ids": [1, 2]})
+    build = wrap_isolated_cache(lambda _: original)
+    first, second = build(None), build(None)
+    assert first.payload["cache_salt"] != second.payload["cache_salt"]
+    assert first.payload["input_ids"] == original.payload["input_ids"]
+    assert "cache_salt" not in original.payload

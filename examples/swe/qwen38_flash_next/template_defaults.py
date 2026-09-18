@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Retain the experiment's thinking defaults through main's request API."""
+"""Qwen thinking defaults, overridden by explicit request options."""
 
 from functools import wraps
 
