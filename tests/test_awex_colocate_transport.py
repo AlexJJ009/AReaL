@@ -3,6 +3,7 @@
 from contextlib import nullcontext
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from areal.engine.awex import colocate_transport
@@ -11,7 +12,10 @@ from areal.engine.awex.colocate_transport import (
 )
 
 
-def test_bounded_transport_defers_send_clones_until_execution(monkeypatch):
+@pytest.mark.parametrize("pending_slice_copy", [False, True])
+def test_bounded_transport_defers_send_clones_until_execution(
+    monkeypatch, pending_slice_copy
+):
     """Building an AWEX transfer plan retains views instead of model-sized clones."""
     from awex.transfer import nccl_stream_batch
     from awex.util import device as device_util
@@ -25,12 +29,17 @@ def test_bounded_transport_defers_send_clones_until_execution(monkeypatch):
             return self
 
     source = _SourceTensor()
+    source.ready = not pending_slice_copy
     send_op = SimpleNamespace(
         send_shard_meta=SimpleNamespace(name="weight"),
         recv_rank=1,
     )
     send_plan = SimpleNamespace(operations={1: [send_op]})
-    recv_plan = SimpleNamespace(operations={})
+    recv_op = SimpleNamespace(recv_shard_meta=SimpleNamespace(name="weight"))
+    recv_plan = SimpleNamespace(operations={1: [recv_op]})
+    recv_storage = torch.full((2, 4), float("nan"))
+    recv_target = recv_storage[:, ::2]
+    expected_recv = torch.arange(4, dtype=torch.float32).reshape(2, 2)
     transport = object.__new__(_BoundedMemoryNcclColocateStreamBatchTransport)
 
     def _inspect_plan(
@@ -45,13 +54,19 @@ def test_bounded_transport_defers_send_clones_until_execution(monkeypatch):
         del (
             transfer_rank,
             world_size,
-            all_recv_p2p_ops,
             weights_update_group,
             rank_coordinate,
             step_id,
         )
         assert all_send_p2p_ops[1][0][1].tensor is source
         assert source.clone_calls == 0
+        # A materialized slice cannot be consumed on the transfer stream until
+        # its asynchronous producer on the caller stream has completed.
+        assert source.ready
+        recv_buffer = all_recv_p2p_ops[1][0][1].tensor
+        assert recv_buffer.is_contiguous()
+        assert recv_buffer.data_ptr() != recv_target.data_ptr()
+        recv_buffer.copy_(expected_recv)
 
     transport.execute_recursive_partition_stream_transfer = _inspect_plan
     monkeypatch.setattr(
@@ -66,7 +81,9 @@ def test_bounded_transport_defers_send_clones_until_execution(monkeypatch):
         "awex.transfer.transfer_plan.slice_tensor",
         lambda tensor, *args, **kwargs: tensor,
     )
-    monkeypatch.setattr(device_util, "synchronize", lambda: None)
+    monkeypatch.setattr(
+        device_util, "synchronize", lambda: setattr(source, "ready", True)
+    )
     monkeypatch.setattr(
         torch.distributed,
         "P2POp",
@@ -85,11 +102,13 @@ def test_bounded_transport_defers_send_clones_until_execution(monkeypatch):
         recv_transfer_plan=recv_plan,
         weights_update_group=object(),
         send_parameters={"weight": source},
-        recv_parameters={},
+        recv_parameters={"weight": recv_target},
         step_id=1,
     )
 
     assert source.clone_calls == 0
+    torch.testing.assert_close(recv_target, expected_recv, rtol=0, atol=0)
+    assert torch.isnan(recv_storage[:, 1::2]).all()
 
 
 def test_bounded_transport_releases_each_send_clone_batch(monkeypatch):

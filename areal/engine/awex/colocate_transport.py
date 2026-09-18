@@ -181,7 +181,9 @@ class _BoundedMemoryNcclColocateStreamBatchTransport(NcclColocateStreamBatchTran
                 tensor_sliced = slice_tensor(recv_tensor, op, False)
                 if not tensor_sliced.is_contiguous():
                     original_tensor = tensor_sliced
-                    tensor_sliced = tensor_sliced.contiguous()
+                    tensor_sliced = torch.empty_like(
+                        tensor_sliced, memory_format=torch.contiguous_format
+                    )
                     non_contiguous_tensor_pairs.append((original_tensor, tensor_sliced))
                 p2p_op = dist.P2POp(
                     dist.irecv if async_op else dist.recv,
@@ -202,6 +204,11 @@ class _BoundedMemoryNcclColocateStreamBatchTransport(NcclColocateStreamBatchTran
             )
         else:
             logger.info("No tensors to copy for %s", task_id)
+
+        # slice_tensor may materialize send slices on the caller stream.
+        # Finish planning copies before independent transfer streams consume
+        # them, including ranks with no local copy to synchronize implicitly.
+        device_util.synchronize()
 
         future = Future()
         total_send_ops = sum(len(ops) for ops in all_send_p2p_ops.values())
