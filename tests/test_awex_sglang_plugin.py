@@ -110,6 +110,8 @@ def test_awex_config_preserves_nested_router_and_vision_metadata(monkeypatch):
 
 
 def test_memory_transitions_are_idempotent():
+    pytest.importorskip("sglang")
+
     class Scheduler:
         def __init__(self):
             self.offload_tags = set()
