@@ -355,6 +355,25 @@ def _distributed_worker(rank, rendezvous, backend="gloo"):
         result = moe.export(reduce_group=world)
         assert result["moe_balance/layer_0/expert_0/load_percent"] == 40
         assert result["moe_balance/layer_0/max_over_ideal"] == 1.2
+        moe.counts.clear()
+        assert moe.export(reduce_group=world) == {}
+        # All ranks coordinate layout validation before the tensor collective.
+        # A missing rank-local layer must fail consistently instead of hanging.
+        if rank == 0:
+            moe.counts["0"] = torch.tensor([3, 1], device=device)
+        with pytest.raises(RuntimeError, match="layout differs"):
+            moe.export(reduce_group=world)
+        # Equal packed lengths with different layer IDs must not be combined.
+        moe.counts.clear()
+        moe.counts[str(rank)] = torch.tensor([3, 1], device=device)
+        with pytest.raises(RuntimeError, match="layout differs"):
+            moe.export(reduce_group=world)
+        # The same layer must also expose the same number of experts.
+        moe.counts.clear()
+        moe.counts["0"] = torch.tensor([3, 1, 0][: 2 + rank], device=device)
+        with pytest.raises(RuntimeError, match="layout differs"):
+            moe.export(reduce_group=world)
+        moe.counts.clear()
         # Different PP stages own distinct global layer IDs.
         moe.counts[str(rank)] = torch.tensor([3, 1], device=device)
         result = moe.export(reduce_group=local_groups[rank], pp_group=world)

@@ -109,9 +109,25 @@ class MoEMetrics:
         replicas: int = 1,
     ) -> dict[str, float]:
         result = {}
-        if self.counts:
-            layers = sorted(self.counts)
-            sizes = [self.counts[layer].numel() for layer in layers]
+        layers = sorted(self.counts)
+        sizes = [self.counts[layer].numel() for layer in layers]
+        layout = tuple(zip(layers, sizes, strict=True))
+        if dist.is_initialized():
+            # Every rank in the reduction group represents the same pipeline
+            # stage and must pack identical global layer IDs and expert counts.
+            # Coordinate before the tensor collective so an empty or divergent
+            # rank cannot skip all_reduce or silently reduce unrelated layers.
+            layouts = [None] * dist.get_world_size(reduce_group)
+            dist.all_gather_object(layouts, layout, group=reduce_group)
+            if any(candidate != layouts[0] for candidate in layouts[1:]):
+                details = ", ".join(
+                    f"group rank {rank}: {candidate!r}"
+                    for rank, candidate in enumerate(layouts)
+                )
+                raise RuntimeError(
+                    "MoE metric layout differs across the reduction group; " + details
+                )
+        if layers:
             packed = torch.cat([self.counts[layer] for layer in layers])
             if dist.is_initialized():
                 dist.all_reduce(packed, op=dist.ReduceOp.SUM, group=reduce_group)
