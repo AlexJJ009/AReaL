@@ -166,12 +166,17 @@ class SGLangBackend:
         if meta_info is None:
             raise ValueError("SGLang response missing meta_info for score request")
         # SGLang returns [logprob, token_id, ...]
-        all_logprobs = [float(x[0]) for x in meta_info.get("input_token_logprobs", [])]
+        all_logprobs = meta_info.get("input_token_logprobs", [])
         if len(all_logprobs) < target_len:
             raise ValueError(
                 f"SGLang returned insufficient input_token_logprobs: {len(all_logprobs)} < {target_len}"
             )
-        return all_logprobs[-target_len:]
+        # The unconditioned first token can have a None score. It is harmless
+        # outside the requested suffix, but must remain an error inside it.
+        selected = all_logprobs[-target_len:] if target_len else []
+        if any(x[0] is None for x in selected):
+            raise ValueError("Requested scoring suffix contains an undefined logprob")
+        return [float(x[0]) for x in selected]
 
     def build_disk_weight_update_requests(
         self, meta: WeightUpdateMeta

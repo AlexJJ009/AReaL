@@ -1,0 +1,205 @@
+defaults:
+  - gsm8k_ppo
+  - _self_
+
+experiment_name: sao-math-async-ppo
+trial_name: ${oc.env:SAO_TRIAL_NAME}
+seed: 42
+total_train_epochs: 1
+total_train_steps: null
+enable_offload: false
+tokenizer_path: ${actor.path}
+dynamic_bs: false
+
+cluster:
+  n_nodes: 1
+  n_gpus_per_node: 8
+  fileroot: ${oc.env:SAO_RUN_ROOT}
+  name_resolve:
+    type: nfs
+    nfs_record_root: ${cluster.fileroot}/name-resolve
+
+scheduler:
+  type: local
+
+rollout:
+  backend: sglang:d4p1t1
+  consumer_batch_size: ${train_dataset.batch_size}
+  max_concurrent_rollouts: 128
+  queue_size: 256
+  max_head_offpolicyness: 2
+  enable_rollout_tracing: true
+  dump_to_file: true
+  scheduling_spec: ${actor.scheduling_spec}
+
+gconfig:
+  n_samples: 4
+  max_new_tokens: 8192
+  max_tokens: 9216
+  temperature: 1.0
+  top_p: 1.0
+  greedy: false
+  reward_normalization: false
+  ignore_eos: false
+  seed: null
+
+eval_gconfig:
+  n_samples: 4
+  max_new_tokens: 8192
+  max_tokens: 9216
+  temperature: 1.0
+  top_p: 1.0
+  greedy: false
+  reward_normalization: false
+  ignore_eos: false
+  seed: null
+
+actor:
+  backend: fsdp:d4p1t1
+  path: ${oc.env:SAO_MODEL_PATH}
+  init_from_scratch: false
+  dtype: bfloat16
+  optimizer_dtype: float32
+  gradient_checkpointing: true
+  attn_impl: flash_attention_2
+  mb_spec:
+    max_tokens_per_mb: 9216
+    granularity: 1
+  optimizer:
+    type: adam
+    lr: 1.0e-6
+    weight_decay: 0.0
+    lr_scheduler_type: constant
+    gradient_clipping: 1.0
+    warmup_steps_proportion: 0.0
+  ppo_n_minibatches: 1
+  eps_clip: 0.2
+  eps_clip_higher: null
+  c_clip: null
+  discount: 1.0
+  gae_lambda: 1.0
+  gae_timestep_unit: token
+  reward_scaling: 1.0
+  reward_bias: 0.0
+  reward_norm: null
+  kl_ctl: 0.0
+  use_decoupled_loss: false
+  recompute_logprob: false
+  rejection_sampling: null
+  importance_sampling_level: token
+  use_sapo_loss: false
+  use_cispo_loss: false
+  m2_threshold: null
+  overlong_reward_penalty: false
+  mask_no_eos_with_zero: false
+  max_new_tokens: ${gconfig.max_new_tokens}
+  scheduling_spec:
+    - task_type: worker
+      port_count: 2
+      gpu: 1
+      mem: 64
+      cmd: python3 -m areal.infra.rpc.rpc_server
+      env_vars: {}
+
+critic:
+  backend: ${actor.backend}
+  is_critic: true
+  path: ${actor.path}
+  init_from_scratch: false
+  dtype: ${actor.dtype}
+  optimizer_dtype: float32
+  gradient_checkpointing: true
+  attn_impl: flash_attention_2
+  mask_no_eos_with_zero: false
+  eps_clip: 0.5
+  ppo_n_minibatches: 1
+  mb_spec:
+    max_tokens_per_mb: 9216
+    granularity: 1
+  optimizer:
+    type: adam
+    lr: 5.0e-6
+    weight_decay: 0.0
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1.0e-8
+    lr_scheduler_type: constant
+    gradient_clipping: 1.0
+    warmup_steps_proportion: 0.0
+  scheduling_strategy:
+    type: colocation
+    target: actor
+  scheduling_spec: ${actor.scheduling_spec}
+
+ref: null
+teacher: null
+
+sglang:
+  model_path: ${actor.path}
+  attention_backend: flashinfer
+  dtype: bfloat16
+  skip_tokenizer_init: true
+  context_length: 9216
+  mem_fraction_static: 0.75
+  max_running_requests: 64
+  disable_cuda_graph: false
+  disable_overlap_schedule: false
+  disable_radix_cache: true
+  chunked_prefill_size: -1
+  log_level: info
+  decode_log_interval: 50
+
+train_dataset:
+  path: ${oc.env:SAO_DATA_PATH}
+  split: train
+  type: rl
+  batch_size: 128
+  max_length: 1024
+  shuffle: true
+  drop_last: false
+  num_workers: 0
+  scheduling_spec: null
+
+valid_dataset:
+  path: ${oc.env:SAO_DATA_PATH}
+  split: test
+  type: rl
+  batch_size: 32
+  shuffle: false
+  drop_last: false
+  num_workers: 0
+  scheduling_spec: null
+
+saver:
+  mode: sync
+  freq_steps: 20
+  freq_epochs: 1
+  freq_secs: null
+
+recover:
+  mode: auto
+  freq_steps: 20
+  freq_epochs: 1
+  freq_secs: null
+
+evaluator:
+  freq_steps: 20
+  freq_epochs: 1
+  freq_secs: null
+  eval_before_train: true
+
+stats_logger:
+  wandb:
+    mode: disabled
+  swanlab:
+    mode: disabled
+  trackio:
+    mode: disabled
+
+perf_tracer:
+  enabled: true
+  save_interval: 1
+  profile_steps: [0, 1, 2, 3, 4]
+  session_tracer:
+    enabled: true
+    flush_threshold: 32

@@ -1030,6 +1030,8 @@ class RolloutController:
         dynamic_bs: bool = False,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        finite_epoch: bool = False,
+        fail_on_rejection: bool = False,
     ) -> list[dict[str, Any]]:
         """Prepare a batch with controlled staleness.
 
@@ -1044,7 +1046,8 @@ class RolloutController:
             workflow_kwargs = {}
 
         def task_input_generator():
-            for data in cycle_dataloader(dataloader):
+            data_iter = dataloader if finite_epoch else cycle_dataloader(dataloader)
+            for data in data_iter:
                 for item in data:
                     yield _RemoteRolloutTaskInput(
                         data=item,
@@ -1063,7 +1066,11 @@ class RolloutController:
         # Delegate to dispatcher
         assert dataloader.batch_size is not None
         results = self.dispatcher.active_submit_and_wait(
-            self.data_generator, batch_size=dataloader.batch_size, dynamic_bs=dynamic_bs
+            self.data_generator,
+            batch_size=dataloader.batch_size,
+            dynamic_bs=dynamic_bs,
+            finite_epoch=finite_epoch,
+            fail_on_rejection=fail_on_rejection,
         )
 
         # Return list of trajectories

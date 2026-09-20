@@ -64,6 +64,18 @@ class TestAsyncRewardWrapperBasic:
 
 class TestAsyncRewardWrapperTimeout:
     @pytest.mark.asyncio
+    async def test_strict_timeout_is_not_an_incorrect_answer(self):
+        wrapper = AsyncRewardWrapper(
+            _slow_reward,
+            timeout_seconds=0.05,
+            max_workers=1,
+            max_retries=0,
+            raise_on_timeout=True,
+        )
+        with pytest.raises(TimeoutError, match="no reward was assigned"):
+            await wrapper(0.2)
+
+    @pytest.mark.asyncio
     async def test_timeout_returns_zero_after_retries(self):
         wrapper = AsyncRewardWrapper(
             _slow_reward, timeout_seconds=0.1, max_workers=1, max_retries=1

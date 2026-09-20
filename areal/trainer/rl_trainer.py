@@ -960,10 +960,11 @@ class PPOTrainer:
                     epoch=epoch, epoch_step=step, global_step=global_step
                 )
 
-            # Resume rollout
-            self.rollout.resume()
-
             self._save_perf_tracer(step=global_step)
+
+            # Flush step evidence while submission is still paused. Specialized
+            # trainers may perform a supervision check in the trace-save hook.
+            self.rollout.resume()
 
     def _save_training_state(
         self,
@@ -1348,7 +1349,7 @@ class PPOTrainer:
 
     def _save_hf(self, epoch: int, epoch_step: int, global_step: int):
         # Save as HF models for evaluation
-        self.saver.save(
+        saved = self.saver.save(
             self.actor,
             epoch,
             epoch_step,
@@ -1356,7 +1357,7 @@ class PPOTrainer:
             tokenizer=self.tokenizer,
             processor=self.processor,
         )
-        if self.critic is not None:
+        if saved and self.critic is not None:
             self.saver.save(
                 self.critic,
                 epoch,
@@ -1365,6 +1366,7 @@ class PPOTrainer:
                 tokenizer=self.tokenizer,
                 processor=self.processor,
                 name="critic",
+                force=True,
             )
         # Async mode: synchronization handled by AsyncCheckpointManager
         if not self.saver.is_async and not is_single_controller():
@@ -1453,6 +1455,15 @@ class PPOTrainer:
     def _export_and_commit_stats(self, epoch: int, epoch_step: int, global_step: int):
         # Upload statistics to the logger (e.g., wandb)
         stats = self.actor.export_stats()
+        if self.critic is not None and is_single_controller():
+            # Critics in controller mode own separate worker processes/trackers.
+            # Prefix their exports so actor gradient/timing metrics are preserved.
+            stats.update(
+                {
+                    f"critic/{key}": value
+                    for key, value in self.critic.export_stats().items()
+                }
+            )
         stats.update(self.rollout.export_stats())
         if self.eval_rollout is not None:
             stats.update(self.eval_rollout.export_stats())

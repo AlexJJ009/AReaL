@@ -1,0 +1,22 @@
+我们的 checklist 或者协议里面，还要考虑一些：
+
+首先是打分器格式对不对？打分器可以参考我们在实现 PRD 算法时用的那个打分器，它应该包含基本的正则，以及 LaTeX verify 这种语义匹配。
+
+然后在启动之前，应该去核查以下几点：
+
+1. loss 对不对？
+2. 两个模型的加载对不对？
+3. 推理加速有没有开？
+4. Actor update 加速有没有开？
+5. 由于用的是 FSDP2，所以 Flash Linear Attention 以及像是 Convolution 1D 那种加速的算子有没有开？我想在 SGLang 里面应该也有对应的优化，在 FSDP2 里面的优化应该是共用的。也就是说，要验证 Actor Update 也有被加速，因为 3.5 4B Base 它有 24 层的 Linear Full Attention，只有 8 层的 Full Attention
+6. 然后是 Areal 的 validation 和 save frequency 的频次，我觉得可以设置为每 20 个 step 存一下，然后对着 5 个 test set 测一遍。
+
+
+
+   由于这是跑一个 demo，只需要测 N 等于 4 就可以，不需要测 N 等于 16
+7. 我们使用的 DAPO 数据集不应该用我们那个子集了，而是直接固定一个种子之后跑全量的就可以了。
+
+
+
+   这是因为当前的 step 数量估计可以很多，所以跑全量的整个数据集完全没问题。
+8.

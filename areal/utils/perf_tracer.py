@@ -1315,6 +1315,20 @@ class PerfTracer:
         self._lock = threading.Lock()
         self._pid = os.getpid()
         self._origin_ns = time.perf_counter_ns()
+        self._events.append(
+            {
+                "name": "clock_sync",
+                "ph": "M",
+                "pid": self._pid,
+                "args": {
+                    "origin_perf_counter_ns": self._origin_ns,
+                    "perf_counter_ns": time.perf_counter_ns(),
+                    "wall_time_ns": time.time_ns(),
+                    "rank": rank,
+                    "role": role,
+                },
+            }
+        )
         self._thread_meta_emitted: set[int] = set()
         self._process_meta_emitted: set[int] = set()
         # Virtual TID management for merged traces
@@ -1598,6 +1612,10 @@ class PerfTracer:
                     event_args = {}
                     new_event["args"] = event_args
                 event_args["rank"] = self._rank
+                if "baseTimeNanoseconds" in profiler_traces and "ts" in event:
+                    event_args["wall_time_ns"] = int(
+                        profiler_traces["baseTimeNanoseconds"] + event["ts"] * 1000
+                    )
                 if self._role is not None:
                     event_args["role"] = self._role
 

@@ -56,7 +56,12 @@ from areal.api import (
     WeightUpdateMeta,
     WorkflowLike,
 )
-from areal.api.cli_args import OptimizerConfig, PerfTracerConfig, TrainEngineConfig
+from areal.api.cli_args import (
+    MicroBatchSpec,
+    OptimizerConfig,
+    PerfTracerConfig,
+    TrainEngineConfig,
+)
 from areal.api.io_struct import DeviceRuntimeInfo
 from areal.engine.core import (
     aggregate_eval_losses,
@@ -93,6 +98,7 @@ from areal.models.fsdp.ulysses import (
     ulysses_pad_and_slice_inputs,
     ulysses_prepare_inputs,
 )
+from areal.models.transformers.token_critic import Qwen35TokenCriticForCausalBackbone
 from areal.models.transformers.ulyssess_patch import apply_monkey_patch
 from areal.models.tree_attn.functional import (
     _gather_packed_tree_logprobs,
@@ -217,6 +223,13 @@ def _prepare_multimodal_forward_inputs(
     _drop_multimodal_payloads(mb)
 
 
+def _use_qwen35_token_critic_adapter(
+    config: TrainEngineConfig,
+    model_config: PretrainedConfig,
+) -> bool:
+    return bool(config.is_critic and is_qwen3_5_model(model_config.model_type))
+
+
 class FSDPEngine(TrainEngine):
     def __init__(self, config: TrainEngineConfig):
         self.config = config
@@ -228,6 +241,7 @@ class FSDPEngine(TrainEngine):
         self.processor: ProcessorMixin | None = None
         self.model_config: PretrainedConfig
         self._version: int = 0
+        self.optimizer_steps_since_init: int = 0
 
         self._initialized = False
         self.own_global_group = False
@@ -414,8 +428,18 @@ class FSDPEngine(TrainEngine):
         is_llm_cpu_load = (
             self.config.fsdp.memory_efficient_load
             and not self.config.init_from_scratch
-            and not self.is_vision_model
+            and (
+                not self.is_vision_model
+                or _use_qwen35_token_critic_adapter(self.config, self.model_config)
+            )
         )
+
+        if (
+            _use_qwen35_token_critic_adapter(self.config, self.model_config)
+            and not is_llm_cpu_load
+            and dist.is_initialized()
+        ):
+            dist.broadcast(self.model.score.weight.data, src=0)
 
         if is_llm_cpu_load or self.config.use_lora:
             need_broadcast = True
@@ -714,14 +738,19 @@ class FSDPEngine(TrainEngine):
             with trace_scope("fsdp_engine.step"):
                 self._per_layer_optim_wrapper.step()
             update_successful = True
+            self.optimizer_steps_since_init += 1
         else:
             with trace_scope("fsdp_engine.step"):
                 self.optimizer.step()
             update_successful = True
+            self.optimizer_steps_since_init += 1
 
         current_lr = self.lr_scheduler.get_last_lr()[0]
         return dict(
             update_successful=float(update_successful),
+            # Per-process relative counter. Checkpoint recovery restores optimizer
+            # state, but not FSDPEngine object-local counters.
+            optimizer_steps_since_init=self.optimizer_steps_since_init,
             grad_norm=float(grad_norm) if grad_norm is not None else float("nan"),
             lr=current_lr,
         )
@@ -738,7 +767,7 @@ class FSDPEngine(TrainEngine):
         ],
         forward_only: bool = False,
     ) -> None:
-        for mb_item in mb_list:
+        for mb_index, mb_item in enumerate(mb_list):
             inputs, ctx = self._prepare_mb_inputs(mb_item)
 
             # Lazily create tree attention metadata just before forward.
@@ -756,20 +785,35 @@ class FSDPEngine(TrainEngine):
                 inputs.update(tree_kwargs)
                 tree_attn_keys = list(tree_kwargs.keys())
 
-            with trace_scope("fsdp_engine.forward"):
-                outputs = self.model(**inputs)
-            logits = outputs.logits.squeeze(0)
+            with trace_scope(
+                "fsdp_engine.microbatch",
+                enable_profiler=not forward_only and mb_index == 0,
+                args={"global_step": self.get_version()},
+            ):
+                with trace_scope("fsdp_engine.forward"):
+                    outputs = self.model(**inputs)
+                logits = self._extract_model_forward_output(outputs).squeeze(0)
 
-            # Release tree attention metadata after forward pass
-            for key in tree_attn_keys:
-                del inputs[key]
+                # Release tree attention metadata after forward pass
+                for key in tree_attn_keys:
+                    del inputs[key]
 
-            ctx_dict = ctx.to_dict()
-            loss = process_output_fn(logits, ctx_dict)
+                ctx_dict = ctx.to_dict()
+                loss = process_output_fn(logits, ctx_dict)
 
-            if not forward_only and loss is not None:
-                with trace_scope("fsdp_engine.backward"):
-                    loss.backward()
+                if not forward_only and loss is not None:
+                    with trace_scope("fsdp_engine.backward"):
+                        loss.backward()
+
+    def _extract_model_forward_output(self, outputs: Any) -> torch.Tensor:
+        logits = outputs.logits
+        if _use_qwen35_token_critic_adapter(self.config, self.model_config):
+            if logits.shape[-1] != 1:
+                raise RuntimeError(
+                    "Qwen3.5 critic adapter must return token scalar values "
+                    f"with final dimension 1, got shape {tuple(logits.shape)}."
+                )
+        return logits
 
     def train_batch(
         self,
@@ -1007,7 +1051,10 @@ class FSDPEngine(TrainEngine):
         # in forward/backward.
         dtype = getattr(torch, self.config.optimizer_dtype)
 
-        if self.config.is_critic:
+        if _use_qwen35_token_critic_adapter(self.config, self.model_config):
+            model_class = Qwen35TokenCriticForCausalBackbone
+            model_kwargs = {}
+        elif self.config.is_critic:
             model_class = AutoModelForTokenClassification
             model_kwargs = {"num_labels": 1}
         else:
@@ -1051,7 +1098,10 @@ class FSDPEngine(TrainEngine):
             # Weights are broadcast from rank 0 after FSDP sharding in initialize().
             # Note: meta device optimization only applies to LLM (not VLM), because
             # VLM uses from_pretrained() which doesn't support meta device context.
-            if not self.is_vision_model and dist.get_rank() != 0:
+            if (
+                not self.is_vision_model
+                or _use_qwen35_token_critic_adapter(self.config, self.model_config)
+            ) and dist.get_rank() != 0:
                 loading_device = "meta"
             else:
                 loading_device = "cpu"
@@ -1062,7 +1112,15 @@ class FSDPEngine(TrainEngine):
 
         # Note: VLMs often have vision_tower in fp32 already; loading whole
         # model in optimizer_dtype (fp32 default) is consistent.
-        if self.is_vision_model:
+        if _use_qwen35_token_critic_adapter(self.config, self.model_config):
+            self.tokenizer = load_hf_tokenizer(self.config.path)
+            self.processor = None
+            tik = time.perf_counter()
+            with torch.device(loading_device):
+                model = self._create_llm_actor_or_critic()
+                if self.config.disable_dropout:
+                    disable_dropout_in_model(model)
+        elif self.is_vision_model:
             # Compute dtype (config.dtype) is what FSDP2 MP casts to in
             # forward/backward; storage dtype (optimizer_dtype) is restricted
             # to fp32/bf16 by config validation, so checking it would never
@@ -1943,7 +2001,14 @@ class FSDPEngine(TrainEngine):
         else:
             input_ = amend_position_ids(input_)
 
-        mb_list = split_padded_tensor_dict_into_mb_list(input_, self.config.mb_spec)
+        mb_spec = self.config.mb_spec
+        if is_qwen3_5_model(self.model_config.model_type):
+            # GatedDeltaNet and its convolution do not consume packed cu_seqlens.
+            # Each real sequence needs an independent recurrent state.
+            mb_spec = MicroBatchSpec.new(
+                mb_spec, n_mbs=input_["input_ids"].shape[0], granularity=1
+            )
+        mb_list = split_padded_tensor_dict_into_mb_list(input_, mb_spec)
         mb_list.mbs = [pack_tensor_dict(mb) for mb in mb_list.mbs]
         mb_list = pad_mb_list(
             mb_list,

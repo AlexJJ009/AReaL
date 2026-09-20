@@ -47,7 +47,8 @@ ESCAPABLE_PACKAGES: frozenset[str] = frozenset(
 
 # Optional-dependency extras that are backend-specific.
 # These extras are expected to exist exclusively in one variant.
-BACKEND_EXTRAS: frozenset[str] = frozenset({"sglang", "vllm"})
+# sao-math binds the SGLang/Torch2.9 runtime, including ABI-specific wheels.
+BACKEND_EXTRAS: frozenset[str] = frozenset({"sglang", "vllm", "sao-math"})
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 

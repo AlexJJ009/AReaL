@@ -666,6 +666,8 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
         input_generator: Generator[TInput, None, None],
         batch_size: int,
         dynamic_bs: bool = False,
+        finite_epoch: bool = False,
+        fail_on_rejection: bool = False,
     ) -> list[TResult]:
         """Continuously submit tasks and wait until a full batch of results is ready.
 
@@ -684,13 +686,18 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
             If True, enables dynamic batch sizing. The method will stop collecting
             when (accepted + rejected) >= batch_size, returning only accepted results.
             This results in variable-sized batches of valid data. Default is False.
+        finite_epoch : bool, optional
+            If True, the input generator is allowed to stop. The dispatcher drains
+            already submitted work and returns a final partial batch instead of
+            waiting forever for ``batch_size`` accepted results. Default is False.
 
         Returns
         -------
         list[TResult]
             A list of task results. When ``dynamic_bs=False``, returns exactly
-            ``batch_size`` results. When ``dynamic_bs=True``, returns up to
-            ``batch_size`` accepted results (variable-sized).
+            ``batch_size`` results except for the final finite-epoch partial batch.
+            When ``dynamic_bs=True``, returns up to ``batch_size`` accepted results
+            (variable-sized).
 
         Raises
         ------
@@ -700,6 +707,7 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
         accepted_cnt = 0
         total_attempts = 0
         results = []
+        input_exhausted = False
 
         while True:
             # Submit tasks to maintain overlap
@@ -714,7 +722,7 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
                 self.runner.get_input_queue_size() + batch_size
             )
             capacity = min(cap_staleness, cap_queue)
-            if capacity > 0:
+            if capacity > 0 and not input_exhausted:
                 if self.enable_tracing:
                     perf_tracer.instant(
                         "batch_task_dispatcher.continously_submit",
@@ -725,12 +733,26 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
                     try:
                         self.submit_task_input(next(input_generator))
                     except StopIteration:
-                        raise RuntimeError(
-                            "Input generator exhausted before batch completion. "
-                            "Use cycle_dataloader() or provide an infinite generator."
-                        ) from None
+                        if finite_epoch:
+                            input_exhausted = True
+                            break
+                        else:
+                            raise RuntimeError(
+                                "Input generator exhausted before batch completion. "
+                                "Use cycle_dataloader() or provide an infinite "
+                                "generator."
+                            ) from None
+            wait_count = batch_size - accepted_cnt
+            if finite_epoch:
+                with self._result_cv:
+                    active_count = len(self._active_task_ids)
+                if input_exhausted and active_count == 0:
+                    break
+                wait_count = min(wait_count, active_count)
+                if wait_count <= 0:
+                    continue
             try:
-                arrived = self.wait_results(count=batch_size - accepted_cnt, timeout=1)
+                arrived = self.wait_results(count=wait_count, timeout=1)
             except TimeoutError:
                 arrived = []
 
@@ -738,6 +760,11 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
                 is_accepted = res is not None
 
                 if not is_accepted:
+                    if fail_on_rejection:
+                        raise RuntimeError(
+                            "A rollout failed or was rejected; exact dataset consumption "
+                            "does not permit replacing or dropping this problem."
+                        )
                     if dynamic_bs:
                         total_attempts += 1
                         if total_attempts >= batch_size:
@@ -1435,6 +1462,7 @@ class WorkflowExecutor:
         workflow: RolloutWorkflow,
         should_accept_fn: Callable[[dict[str, Any]], bool] = None,
         dynamic_bs: bool = False,
+        finite_epoch: bool = False,
     ) -> list[dict[str, Any]]:
         """Prepare a batch with controlled staleness.
 
@@ -1464,7 +1492,8 @@ class WorkflowExecutor:
         """
 
         def task_input_generator():
-            for data in cycle_dataloader(dataloader):
+            data_iter = dataloader if finite_epoch else cycle_dataloader(dataloader)
+            for data in data_iter:
                 for item in data:
                     # Workflow is already resolved by RemoteInfEngine
                     task_id = self._task_id_generator.next()
@@ -1482,7 +1511,10 @@ class WorkflowExecutor:
         # Delegate to dispatcher
         assert dataloader.batch_size is not None
         results = self.dispatcher.active_submit_and_wait(
-            self.data_generator, batch_size=dataloader.batch_size, dynamic_bs=dynamic_bs
+            self.data_generator,
+            batch_size=dataloader.batch_size,
+            dynamic_bs=dynamic_bs,
+            finite_epoch=finite_epoch,
         )
 
         # Return list of trajectory dicts (filter out None)

@@ -79,6 +79,7 @@ class AsyncRewardWrapper:
         timeout_seconds: float = 15,
         max_workers: int | None = None,
         max_retries: int = 3,
+        raise_on_timeout: bool = False,
     ):
         self.reward_fn = reward_fn
         self.timeout_seconds = timeout_seconds
@@ -88,6 +89,7 @@ class AsyncRewardWrapper:
             max_workers = max((cpu_count // device_count) // 2, 1)
         self.max_workers = max_workers
         self.max_retries = max_retries
+        self.raise_on_timeout = raise_on_timeout
         self._executor_key = max_workers
 
         with self._lock:
@@ -152,6 +154,11 @@ class AsyncRewardWrapper:
                 )
                 return await asyncio.wait_for(future, timeout=self.timeout_seconds)
             except TimeoutError:
+                if is_last and self.raise_on_timeout:
+                    raise TimeoutError(
+                        f"Reward verification timed out after {self.timeout_seconds}s; "
+                        "no reward was assigned."
+                    ) from None
                 logger.warning(
                     f"Computing reward timeout after {self.timeout_seconds}s "
                     f"(attempt {attempt + 1}/{self.max_retries + 1}). "

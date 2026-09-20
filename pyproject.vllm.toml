@@ -103,7 +103,7 @@ dependencies = [
     "tabulate",
     "pybase64",
     "msgspec",
-    "math-verify==0.8.0",
+    "math-verify==0.9.0",
     "python-dotenv",
     "json5",
     "psutil",
@@ -235,6 +235,7 @@ dev = [
 module-root = ""
 
 [tool.uv]
+no-build-isolation-package = ["causal-conv1d", "torch-memory-saver"]
 environments = [
     "sys_platform == 'linux' and platform_machine == 'x86_64'",
     "sys_platform == 'linux' and platform_machine == 'aarch64'",
@@ -248,7 +249,6 @@ override-dependencies = [
     "transformer-engine; sys_platform == 'never'",
     "nv-grouped-gemm; sys_platform == 'never'",
     "mamba-ssm; sys_platform == 'never'",
-    "causal-conv1d; sys_platform == 'never'",
     # nvidia-resiliency-ext 0.5.0 only ships manylinux_2_39 wheels; exclude so
     # older host kernels can still install megatron-core.
     "nvidia-resiliency-ext; sys_platform == 'never'",

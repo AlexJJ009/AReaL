@@ -42,7 +42,8 @@ classifiers = [
 
 dependencies = [
     # Core ML/AI libraries
-    "torch>=2.9.1,<2.11; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "torch==2.9.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torch>=2.9.1,<2.11; sys_platform != 'linux' and (sys_platform != 'darwin' or platform_machine != 'x86_64')",
     "torch<2.9.1; sys_platform == 'darwin' and platform_machine == 'x86_64'",
     "torchaudio",
     "torchvision",
@@ -86,7 +87,7 @@ dependencies = [
     "tabulate",
     "pybase64",
     "msgspec",
-    "math-verify==0.8.0",
+    "math-verify==0.9.0",
     "python-dotenv",
     "json5",
     "psutil",
@@ -158,6 +159,21 @@ tms = [
 kernels = [
     "kernels==0.12.2",
 ]
+sao-math = [
+    "httpx[socks]>=0.28.1",
+    "areal[sglang]",
+    "areal[tms]",
+    "areal[kernels]",
+    "torch==2.9.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torchaudio==2.9.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "torchvision==0.24.1; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "flash-attn @ https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3%2Bcu128torch2.9-cp312-cp312-linux_x86_64.whl; python_version >= '3.12' and python_version < '3.13' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "flash-linear-attention==0.4.2; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "causal-conv1d @ git+https://github.com/Dao-AILab/causal-conv1d.git@da6dbaa9fd5a919967f14d3fd031da1288ad5025; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "math-verify==0.9.0",
+    "latex2sympy2-extended==1.11.0",
+    "sympy==1.14.0",
+]
 megatron = [
     "megatron-core==0.17.0; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
     "mbridge @ git+https://github.com/ISEEKYAN/mbridge.git@310e8fb; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -225,6 +241,7 @@ dev = [
 module-root = ""
 
 [tool.uv]
+no-build-isolation-package = ["causal-conv1d", "torch-memory-saver"]
 # Restrict lock file resolution to supported environments
 # This prevents uv from failing when CUDA-only packages don't have wheels for macOS
 environments = [
@@ -239,7 +256,7 @@ override-dependencies = [
     # - litellm requires soundfile>=0.12.1,<0.13.0, sglang pins soundfile==0.13.1
     # sglang pins torchao==0.9.0, but we require >=0.15.0 for archon fp8
     # nvidia-cudnn-cu12 is required for SGLang Vision Models
-    "openai>=2.8.0",
+    "openai==2.30.0",
     "soundfile>=0.12.1,<0.13.0",
     "torchao==0.15.0",
     "nvidia-cudnn-cu12==9.16.0.29; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -249,7 +266,6 @@ override-dependencies = [
     "transformer-engine; sys_platform == 'never'",
     "nv-grouped-gemm; sys_platform == 'never'",
     "mamba-ssm; sys_platform == 'never'",
-    "causal-conv1d; sys_platform == 'never'",
     # nvidia-resiliency-ext 0.5.0 only ships manylinux_2_39 wheels; exclude so
     # older host kernels can still install megatron-core.
     "nvidia-resiliency-ext; sys_platform == 'never'",
@@ -261,6 +277,13 @@ override-dependencies = [
     "transformers>=5.0.0,<=5.3.0",
 ]
 
+[[tool.uv.dependency-metadata]]
+# Static runtime metadata from the pinned source setup.py. Avoid downloading an
+# unrelated latest Torch just to evaluate build metadata during uv lock.
+name = "causal-conv1d"
+version = "1.6.0"
+requires-dist = ["torch", "packaging", "ninja"]
+
 [[tool.uv.index]]
 name = "pytorch-cu129"
 url = "https://download.pytorch.org/whl/cu129"
@@ -269,14 +292,17 @@ explicit = true
 [tool.uv.sources]
 torch = [
     { index = "pytorch-cu129", extra = "sglang" },
+    { index = "pytorch-cu129", extra = "sao-math" },
     { index = "pytorch-cu129", extra = "cuda" },
 ]
 torchaudio = [
     { index = "pytorch-cu129", extra = "sglang" },
+    { index = "pytorch-cu129", extra = "sao-math" },
     { index = "pytorch-cu129", extra = "cuda" },
 ]
 torchvision = [
     { index = "pytorch-cu129", extra = "sglang" },
+    { index = "pytorch-cu129", extra = "sao-math" },
     { index = "pytorch-cu129", extra = "cuda" },
 ]
 
