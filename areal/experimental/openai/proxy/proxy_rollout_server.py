@@ -900,30 +900,55 @@ async def _call_client_create(
             raise HTTPException(status_code=500, detail=message) from e
         kwargs["messages"] = prepared_messages
 
-    # The OpenAI SDK flattens extra_body into the HTTP request. Restore template
-    # options to the internal client's extra_body before filtering its arguments.
-    if "chat_template_kwargs" in kwargs and "extra_body" in areal_client_allowed_args:
-        template_kwargs = kwargs.pop("chat_template_kwargs")
-        template_kwargs = {} if template_kwargs is None else template_kwargs
-        extra_body = kwargs.get("extra_body")
-        extra_body = {} if extra_body is None else extra_body
-        if not isinstance(template_kwargs, Mapping) or not isinstance(
-            extra_body, Mapping
-        ):
-            raise HTTPException(
-                status_code=400, detail="Template options must be objects"
-            )
-        nested_options = extra_body.get("chat_template_kwargs")
-        nested_options = {} if nested_options is None else nested_options
-        if not isinstance(nested_options, Mapping):
-            raise HTTPException(
-                status_code=400, detail="Template options must be objects"
-            )
-        # Preserve explicitly nested options when both wire forms are supplied.
-        kwargs["extra_body"] = {
-            **extra_body,
-            "chat_template_kwargs": {**template_kwargs, **nested_options},
+    defaults = dict(
+        getattr(_engine.config.agent, "chat_template_kwargs", {}) if _engine else {}
+    )
+    extra_body = kwargs.get("extra_body")
+    extra_body = {} if extra_body is None else extra_body
+    session_template = session_data.metadata.get("chat_template_kwargs")
+    session_template = {} if session_template is None else session_template
+    flat_template = kwargs.pop("chat_template_kwargs", None)
+    flat_template = {} if flat_template is None else flat_template
+    if not isinstance(extra_body, Mapping):
+        raise HTTPException(status_code=400, detail="Template options must be objects")
+    extra_body = dict(extra_body)
+    nested_template = extra_body.get("chat_template_kwargs")
+    nested_template = {} if nested_template is None else nested_template
+    if any(
+        not isinstance(layer, Mapping)
+        for layer in (session_template, nested_template, flat_template)
+    ):
+        raise HTTPException(status_code=400, detail="Template options must be objects")
+    thinking_keys = ("thinking_option", "enable_thinking", "thinking")
+    template_kwargs = {}
+    for layer in (
+        defaults,
+        session_template,
+        nested_template,
+        flat_template,
+    ):
+        effective = {
+            key: value
+            for key, value in layer.items()
+            if key not in thinking_keys or value is not None
         }
+        # Thinking aliases share precedence, even when their names differ.
+        if any(key in effective for key in thinking_keys):
+            for key in thinking_keys:
+                template_kwargs.pop(key, None)
+        template_kwargs.update(effective)
+    session_thinking = {
+        key: value
+        for key, value in session_template.items()
+        if key in thinking_keys and value is not None
+    }
+    if session_thinking:
+        for key in thinking_keys:
+            template_kwargs.pop(key, None)
+        template_kwargs.update(session_thinking)
+    if template_kwargs:
+        extra_body["chat_template_kwargs"] = template_kwargs
+        kwargs["extra_body"] = extra_body
 
     dropped_args = []
     for k, v in kwargs.items():

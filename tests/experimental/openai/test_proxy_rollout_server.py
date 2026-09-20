@@ -57,10 +57,52 @@ async def test_template_options_survive_proxy_filtering(monkeypatch, wire_form):
     result = await srv._call_client_create(create_fn, request, "session")
     expected = dict(options) if wire_form != "nested" else {}
     if wire_form != "flat":
-        expected["reasoning_effort"] = "low"
+        if wire_form == "nested":
+            expected["reasoning_effort"] = "low"
         assert result["other_extension"] == 1
     assert result["chat_template_kwargs"] == expected
     assert request == original
+
+
+@pytest.mark.asyncio
+async def test_template_precedence_preserves_session_thinking(monkeypatch):
+    monkeypatch.setattr(srv, "_openai_client", object())
+    monkeypatch.setattr(
+        srv,
+        "_engine",
+        SimpleNamespace(
+            config=SimpleNamespace(
+                agent=SimpleNamespace(
+                    chat_template_kwargs={
+                        "thinking_option": "off",
+                        "reasoning_effort": "low",
+                        "custom_default": 42,
+                    }
+                )
+            )
+        ),
+    )
+    srv._session_cache["session"] = SessionData(
+        session_id="session",
+        metadata={"chat_template_kwargs": {"enable_thinking": True}},
+    )
+
+    async def create_fn(extra_body=None, **kwargs):
+        return extra_body
+
+    result = await srv._call_client_create(
+        create_fn,
+        {
+            "extra_body": {"chat_template_kwargs": {"reasoning_effort": "medium"}},
+            "chat_template_kwargs": {"thinking": False, "reasoning_effort": "high"},
+        },
+        "session",
+    )
+    assert result["chat_template_kwargs"] == {
+        "custom_default": 42,
+        "reasoning_effort": "high",
+        "enable_thinking": True,
+    }
 
 
 @pytest.mark.asyncio
