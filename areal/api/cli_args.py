@@ -2623,6 +2623,10 @@ class AgentConfig:
         default="qwen3",
         metadata={"help": "Parser for reasoning content (<think> tags)."},
     )
+    chat_template_kwargs: dict[str, Any] = field(
+        default_factory=dict,
+        metadata={"help": "Default chat template arguments for proxy requests."},
+    )
     chat_template_type: str = field(
         default="hf",
         metadata={
