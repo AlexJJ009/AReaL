@@ -307,12 +307,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install Muon dependency in the prebuilt environment
-        run: |
-          export PATH="/opt/.venv/bin:$PATH"
-          uv pip install --python /opt/.venv/bin/python --target "$RUNNER_TEMP/muon-deps" --no-deps "emerging-optimizers==0.3.0"
-          echo "PYTHONPATH=$GITHUB_WORKSPACE:$RUNNER_TEMP/muon-deps" >> "$GITHUB_ENV"
-
       - name: Validate Docker installation
         run: |
           export PATH="/opt/.venv/bin:$PATH"

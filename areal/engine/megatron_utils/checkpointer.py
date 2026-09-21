@@ -266,14 +266,9 @@ class MegatronCheckpointManager:
         self.lr_scheduler = lr_scheduler
 
         self.use_distributed_optimizer = use_distributed_optimizer
-        if not self.use_distributed_optimizer and not getattr(
-            optimizer, "supports_non_distributed_checkpoint", False
-        ):
-            raise NotImplementedError(
-                "MegatronCheckpointManager requires either Megatron's distributed "
-                "optimizer or an optimizer with explicit non-distributed checkpoint "
-                "support"
-            )
+        assert self.use_distributed_optimizer, (
+            "MegatronCheckpointManager now only support distributed optimizer"
+        )
         self.use_checkpoint_opt_param_scheduler = use_checkpoint_opt_param_scheduler
         self.rank = torch.distributed.get_rank()
         self.use_dist_checkpointing = use_dist_checkpointing
