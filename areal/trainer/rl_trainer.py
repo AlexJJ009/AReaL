@@ -827,6 +827,12 @@ class PPOTrainer:
     ):
         config = self.config
         is_v1_rollout = config.rollout._version == "v1"
+        legacy_group_compat = config.gconfig.validate_group_compatibility()
+        # TODO(agent): extend group compatibility to v2 and SPMD before removing this guard.
+        if legacy_group_compat and (not is_v1_rollout or not is_single_controller()):
+            raise ValueError(
+                "Legacy group compatibility requires single-controller v1 rollout"
+            )
         if not is_v1_rollout and config.actor.min_usable_group_size is not None:
             raise ValueError(
                 "The v2 rollout path does not support actor.min_usable_group_size "
@@ -924,6 +930,12 @@ class PPOTrainer:
                 )
                 if is_v1_rollout:
                     prepare_kwargs["min_usable_group_size"] = min_usable_group_size
+                if legacy_group_compat:
+                    prepare_kwargs.update(
+                        keep_partial_group_on_error=config.gconfig.keep_partial_group_on_error,
+                        reward_normalization_use_std=config.gconfig.reward_normalization_use_std,
+                        legacy_reward_normalization=config.gconfig.legacy_reward_normalization,
+                    )
                 rollout_batch = _collect_trainable_rollout_batch(
                     functools.partial(
                         self.actor.prepare_batch,
@@ -1804,6 +1816,18 @@ class PPOTrainer:
         eval_workflow: WorkflowLike,
         eval_workflow_kwargs,
     ):
+        eval_group_kwargs = {}
+        eval_gconfig = self.config.eval_gconfig
+        if eval_gconfig.validate_group_compatibility():
+            if self.config.rollout._version != "v1" or not is_single_controller():
+                raise ValueError(
+                    "Group compatibility requires single-controller v1 rollout"
+                )
+            eval_group_kwargs = dict(
+                keep_partial_group_on_error=eval_gconfig.keep_partial_group_on_error,
+                legacy_reward_normalization=eval_gconfig.legacy_reward_normalization,
+                reward_normalization_use_std=eval_gconfig.reward_normalization_use_std,
+            )
         if self.actor.is_data_parallel_head():
             cnt = 0
             for data in self.valid_dataloader:
@@ -1816,6 +1840,7 @@ class PPOTrainer:
                         is_eval=True,
                         reward_normalization=False,
                         drop_incomplete_group=False,
+                        **eval_group_kwargs,
                     )
                     cnt += 1
             if cnt:

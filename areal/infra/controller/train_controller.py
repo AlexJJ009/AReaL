@@ -851,6 +851,9 @@ class TrainController:
         dynamic_bs: bool = False,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        keep_partial_group_on_error: bool = False,
+        reward_normalization_use_std: bool = True,
+        legacy_reward_normalization: bool = False,
         min_usable_group_size: int = 1,
     ) -> list[dict[str, Any]]:
         return self.rollout.prepare_batch(
@@ -863,6 +866,17 @@ class TrainController:
             dynamic_bs=dynamic_bs,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
+            **(
+                dict(
+                    keep_partial_group_on_error=keep_partial_group_on_error,
+                    reward_normalization_use_std=reward_normalization_use_std,
+                    legacy_reward_normalization=legacy_reward_normalization,
+                )
+                if keep_partial_group_on_error
+                or legacy_reward_normalization
+                or not reward_normalization_use_std
+                else {}
+            ),
         )
 
     def rollout_batch(
@@ -874,6 +888,9 @@ class TrainController:
         group_size: int = 1,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        keep_partial_group_on_error: bool = False,
+        reward_normalization_use_std: bool = True,
+        legacy_reward_normalization: bool = False,
         min_usable_group_size: int = 1,
     ) -> list[dict[str, Any]]:
         return self.rollout.rollout_batch(
@@ -885,6 +902,17 @@ class TrainController:
             min_usable_group_size=min_usable_group_size,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
+            **(
+                dict(
+                    keep_partial_group_on_error=keep_partial_group_on_error,
+                    reward_normalization_use_std=reward_normalization_use_std,
+                    legacy_reward_normalization=legacy_reward_normalization,
+                )
+                if keep_partial_group_on_error
+                or legacy_reward_normalization
+                or not reward_normalization_use_std
+                else {}
+            ),
         )
 
     def _check_rollout_engine_connected(self):
