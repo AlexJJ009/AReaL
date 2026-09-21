@@ -59,6 +59,7 @@ class RLVRWorkflow(RolloutWorkflow):
         | str = default_get_input_ids_fn,
         data_extract_prompt_fn: Callable[[dict[str, Any]], Any]
         | str = default_data_extract_prompt_fn,
+        include_termination: bool = False,
     ):
         self.reward_fn = reward_fn
         self.tokenizer = tokenizer
@@ -69,6 +70,7 @@ class RLVRWorkflow(RolloutWorkflow):
             self.tokenizer = tokenizer
         self.gconfig = gconfig.new_with_stop_and_pad_token_ids(self.tokenizer)
         self.enable_thinking = enable_thinking
+        self.include_termination = include_termination
         if not isinstance(reward_fn, str):
             self.async_reward_fn = AsyncRewardWrapper(reward_fn)
         # Support string paths for get_input_ids_fn
@@ -177,4 +179,13 @@ class RLVRWorkflow(RolloutWorkflow):
             "attention_mask": torch.ones(len(seq), dtype=torch.bool),
             "rewards": torch.tensor(reward, dtype=torch.float32),
         }
+        if self.include_termination:
+            if resp.stop_reason not in ("stop", "length"):
+                raise ValueError(f"Unsupported episode stop reason: {resp.stop_reason}")
+            res["terminated"] = torch.tensor(
+                resp.stop_reason == "stop", dtype=torch.bool
+            )
+            res["truncated"] = torch.tensor(
+                resp.stop_reason == "length", dtype=torch.bool
+            )
         return {k: v.unsqueeze(0) for k, v in res.items()}

@@ -92,7 +92,14 @@ def _step(step):
         "completed_step": step,
         "raw_global_step": step - 1,
         "published_version": step,
-        "metrics": {"ppo_loss": -0.1, "critic/value_loss": 0.2},
+        "metrics": {
+            "ppo_loss": -0.1,
+            "critic/value_loss": 0.2,
+            "ppo_actor/explicit_termination": 1,
+            "ppo_actor/truncated_ratios/avg": 0.0,
+            "ppo_actor/update/n_valid_tokens_in_loss": 2,
+            "ppo_actor/update/n_valid_tokens_in_loss__count": 4,
+        },
         "role_updates": {
             role: {
                 "grad_norm": {"grad_norm": 0.5},
@@ -113,6 +120,8 @@ def _metadata(record):
         "audit_source_key": audit_source_key(record["source_id"]),
         "audit_task_id": record["task_id"],
         "audit_sample_idx": record["sample_idx"],
+        "terminated": not record["truncated"],
+        "truncated": record["truncated"],
     }
 
 
@@ -130,11 +139,49 @@ def _training(evidence, count=5):
         ]
         for step in range(1, count + 1)
     }
-    _write_json(evidence / "resolved-config.json", {"train_dataset": {"batch_size": 1}})
+    _write_json(
+        evidence / "resolved-config.json",
+        {"train_dataset": {"batch_size": 1}, "seed": 42},
+    )
+    order = [f"dapo:{step}" for step in range(1, count + 1)]
+    _write_json(
+        evidence / "epoch-order.json",
+        {
+            "source_ids": order,
+            "seed": 42,
+            "preflight": False,
+            "dataloader_steps": count,
+            "source_id_order_sha256": hashlib.sha256(
+                ("\n".join(order) + "\n").encode()
+            ).hexdigest(),
+        },
+    )
+    _write_json(
+        evidence / "epoch-finished.json",
+        {
+            "train_dataset_rows": count,
+            "expected_steps": count,
+            "preflight": False,
+            "finished_ns": 300,
+        },
+    )
     for step, records in groups.items():
         _write_json(evidence / "steps" / f"{step}.json", _step(step))
         _write_json(
             evidence / "consumed" / f"{step}.json", [_metadata(r) for r in records]
+        )
+        return_path = evidence / "returns" / f"{step}.json"
+        _write_json(
+            return_path,
+            {
+                "passed": True,
+                "step": step,
+                "consumed_sha256": hash_file(evidence / "consumed" / f"{step}.json"),
+            },
+        )
+        _write_json(
+            evidence / "steps" / f"{step}.json",
+            {**_step(step), "returns_audit_sha256": hash_file(return_path)},
         )
     _write_train(evidence, groups)
     return groups
@@ -266,6 +313,49 @@ def test_full_epoch_joins_all_samples_and_keeps_c09_unknown(tmp_path):
     assert not report["passed"]
     assert report["steps"]["1"]["counts"]["response_tokens"] == 8
     assert report["steps"]["1"]["counts"]["mask_evidence"].endswith("contract_only")
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "missing_finish",
+        "preflight",
+        "bad_order_digest",
+        "wrong_seed",
+        "duplicate_order",
+    ],
+)
+def test_full_epoch_requires_finish_and_frozen_order(tmp_path, mutation):
+    _training(tmp_path, count=2)
+    manifest = tmp_path / "manifest.json"
+    _manifest(manifest, 2)
+    _write_jsonl(tmp_path / "samples" / "eval-456.jsonl", _eval_records((0, 2)))
+    path = tmp_path / (
+        "epoch-finished.json"
+        if mutation in ("missing_finish", "preflight")
+        else "epoch-order.json"
+    )
+    data = json.loads(path.read_text())
+    if mutation == "missing_finish":
+        path.unlink()
+    else:
+        if mutation == "preflight":
+            data["preflight"] = True
+        elif mutation == "bad_order_digest":
+            data["source_id_order_sha256"] = "0" * 64
+        elif mutation == "wrong_seed":
+            data["seed"] = 0
+        else:
+            data["source_ids"] = ["dapo:1", "dapo:1"]
+        _write_json(path, data)
+    report = audit_run(tmp_path, manifest_path=manifest)
+    assert not report["passed_without_accelerator_timing"]
+    key = (
+        "epoch_finished_matches_dataset_and_steps"
+        if mutation in ("missing_finish", "preflight")
+        else "epoch_order_is_seeded_dataset_permutation"
+    )
+    assert not _checks(report)[key]["passed"]
 
 
 @pytest.mark.parametrize(
@@ -461,7 +551,18 @@ def test_counts_come_from_consumed_samples_not_metric_substrings_or_prefetch(tmp
     _write_train(tmp_path, {**groups, 99: [prefetch]})
     _write_json(
         tmp_path / "steps" / "1.json",
-        {**_step(1), "metrics": {"some_parser_count": 999, "token_noise": -10}},
+        {
+            **_step(1),
+            "metrics": {
+                **_step(1)["metrics"],
+                "ppo_actor/truncated_ratios/avg": 0.25,
+                "some_parser_count": 999,
+                "token_noise": -10,
+            },
+        },
+    )
+    _write_json(
+        tmp_path / "consumed" / "1.json", [_metadata(record) for record in groups[1]]
     )
     report = audit_run(tmp_path, mode="partial")
     counts = report["steps"]["1"]["counts"]
@@ -605,6 +706,36 @@ def test_step5_supervision_partial_audit_and_external_hashes(tmp_path):
     assert record["step_sha256"] == hash_file(tmp_path / "steps" / "5.json")
     assert record["gpu_overlap_sha256"] == hash_file(gpu)
     assert record["c09_status"] == "verified"
+
+
+def test_step5_accepts_gpu_witness_from_first_supervised_step(tmp_path):
+    _training(tmp_path)
+    gpu = _external_review(tmp_path, step=1)
+    record = make_step5_supervision_record(tmp_path, gpu_overlap_path=gpu)
+    assert record["passed"] and record["step"] == 5
+
+
+@pytest.mark.parametrize("mutation", ["missing", "stale"])
+def test_step5_requires_return_evidence_for_prior_steps(tmp_path, mutation):
+    _training(tmp_path)
+    gpu = _external_review(tmp_path)
+    path = tmp_path / "returns" / "1.json"
+    if mutation == "missing":
+        path.unlink()
+    else:
+        _write_json(path, {"passed": True, "step": 1, "consumed_sha256": "wrong"})
+    with pytest.raises(ValueError, match="return-oracle"):
+        make_step5_supervision_record(tmp_path, gpu_overlap_path=gpu)
+
+
+@pytest.mark.parametrize("mean", [None, 3])
+def test_native_loss_mask_count_must_match_consumed_responses(tmp_path, mean):
+    _training(tmp_path, count=1)
+    step = _step(1)
+    step["metrics"]["ppo_actor/update/n_valid_tokens_in_loss"] = mean
+    _write_json(tmp_path / "steps/1.json", step)
+    report = audit_run(tmp_path, mode="partial")
+    assert not report["passed_without_accelerator_timing"]
 
 
 @pytest.mark.parametrize(

@@ -1,8 +1,12 @@
 # AReaL 单机异步 PPO：全量 DAPO 一轮与前五步验收 PRD
 
-状态：执行协议 v2；用户已要求 PRD/checklist 定稿后直接实施，全部验收通过才完成。独立环境、限定范围 Docker 清理、数据清洗和分组件真实 GPU
+状态：执行协议 v3；用户已要求 PRD/checklist 定稿后直接实施，全部验收通过才完成。独立环境、限定范围 Docker 清理、数据清洗和分组件真实 GPU
 预检已完成，联合预跑与正式实验验收仍在执行。 日期：2026-09-20。原始需求见 [request.txt](request.txt)。本阶段称为“异步 PPO
 qualification”，后续再实现 SAO。
+
+2026-09-21 修订：首个正式运行在第33次联合更新后作废并停止。发现上游按当前 batch padding 宽度推断截断，导致同一终止轨迹的 GAE return
+随同批序列长度变化。原始产物保留用于诊断，不能作为合格 PPO 实验或与修复后的步骤拼接。修正后必须从同一 Base、新 run root、新 candidate SHA
+重新通过前五步监督并完成135步。此前硬件/依赖/数据清洗事实保留；loss 及正式实验验收重新检查。
 
 ## 1. 目标与范围
 
@@ -113,6 +117,14 @@ PPO loss 明确定义为有效 response token 上的 masked mean：
 $L\_{actor}=-\\mathrm{mean}_{mask}\\min(r_t A_t,\\mathrm{clip}(r_t,0.8,1.2)A_t)$，其中
 $r_t=\\exp(\\log\\pi_\\theta-\\log\\pi\_{behavior})$。critic 使用上游 clipped value
 MSE。Prompt/padding 不入 loss；EOS 与被截断尾部的 value/bootstrap 处理须用小张量测试绑定上游实际行为。
+
+终止边界明确约定：使用生成端实际 stop reason 传递逐轨迹 `terminated`/`truncated`
+布尔标记，二者恰有一个为真。本协议将8K上限视为人为截断（time limit），沿用上游预期的 continuation bootstrap 语义。正常 stop/EOS 的
+bootstrap 为0；response 长度截断使用该轨迹真实末尾状态 `V(s_T)`。不得用 padded tensor 宽度、同批最长序列或仅 token
+总长推断。相同轨迹单独运行、追加 padding、与不同长度轨迹混批，其有效 token 的 return 必须一致。当前 gamma=lambda=1 且无 KL，独立
+oracle 为有效响应 token 上 `return = reward + truncated * V(s_T)`；除 CPU
+测试外，原生联合预跑和正式前五步都直接读回真实 critic values/returns/flags 校验这个等式，并核对 consumer 的截断计数等于真实 stop
+reason 计数。
 
 “标准”限定为上述 PPO 目标。异步引入行为策略滞后，不宣称等同于严格 on-policy PPO，也不把 decoupled PPO、DAPO、DIS
 混称为同一方法。AReaL 官方 gsm8k_ppo.yaml 开启了 decoupled loss、重算 logprob、ratio

@@ -7,6 +7,23 @@ import torch
 from areal.trainer.ppo.lambda_fn import GAELambdaContext
 
 
+def _initial_bootstrap(values, seq_no_eos_mask, bootstrap_values):
+    if bootstrap_values is None:
+        return values[:, -1] * seq_no_eos_mask
+    if not isinstance(bootstrap_values, torch.Tensor) or bootstrap_values.shape != (
+        values.shape[0],
+    ):
+        raise ValueError("bootstrap_values must have shape (batch_size,)")
+    if bootstrap_values.device != values.device or not torch.is_floating_point(
+        bootstrap_values
+    ):
+        raise ValueError("bootstrap_values must be floating point on the values device")
+    torch._assert_async(
+        torch.all(torch.isfinite(bootstrap_values)), "bootstrap_values must be finite"
+    )
+    return bootstrap_values
+
+
 def _compute_token_level_gae(
     rewards: torch.Tensor,
     values: torch.Tensor,
@@ -14,12 +31,13 @@ def _compute_token_level_gae(
     seq_no_eos_mask: torch.Tensor,
     discount: float,
     gae_lambda: float | torch.Tensor,
+    bootstrap_values: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute GAE with each generated token treated as one timestep."""
     bs, max_seqlen = rewards.shape
     advantages_reversed = [torch.zeros(bs, dtype=torch.float32, device=values.device)]
     lastgaelam = torch.zeros(bs, dtype=torch.float32, device=values.device)
-    nextvalues = values[:, max_seqlen - 1] * seq_no_eos_mask
+    nextvalues = _initial_bootstrap(values, seq_no_eos_mask, bootstrap_values)
     discounted_lambda = discount * gae_lambda
     for t in reversed(range(max_seqlen - 1)):
         delta = rewards[:, t] + discount * nextvalues - values[:, t]
@@ -87,6 +105,7 @@ def _compute_turn_level_gae(
     seq_no_eos_mask: torch.Tensor,
     discount: float,
     gae_lambda: float | torch.Tensor,
+    bootstrap_values: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute GAE with each generated turn treated as one timestep."""
     _validate_turn_ids(loss_mask, turn_ids)
@@ -130,7 +149,7 @@ def _compute_turn_level_gae(
     )
     lastgaelam = torch.zeros(bs, dtype=torch.float32, device=values.device)
     zero_advantages = torch.zeros_like(lastgaelam)
-    nextvalues = values[:, max_seqlen - 1] * seq_no_eos_mask
+    nextvalues = _initial_bootstrap(values, seq_no_eos_mask, bootstrap_values)
     discounted_lambda = discount * gae_lambda
     # Advantage calculation normally runs over CPU rollout tensors. Avoid
     # iterating over every token slot there when trajectories contain only a

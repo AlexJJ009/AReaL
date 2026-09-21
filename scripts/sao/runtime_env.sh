@@ -15,6 +15,7 @@ export UV_CACHE_DIR="${SAO_ARTIFACT_ROOT}/env/cache/uv"
 export UV_LINK_MODE=copy
 export TMPDIR="${SAO_ARTIFACT_ROOT}/env/tmp"
 export TORCH_EXTENSIONS_DIR="${SAO_ARTIFACT_ROOT}/env/cache/torch-extensions"
+export AREAL_CACHE_DIR="${SAO_ARTIFACT_ROOT}/env/cache/areal"
 export TRITON_CACHE_DIR="${SAO_ARTIFACT_ROOT}/env/cache/triton"
 export XDG_CACHE_HOME="${SAO_ARTIFACT_ROOT}/env/cache/xdg"
 export FLASHINFER_WORKSPACE_BASE="${SAO_ARTIFACT_ROOT}/env/cache/flashinfer"

@@ -106,7 +106,7 @@ def _populate_pre_artifacts(root: Path) -> None:
     _write_text(root / "env/logs/uv-sync-final.log")
     _write_text(root / "env/logs/uv-pip-check.log", "Found 4 incompatibilities\n")
     _write_text(
-        root / "env/logs/candidate-unit-tests.xml",
+        root / "env/logs/candidate-unit-tests-v2.xml",
         '<testsuites><testsuite tests="124" errors="0" failures="0" '
         'skipped="0" /></testsuites>\n',
     )
@@ -142,7 +142,7 @@ def _populate_pre_artifacts(root: Path) -> None:
         },
     )
     _write_json(
-        root / "env/logs/resolved-config-check.json",
+        root / "env/logs/resolved-config-check-v2.json",
         {
             "total_train_epochs": 1,
             "tokenizer_path": model,
@@ -153,6 +153,9 @@ def _populate_pre_artifacts(root: Path) -> None:
             "rollout": {"backend": "sglang:d4p1t1"},
             "sglang": {"model_path": model},
             "actor": {
+                "discount": 1.0,
+                "gae_lambda": 1.0,
+                "gae_timestep_unit": "token",
                 "path": model,
                 "backend": "fsdp:d4p1t1",
                 "recompute_logprob": False,
@@ -204,6 +207,41 @@ def _populate_pre_artifacts(root: Path) -> None:
     )
     _write_text(root / "env/logs/loss-step-tests.xml", "<testsuite />\n")
     _write_text(root / "env/logs/loss-two-rank.log")
+    _write_text(
+        root / "env/logs/termination-contract-tests.xml",
+        '<testsuite tests="21" errors="0" failures="0" skipped="0" />\n',
+    )
+    native = root / "runs/native-preflight-06-termination/evidence"
+    for step in range(1, 4):
+        consumed = native / "consumed" / f"{step}.json"
+        _write_json(
+            consumed,
+            [
+                {"terminated": True, "truncated": False},
+                {"terminated": False, "truncated": True},
+            ],
+        )
+        probe = native / "returns" / f"{step}.json"
+        _write_json(
+            probe,
+            {
+                "passed": True,
+                "step": step,
+                "samples": 2,
+                "tokens": 8,
+                "terminated": 1,
+                "truncated": 1,
+                "consumed_sha256": verify_acceptance.sha256(consumed),
+            },
+        )
+        _write_json(
+            native / "steps" / f"{step}.json",
+            {
+                "completed_step": step,
+                "returns_audit_sha256": verify_acceptance.sha256(probe),
+                "metrics": {"ppo_actor/explicit_termination": 1},
+            },
+        )
 
     data_root = root / "data/ppo-math-v1"
     _write_text(data_root / "train/data-00000-of-00001.arrow", "train")

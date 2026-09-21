@@ -733,6 +733,52 @@ def audit_run(
                 )
         lag_histogram.update(step_lags)
         counts = _completion_counts(joined)
+        metrics = payload.get("metrics") or {}
+        if metrics.get("ppo_actor/explicit_termination") != 1:
+            step_errors.append(
+                {"step": step, "error": "missing_explicit_termination_consumer"}
+            )
+        for row, sample in zip(rows, joined):
+            if not (
+                isinstance(row.get("terminated"), bool)
+                and isinstance(row.get("truncated"), bool)
+                and row["terminated"] != row["truncated"]
+                and row["truncated"] == sample.get("truncated")
+            ):
+                step_errors.append(
+                    {"step": step, "error": "consumed_termination_metadata_mismatch"}
+                )
+        native_truncated = metrics.get("ppo_actor/truncated_ratios/avg")
+        if not _finite_number(native_truncated) or not math.isclose(
+            native_truncated * len(joined), counts["truncated"], rel_tol=0, abs_tol=1e-3
+        ):
+            step_errors.append(
+                {
+                    "step": step,
+                    "error": "native_truncation_count_mismatch",
+                    "observed_ratio": native_truncated,
+                    "expected_count": counts["truncated"],
+                }
+            )
+        mask_mean = metrics.get("ppo_actor/update/n_valid_tokens_in_loss")
+        mask_count = metrics.get("ppo_actor/update/n_valid_tokens_in_loss__count")
+        native_mask_tokens = (
+            mask_mean * mask_count
+            if _finite_number(mask_mean) and _finite_number(mask_count)
+            else None
+        )
+        counts["native_response_mask_tokens"] = native_mask_tokens
+        if native_mask_tokens is None or not math.isclose(
+            native_mask_tokens, counts["response_tokens"], rel_tol=0, abs_tol=0.5
+        ):
+            step_errors.append(
+                {
+                    "step": step,
+                    "error": "native_loss_mask_token_count_mismatch",
+                    "expected": counts["response_tokens"],
+                    "observed": native_mask_tokens,
+                }
+            )
         step_reports[str(step)] = {
             "consumed_records": len(rows),
             "joined_records": len(joined),
@@ -946,15 +992,66 @@ def audit_run(
             unexpected_versions=sorted(actual_versions - expected_versions),
         )
         finished_path = evidence_dir / "epoch-finished.json"
-        if finished_path.exists():
-            finished = read_json(finished_path)
-            _add_check(
-                checks,
-                "epoch_finished_matches_dataset_and_steps",
-                finished.get("train_dataset_rows") == schedule["train_sources"]
-                and finished.get("expected_steps") == schedule["expected_steps"],
-                observed=finished,
-            )
+        finished = read_json(finished_path) if finished_path.exists() else {}
+        _add_check(
+            checks,
+            "epoch_finished_matches_dataset_and_steps",
+            finished.get("train_dataset_rows") == schedule["train_sources"]
+            and finished.get("expected_steps") == schedule["expected_steps"]
+            and finished.get("preflight") is False
+            and _is_int(finished.get("finished_ns"))
+            and finished["finished_ns"] > 0,
+            observed=finished,
+        )
+        order_path = evidence_dir / "epoch-order.json"
+        order = read_json(order_path) if order_path.exists() else {}
+        source_order = order.get("source_ids")
+        valid_order = isinstance(source_order, list) and all(
+            isinstance(source, str) for source in source_order
+        )
+        order_digest = (
+            hashlib.sha256(("\n".join(source_order) + "\n").encode()).hexdigest()
+            if valid_order
+            else None
+        )
+        config_path = evidence_dir / "resolved-config.json"
+        config = read_json(config_path) if config_path.exists() else {}
+        _add_check(
+            checks,
+            "epoch_order_is_seeded_dataset_permutation",
+            valid_order
+            and len(source_order) == len(expected_sources["train"])
+            and set(source_order) == expected_sources["train"]
+            and order.get("source_id_order_sha256") == order_digest
+            and order.get("seed") == config.get("seed") == 42
+            and order.get("dataloader_steps") == schedule["expected_steps"]
+            and order.get("preflight") is False,
+            observed_order_sha256=order_digest,
+            observed_seed=order.get("seed"),
+        )
+        batch_size = schedule["prompt_batch_size"]
+        train_sources = schedule["train_sources"] or 0
+        bad_batch_sizes = [
+            {
+                "step": step,
+                "observed": len(rows),
+                "expected": min(
+                    batch_size, max(train_sources - (step - 1) * batch_size, 0)
+                )
+                * EXPECTED_N,
+            }
+            for step, rows in sorted(consumed.items())
+            if isinstance(rows, list)
+            and len(rows)
+            != min(batch_size, max(train_sources - (step - 1) * batch_size, 0))
+            * EXPECTED_N
+        ]
+        _add_check(
+            checks,
+            "full_epoch_batch_sizes_include_exact_tail",
+            not bad_batch_sizes,
+            errors=bad_batch_sizes,
+        )
 
     passed = all(
         check["passed"]
@@ -1022,7 +1119,12 @@ def make_step5_supervision_record(
         gpu_overlap_path or evidence_dir / "profiler" / "gpu-overlap.json"
     )
     if step == 5:
-        passed, errors = _gpu_overlap_review(gpu_overlap_path, [step_path])
+        # C09 concerns the supervised first-five window, not only step 5.
+        observed_steps = sorted((evidence_dir / "steps").glob("*.json"))
+        observed_steps = [
+            p for p in observed_steps if p.stem.isdigit() and 1 <= int(p.stem) <= step
+        ]
+        passed, errors = _gpu_overlap_review(gpu_overlap_path, observed_steps)
         if not passed:
             raise ValueError(
                 "step5 approval requires external GPU overlap: " + "; ".join(errors)
@@ -1052,6 +1154,25 @@ def make_step5_supervision_record(
         report["c09_status"] != "verified" or hash_file(gpu_overlap_path) != gpu_digest
     ):
         raise ValueError("GPU overlap evidence changed during supervision audit")
+    return_bindings = {}
+    for checked_step in range(1, step + 1):
+        return_path = evidence_dir / "returns" / f"{checked_step}.json"
+        if not return_path.is_file():
+            raise ValueError(
+                "step approval requires actual critic return-oracle evidence"
+            )
+        return_probe = read_json(return_path)
+        step_payload = read_json(evidence_dir / "steps" / f"{checked_step}.json")
+        digest = hash_file(return_path)
+        if (
+            return_probe.get("passed") is not True
+            or return_probe.get("step") != checked_step
+            or step_payload.get("returns_audit_sha256") != digest
+            or return_probe.get("consumed_sha256")
+            != hash_file(evidence_dir / "consumed" / f"{checked_step}.json")
+        ):
+            raise ValueError("critic return-oracle evidence is missing or stale")
+        return_bindings[str(checked_step)] = digest
     record = {
         "passed": True,
         "step": step,
@@ -1062,6 +1183,7 @@ def make_step5_supervision_record(
             check["name"] for check in report["checks"] if check["passed"]
         ],
         "c09_status": report["c09_status"],
+        "return_oracle_sha256": return_bindings,
     }
     if step == 5:
         record.update(

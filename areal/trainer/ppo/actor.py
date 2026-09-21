@@ -250,6 +250,25 @@ class PPOActor:
         attn_mask = data["attention_mask"]
         seqlens = attn_mask.sum(-1).long()
         seq_no_eos_mask = seqlens == attn_mask.shape[1]
+        explicit_termination = "terminated" in data or "truncated" in data
+        if explicit_termination:
+            for name in ("terminated", "truncated"):
+                flag = data.get(name)
+                if (
+                    not isinstance(flag, torch.Tensor)
+                    or flag.dtype != torch.bool
+                    or flag.shape != (bs,)
+                ):
+                    raise ValueError(
+                        f"{name} must be an explicit bool tensor of shape ({bs},)"
+                    )
+                if flag.device != attn_mask.device:
+                    raise ValueError(f"{name} must be on the attention mask device")
+            torch._assert_async(
+                torch.all(data["terminated"] ^ data["truncated"]),
+                "Each episode must be exactly one of terminated or truncated",
+            )
+            seq_no_eos_mask = data["truncated"]
         rewards = -self.kl_ctl * self.kl_estimator(old_logp, ref_logp)
         kl_rewards = rewards.clone()
         # KL rewards at the next token after eos is zero.
@@ -277,6 +296,12 @@ class PPOActor:
             values = torch.zeros_like(rewards)
         else:
             values = data["values"]
+        # A real length cutoff bootstraps from its own final state. EOS is
+        # terminal regardless of padding or the lengths of other trajectories.
+        bootstrap_values = None
+        if explicit_termination:
+            bootstrap_values = values.gather(1, (seqlens - 1).unsqueeze(1)).squeeze(1)
+            bootstrap_values = bootstrap_values * seq_no_eos_mask.to(values.dtype)
         if self._gae_lambda_is_custom:
             gae_lambda = self._compute_gae_lambda(loss_mask, turn_ids)
         else:
@@ -293,6 +318,7 @@ class PPOActor:
                 seq_no_eos_mask=seq_no_eos_mask,
                 discount=self.discount,
                 gae_lambda=gae_lambda,
+                bootstrap_values=bootstrap_values,
             )
             advantages = advantages + gae_kl_rewards
         else:
@@ -303,6 +329,7 @@ class PPOActor:
                 seq_no_eos_mask=seq_no_eos_mask,
                 discount=self.discount,
                 gae_lambda=gae_lambda,
+                bootstrap_values=bootstrap_values,
             )
         data["returns"] = returns
 
@@ -416,15 +443,25 @@ class PPOActor:
 
         prompt_lens = _infer_prompt_lens(data["attention_mask"], data["loss_mask"])
         seq_stats = dict(
-            no_eos_ratios=(seqlens == attn_mask.shape[-1]).float(),
+            no_eos_ratios=(
+                data["truncated"]
+                if "truncated" in data
+                else seqlens == attn_mask.shape[-1]
+            ).float(),
             task_reward=task_reward,
             prompt_len=prompt_lens.float(),
             seq_len=seqlens.float(),
         )
+        if "terminated" in data and "truncated" in data:
+            seq_stats["terminated_ratios"] = data["terminated"].float()
+            seq_stats["truncated_ratios"] = data["truncated"].float()
         stats_tracker.stat(**seq_stats, denominator="n_seqs")
         scalars = dict(
             mask_no_eos_with_zero=self.config.mask_no_eos_with_zero,
             eps_clip=self.config.eps_clip,
+        )
+        scalars["explicit_termination"] = int(
+            "terminated" in data and "truncated" in data
         )
         if self.config.c_clip is not None:
             scalars["c_clip"] = self.config.c_clip

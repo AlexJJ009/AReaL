@@ -39,6 +39,7 @@ class AuditedMathWorkflow(RLVRWorkflow):
         reward_fn = kwargs["reward_fn"]
         if isinstance(reward_fn, str):
             kwargs["reward_fn"] = import_from_string(reward_fn)
+        kwargs["include_termination"] = True
         super().__init__(**kwargs)
         self.async_reward_fn = AsyncRewardWrapper(
             self.reward_fn,

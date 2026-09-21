@@ -127,7 +127,7 @@ def check_c02(ev: Evidence, req: str) -> dict[str, Any]:
         "env/logs/uv-pip-check.log",
         "env/logs/dependency-overrides.json",
         "env/logs/kernel-parity-final-runtime.json",
-        "env/logs/candidate-unit-tests.xml",
+        "env/logs/candidate-unit-tests-v2.xml",
     ]
     overrides, _ = ev.json(paths[2])
     kernel, _ = ev.json(paths[3])
@@ -157,7 +157,7 @@ def check_c02(ev: Evidence, req: str) -> dict[str, Any]:
         reasons.append("kernel forward/backward parity evidence did not pass")
     junit = _junit_summary(Path(unit_item["path"])) if unit_item["exists"] else None
     if not junit:
-        reasons.append("candidate-unit-tests.xml is missing or invalid")
+        reasons.append("candidate-unit-tests-v2.xml is missing or invalid")
     elif junit["errors"] != 0 or junit["failures"] != 0 or junit["tests"] < 124:
         reasons.append("candidate unit tests did not record 124 passing CPU tests")
     return item_result(
@@ -248,7 +248,7 @@ def _kernel_passed(data: Any, expected_names: set[str]) -> bool:
 
 def check_c04(ev: Evidence, req: str) -> dict[str, Any]:
     paths = [
-        "env/logs/resolved-config-check.json",
+        "env/logs/resolved-config-check-v2.json",
         "preflight/logprob-parity.json",
         "sglang-preflight/runtime-v4.json",
     ]
@@ -393,7 +393,7 @@ def check_c06(ev: Evidence, req: str) -> dict[str, Any]:
 
 
 def check_c07(ev: Evidence, req: str) -> dict[str, Any]:
-    path = "env/logs/resolved-config-check.json"
+    path = "env/logs/resolved-config-check-v2.json"
     config, _ = ev.json(path)
     reasons = []
     observed: dict[str, Any] = {}
@@ -417,6 +417,12 @@ def check_c07(ev: Evidence, req: str) -> dict[str, Any]:
             },
         }
         expectations = [
+            (actor.get("discount") == 1.0, "actor.discount is not 1"),
+            (actor.get("gae_lambda") == 1.0, "actor.gae_lambda is not 1"),
+            (
+                actor.get("gae_timestep_unit") == "token",
+                "actor.gae_timestep_unit is not token",
+            ),
             (config.get("total_train_epochs") == 1, "total_train_epochs is not 1"),
             (
                 (config.get("train_dataset") or {}).get("batch_size") == 128,
@@ -463,7 +469,7 @@ def check_c07(ev: Evidence, req: str) -> dict[str, Any]:
 def check_c08(ev: Evidence, req: str) -> dict[str, Any]:
     paths = [
         "env/logs/nccl-eight-gpu.json",
-        "env/logs/resolved-config-check.json",
+        "env/logs/resolved-config-check-v2.json",
     ]
     nccl, _ = ev.json(paths[0])
     config, _ = ev.json(paths[1])
@@ -548,6 +554,57 @@ def check_c17(ev: Evidence, req: str) -> dict[str, Any]:
         data, _ = ev.json(path)
         if not _profiled_update(data):
             reasons.append(f"{label} measured update evidence missing or invalid")
+    termination_tests = "env/logs/termination-contract-tests.xml"
+    paths.append(termination_tests)
+    junit = (
+        _junit_summary(ev.path(termination_tests))
+        if ev.path(termination_tests).is_file()
+        else None
+    )
+    if (
+        not junit
+        or junit["tests"] < 1
+        or any(junit[key] for key in ("errors", "failures", "skipped"))
+    ):
+        reasons.append(
+            "explicit termination and padding-invariance tests missing or failed"
+        )
+    native_root = Path("runs/native-preflight-06-termination/evidence")
+    total_terminal = total_truncated = 0
+    for step in range(1, 4):
+        return_path = native_root / "returns" / f"{step}.json"
+        step_path = native_root / "steps" / f"{step}.json"
+        consumed_path = native_root / "consumed" / f"{step}.json"
+        paths.extend([return_path, step_path, consumed_path])
+        probe, probe_binding = ev.json(return_path)
+        update, _ = ev.json(step_path)
+        consumed, consumed_binding = ev.json(consumed_path)
+        if (
+            not isinstance(probe, dict)
+            or not isinstance(update, dict)
+            or not isinstance(consumed, list)
+        ):
+            reasons.append(f"native step{step} termination/return evidence missing")
+            continue
+        if (
+            probe.get("passed") is not True
+            or probe.get("step") != step
+            or probe.get("samples") != len(consumed)
+            or not is_finite_positive(probe.get("tokens"))
+            or probe.get("consumed_sha256") != consumed_binding.get("sha256")
+            or update.get("returns_audit_sha256") != probe_binding.get("sha256")
+            or update.get("completed_step") != step
+            or update.get("metrics", {}).get("ppo_actor/explicit_termination") != 1
+        ):
+            reasons.append(
+                f"native step{step} termination/return evidence invalid or stale"
+            )
+        total_terminal += probe.get("terminated", 0)
+        total_truncated += probe.get("truncated", 0)
+    if not total_terminal or not total_truncated:
+        reasons.append(
+            "native return oracle must cover both real terminal and length-truncated responses"
+        )
     return item_result(
         "C17",
         req,

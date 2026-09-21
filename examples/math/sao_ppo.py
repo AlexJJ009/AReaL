@@ -28,6 +28,11 @@ logger = logging.getLogger("SaoPpo")
 
 def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
     expected = {
+        "actor.discount": (config.actor.discount, 1.0),
+        "actor.gae_lambda": (config.actor.gae_lambda, 1.0),
+        "actor.gae_timestep_unit": (config.actor.gae_timestep_unit, "token"),
+        "actor.reward_scaling": (config.actor.reward_scaling, 1.0),
+        "actor.reward_bias": (config.actor.reward_bias, 0.0),
         "actor.use_decoupled_loss": (config.actor.use_decoupled_loss, False),
         "actor.recompute_logprob": (config.actor.recompute_logprob, False),
         "actor.rejection_sampling": (config.actor.rejection_sampling, None),
@@ -159,11 +164,13 @@ def verify_published_policy(trainer, evidence: Path, step: int) -> None:
                 "max_abs_error": diff.max().item(),
             }
         )
-        torch.testing.assert_close(a, b, rtol=0, atol=0.15)
+    passed = all(row["max_abs_error"] <= 0.15 for row in rows)
     (evidence / f"published-policy-{step}.json").write_text(
         json.dumps(
             {
-                "passed": True,
+                "passed": passed,
+                "atol": 0.15,
+                "rtol": 0.0,
                 "version": trainer.rollout.get_version(),
                 "token_ids": ids,
                 "scored_token_ids": ids[-target_len:],
@@ -173,6 +180,10 @@ def verify_published_policy(trainer, evidence: Path, step: int) -> None:
         )
         + "\n"
     )
+    if not passed:
+        raise RuntimeError(
+            f"Published policy logprob parity failed; evidence={evidence / f'published-policy-{step}.json'}"
+        )
 
 
 def split_trajectory_groups(batch: list[dict]) -> list[dict]:
@@ -192,6 +203,44 @@ def split_trajectory_groups(batch: list[dict]) -> list[dict]:
     return individual
 
 
+def verify_episodic_returns(groups: list[dict]) -> dict:
+    """Independent gamma=lambda=1 reward-to-go oracle for real PPO tensors."""
+    samples = terminated = truncated = tokens = 0
+    max_error = 0.0
+    for group in groups:
+        values = group["values"].float()
+        lengths = group["attention_mask"].sum(-1).long()
+        terminal = group["terminated"].bool()
+        cutoff = group["truncated"].bool()
+        if not torch.all(terminal ^ cutoff):
+            raise RuntimeError("Invalid episode termination flags in return probe")
+        bootstrap = values.gather(1, (lengths - 1).unsqueeze(1)).squeeze(1) * cutoff
+        expected = (group["rewards"].float() + bootstrap).unsqueeze(1)
+        mask = group["loss_mask"].bool()
+        actual = group["returns"].float()
+        torch.testing.assert_close(
+            actual[mask], expected.expand_as(actual)[mask], rtol=1e-4, atol=2e-4
+        )
+        max_error = max(max_error, float((actual - expected).abs()[mask].max()))
+        samples += values.shape[0]
+        terminated += int(terminal.sum())
+        truncated += int(cutoff.sum())
+        tokens += int(mask.sum())
+    if not samples or not tokens:
+        raise RuntimeError("Return probe has no valid samples/tokens")
+    return {
+        "passed": True,
+        "samples": samples,
+        "terminated": terminated,
+        "truncated": truncated,
+        "tokens": tokens,
+        "max_abs_error": max_error,
+        "rtol": 1e-4,
+        "atol": 2e-4,
+        "oracle": "gamma=lambda=1: reward + truncated * V(real final token)",
+    }
+
+
 def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> None:
     """Keep native PPO execution; record consumed IDs and completed RPC spans."""
     consumed_dir = evidence / "consumed"
@@ -208,7 +257,13 @@ def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> 
         batch = original_prepare(*args, **kwargs)
         state["step"] += 1
         state["spans"] = []
-        keys = ("audit_source_key", "audit_task_id", "audit_sample_idx")
+        keys = (
+            "audit_source_key",
+            "audit_task_id",
+            "audit_sample_idx",
+            "terminated",
+            "truncated",
+        )
         metadata = RTensor.localize([{k: item[k] for k in keys} for item in batch])
         records = []
         for group in metadata:
@@ -228,6 +283,36 @@ def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> 
         return batch
 
     trainer.actor.prepare_batch = prepare
+    original_advantages = trainer.actor.compute_advantages
+
+    def advantages(*args, **kwargs):
+        result = original_advantages(*args, **kwargs)
+        if preflight or state["step"] <= 5:
+            keys = (
+                "values",
+                "returns",
+                "rewards",
+                "loss_mask",
+                "attention_mask",
+                "terminated",
+                "truncated",
+            )
+            local = RTensor.localize(
+                [{key: group[key] for key in keys} for group in result]
+            )
+            report = verify_episodic_returns(local)
+            report["step"] = state["step"]
+            report["consumed_sha256"] = hashlib.sha256(
+                (consumed_dir / f"{state['step']}.json").read_bytes()
+            ).hexdigest()
+            path = evidence / "returns"
+            path.mkdir(exist_ok=True)
+            (path / f"{state['step']}.json").write_text(
+                json.dumps(report, indent=2) + "\n"
+            )
+        return result
+
+    trainer.actor.compute_advantages = advantages
     for role in ("actor", "critic"):
         engine = getattr(trainer, role)
         original_update = engine.ppo_update
@@ -265,6 +350,10 @@ def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> 
     def commit(epoch, step, global_step, data):
         completed_step = global_step + 1
         roles = check_step_metrics(data, completed_step, completed_step - start_step)
+        if data.get("ppo_actor/explicit_termination") != 1:
+            raise RuntimeError(
+                "PPO update did not consume explicit episode termination metadata"
+            )
         step_dir = evidence / "steps"
         step_dir.mkdir(exist_ok=True)
         payload = {
@@ -278,6 +367,11 @@ def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> 
             "published_version": trainer.rollout.get_version(),
             "metrics": data,
         }
+        if preflight or completed_step <= 5:
+            return_path = evidence / "returns" / f"{completed_step}.json"
+            payload["returns_audit_sha256"] = hashlib.sha256(
+                return_path.read_bytes()
+            ).hexdigest()
         if payload["published_version"] != completed_step:
             raise RuntimeError(
                 "Rollout version was not published after the joint update"
@@ -390,6 +484,8 @@ def main(args: list[str]) -> None:
             + "\n"
         )
         install_audit_hooks(trainer, evidence, preflight=preflight)
+        if preflight and trainer.recover_info is None:
+            verify_published_policy(trainer, evidence, 0)
         if config.evaluator.eval_before_train and trainer.recover_info is None:
             # Consume only the initial trigger; do not advance step20 cadence.
             trainer.evaluator.freq_ctl.check(epochs=0, steps=0)
