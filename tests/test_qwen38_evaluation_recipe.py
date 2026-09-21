@@ -4,7 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from examples.swe.qwen38_flash_next.train_rl import validate_evaluation_only
+from examples.swe.qwen38_flash_next.train_rl import (
+    select_evaluation_rows,
+    validate_evaluation_only,
+)
 
 
 def evaluation_config():
@@ -53,3 +56,33 @@ def test_evaluation_empty_selection_rejected():
 
     with pytest.raises(ValueError, match="selected task count"):
         validate_evaluation_only(config, [])
+
+
+def test_evaluation_pins_historical_version_and_preserves_stream_routing():
+    rows = [
+        {"data_id": "env:a@new", "stream_id": "stream", "arena_task_type": "swe"},
+        {"data_id": "env:b@v1", "stream_id": "stream", "arena_task_type": "swe"},
+    ]
+
+    selected = select_evaluation_rows(rows, ["env:b@v1", "env:a@old"])
+
+    assert [row["data_id"] for row in selected] == ["env:b@v1", "env:a@old"]
+    assert all(row["stream_id"] == "stream" for row in selected)
+    assert all(row["arena_task_type"] == "swe" for row in selected)
+    assert rows[0]["data_id"] == "env:a@new"
+
+
+@pytest.mark.parametrize(
+    "selected",
+    [[], ["env:missing@v1"], ["env:a@v1", "env:a@v2"], ["env:a"], ["env:a@"]],
+)
+def test_evaluation_invalid_or_unrelated_selection_rejected(selected):
+    with pytest.raises(ValueError):
+        select_evaluation_rows([{"data_id": "env:a@new"}], selected)
+
+
+def test_evaluation_ambiguous_source_rejected():
+    with pytest.raises(ValueError, match="unique environment keys"):
+        select_evaluation_rows(
+            [{"data_id": "env:a@v1"}, {"data_id": "env:a@v2"}], ["env:a@old"]
+        )

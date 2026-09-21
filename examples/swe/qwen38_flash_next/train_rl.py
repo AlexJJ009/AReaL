@@ -65,6 +65,41 @@ def select_task_indices(data_ids, selected):
     return [positions[key] for key in selected]
 
 
+def select_evaluation_rows(rows: list[dict], selected: list[str]) -> list[dict]:
+    """Pin explicit versions while retaining stream routing for the same env keys."""
+    select_task_indices(selected, selected)
+
+    def env_key(data_id: str) -> str:
+        if not isinstance(data_id, str) or not data_id.startswith("env:"):
+            raise ValueError(
+                "Evaluation task IDs must be explicit env:key@version refs"
+            )
+        parts = data_id[4:].split("@")
+        if len(parts) != 2 or not all(parts):
+            raise ValueError(
+                "Evaluation task IDs must be explicit env:key@version refs"
+            )
+        return parts[0]
+
+    source = {}
+    for row in rows:
+        key = env_key(row["data_id"])
+        if key in source:
+            raise ValueError("Evaluation source must contain unique environment keys")
+        source[key] = row
+    selected_keys = [env_key(data_id) for data_id in selected]
+    if len(set(selected_keys)) != len(selected_keys):
+        raise ValueError("Evaluation selection must contain unique environment keys")
+    if any(key not in source for key in selected_keys):
+        raise ValueError(
+            "Evaluation selection contains environments absent from stream"
+        )
+    return [
+        {**source[key], "data_id": data_id}
+        for key, data_id in zip(selected_keys, selected, strict=True)
+    ]
+
+
 def configure_training_rpc(scheduler):
     """Allow cold 256K steps without replaying a timed-out optimizer update."""
     original = scheduler.async_call_engine
@@ -124,9 +159,16 @@ def main(profile, args):
             if len(streams) != 1:
                 raise ValueError("Task selection requires exactly one Arena stream")
             selected = json.loads(Path(selection_file).read_text())
-            dataset = dataset.select(
-                select_task_indices(list(dataset["data_id"]), selected)
-            )
+            if evaluation_only:
+                from datasets import Dataset
+
+                dataset = Dataset.from_list(
+                    select_evaluation_rows(list(dataset), selected)
+                )
+            else:
+                dataset = dataset.select(
+                    select_task_indices(list(dataset["data_id"]), selected)
+                )
             if len(dataset) < config.train_dataset.batch_size:
                 raise ValueError(
                     "Task selection must contain at least one training batch"
