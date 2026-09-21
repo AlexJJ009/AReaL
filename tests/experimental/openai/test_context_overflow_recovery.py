@@ -447,3 +447,54 @@ async def test_episode_metadata_preserves_export_and_reward(
     assert metadata["existing"] == "kept"
     assert metadata["session_id"] == "session-1"
     assert metadata.get("arena_task_id") == (None if metadata_error else "task-a")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reason", ["upstream_api_error", "stream_abort:MessageParseError"]
+)
+async def test_response_failure_is_not_zeroed_or_exported(monkeypatch, reason):
+    from examples.swe.arena_agent import ArenaStreamAgentWorkflow
+    from examples.swe.arena_client import ArenaTaskFailedError, ArenaTaskResult
+
+    error = ArenaTaskFailedError(
+        task_id="task-1",
+        status="HARNESS_FAILED",
+        result=ArenaTaskResult(
+            task_id="task-1",
+            status="HARNESS_FAILED",
+            score=None,
+            raw={"error": f"GAMEAGENT_OUTCOME_CODE=LLM_RESPONSE_FAILED {reason}"},
+        ),
+    )
+
+    class Agent:
+        classify_proxy_failure = staticmethod(
+            ArenaStreamAgentWorkflow.classify_proxy_failure
+        )
+
+        async def run(self, data, **kwargs):
+            raise error
+
+    client = _FakeProxyClient(interaction_count=13)
+    client.context_overflow = False
+    client.set_last_reward = AsyncMock()
+    client.export_interactions = AsyncMock(return_value={})
+    monkeypatch.setattr(
+        workflow_module, "OpenAIProxyClient", lambda *args, **kwargs: client
+    )
+    workflow = OpenAIProxyWorkflow(mode="inline", agent=Agent())
+    monkeypatch.setattr(workflow, "_grant_capacity", AsyncMock())
+    monkeypatch.setattr(
+        workflow_context, "get_aiohttp_session", AsyncMock(return_value=object())
+    )
+    workflow_context.set(WorkflowContext(task_id=1))
+    try:
+        with pytest.raises(ArenaTaskFailedError) as caught:
+            await workflow.arun_episode(None, {})
+        assert caught.value is error
+    finally:
+        workflow_context.set(WorkflowContext())
+        stats_tracker.export_all(reset=True)
+    client.set_last_reward.assert_not_awaited()
+    client.export_interactions.assert_not_awaited()
