@@ -287,3 +287,32 @@ def test_image_groups_cannot_consume_each_others_grid_tokens(qwen_config):
     }
     with pytest.raises(ValueError, match="does not match modality token groups"):
         prepare_qwen4_exp_mrope_inputs(inputs, qwen_config)
+
+
+@pytest.mark.parametrize("language_model_only", [False, True])
+@pytest.mark.parametrize("modality", ["image", "video"])
+def test_generated_special_token_without_pixels_remains_text(
+    qwen_config, language_model_only, modality
+):
+    special = getattr(qwen_config, f"{modality}_token_id")
+    inputs = {
+        "input_ids": torch.tensor([[10, 11, special, 12]]),
+        "attention_mask": torch.ones(1, 4, dtype=torch.bool),
+        "loss_mask": torch.tensor([[0, 0, 1, 1]]),
+        "mm_token_type_ids": torch.zeros(1, 4, dtype=torch.long),
+    }
+    result = prepare_qwen4_exp_mrope_inputs(
+        inputs, qwen_config, language_model_only=language_model_only
+    )
+    assert "position_ids" not in result
+    torch.testing.assert_close(result["input_ids"], inputs["input_ids"], rtol=0, atol=0)
+
+
+def test_prompt_placeholder_without_pixels_still_rejected(qwen_config):
+    inputs = {
+        "input_ids": torch.tensor([[qwen_config.image_token_id, 10]]),
+        "attention_mask": torch.ones(1, 2, dtype=torch.bool),
+        "loss_mask": torch.tensor([[0, 1]]),
+    }
+    with pytest.raises(ValueError, match="language_model_only"):
+        prepare_qwen4_exp_mrope_inputs(inputs, qwen_config, language_model_only=True)

@@ -44,7 +44,7 @@ def test_wire_roundtrip_and_exact_exclusion_keep_frozen_qsa(contract):
     [
         {"freeze_ple_table": False},
         {"language_model_only": False},
-        {"schema_version": 2},
+        {"schema_version": 3},
         {"schema_version": True},
         {"checkpoint_manifest_sha256": "not-a-hash"},
         {"ple_table_names": frozenset({QSA})},
@@ -322,3 +322,118 @@ def test_sglang_binding_requires_preservation_and_checks_live_parameters(install
     with pytest.raises(ValueError, match="visual parameters differ"):
         converter.refresh_frozen_contract()
     assert getattr(converter, "_qwen4_frozen_contract", None) is None
+
+
+def test_vision_contract_requires_explicit_ownership_and_frozen_parameters(contract):
+    vision = replace(contract, schema_version=2, language_model_only=False)
+    assert Qwen4ExpFrozenContract.from_dict(vision.to_dict()) == vision
+    assert vision.excludes(VISUAL, "actor")
+    assert vision.excludes(VISUAL, "inference")
+    parameters = {VISUAL: table()}
+    vision.validate_actor_parameters(parameters, frozenset(), frozenset({VISUAL}))
+    vision.validate_actor_parameters({}, frozenset(), frozenset())
+    with pytest.raises(ValueError, match="ownership"):
+        vision.validate_actor_parameters(parameters, frozenset())
+    with pytest.raises(ValueError, match="ownership"):
+        vision.validate_actor_parameters({}, frozenset(), frozenset({VISUAL}))
+    parameters[VISUAL].requires_grad_(True)
+    with pytest.raises(ValueError, match="trainable"):
+        vision.validate_actor_parameters(parameters, frozenset(), frozenset({VISUAL}))
+    with pytest.raises(TypeError, match="original"):
+        vision.validate_actor_parameters(
+            {VISUAL: parameters[VISUAL].detach()}, frozenset(), frozenset({VISUAL})
+        )
+
+
+def _vision_binding(tmp_path, *, pp_rank=0):
+    import json
+
+    from safetensors.torch import save_file
+
+    engine, converter, old_binder = setup_binding()
+    chunk = engine.model[0]
+    chunk.pre_process = pp_rank == 0
+    contract = replace(old_binder.contract, language_model_only=False, schema_version=2)
+    engine.mcore_config.language_model_only = False
+    converter.rank_info.pp_rank = pp_rank
+    if pp_rank == 0:
+        chunk.visual = nn.Module()
+        chunk.visual.visual = nn.Linear(2, 3, bias=False, dtype=torch.bfloat16)
+        chunk.visual.requires_grad_(False)
+        chunk.visual.visual.weight.data.fill_(1)
+    engine.config = SimpleNamespace(path=str(tmp_path))
+    save_file(
+        {"model.visual.weight": torch.ones(3, 2, dtype=torch.bfloat16)},
+        tmp_path / "vision.safetensors",
+    )
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"model.visual.weight": "vision.safetensors"}})
+    )
+    return engine, converter, McoreFrozenBinder(engine, contract)
+
+
+@pytest.mark.parametrize("pp_rank", [0, 1, 3])
+def test_vision_binding_and_converter_respect_pp_ownership(tmp_path, pp_rank):
+    engine, converter, binder = _vision_binding(tmp_path, pp_rank=pp_rank)
+    binder(converter)
+    expected = frozenset({"model.visual.weight"}) if pp_rank == 0 else frozenset()
+    assert converter._qwen4_local_visual_names == expected
+    if pp_rank == 0:
+        original = engine.model[0].visual.visual.weight
+        assert converter._qwen4_original_parameters["model.visual.weight"] is original
+        assert (
+            converter.convert_param("module.visual.visual.weight", original.detach())
+            == []
+        )
+        original.requires_grad_(True)
+        with pytest.raises(ValueError, match="trainable"):
+            converter.convert_param("module.visual.visual.weight", original.detach())
+    else:
+        with pytest.raises(ValueError, match="not owned"):
+            converter.convert_param("visual.visual.weight", torch.ones(3, 2))
+
+
+@pytest.mark.parametrize(
+    "fault", ["missing", "extra", "shape", "values", "trainable", "owner", "mode"]
+)
+def test_vision_binding_rejects_invalid_live_state(tmp_path, fault):
+    engine, converter, binder = _vision_binding(tmp_path)
+    chunk = engine.model[0]
+    if fault == "missing":
+        chunk.visual = None
+    elif fault == "extra":
+        chunk.visual.visual.register_parameter("unknown", table())
+    elif fault == "shape":
+        chunk.visual.visual.weight = nn.Parameter(
+            torch.ones(2, 2, dtype=torch.bfloat16), requires_grad=False
+        )
+    elif fault == "values":
+        chunk.visual.visual.weight.data.zero_()
+    elif fault == "trainable":
+        chunk.visual.visual.requires_grad_(True)
+    elif fault == "owner":
+        chunk.pre_process = False
+    else:
+        engine.mcore_config.language_model_only = True
+    with pytest.raises(ValueError):
+        binder(converter)
+
+
+def test_vision_qkv_identity_matches_inference_contract(contract):
+    from areal.models.mcore.qwen4_exp_awex_contract import mcore_visual_parameter_name
+
+    target = "model.visual.blocks.0.attn.qkv_proj.weight"
+    vision = replace(
+        contract,
+        schema_version=2,
+        language_model_only=False,
+        visual_parameter_names=frozenset({target}),
+    )
+    assert (
+        mcore_visual_parameter_name(
+            "module.module.visual.visual.blocks.0.attn.qkv.weight", vision
+        )
+        == target
+    )
+    with pytest.raises(ValueError, match="Unsupported"):
+        mcore_visual_parameter_name("vision_model.blocks.0.attn.qkv.weight", vision)

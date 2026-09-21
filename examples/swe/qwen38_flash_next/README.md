@@ -50,3 +50,22 @@ inputs. Received values matched exactly; training allocator settings, live expan
 storage and backward gradients were preserved. Exception restoration also passed, and
 allocated memory after cleanup stayed constant. This validates IPC, not ten SWE training
 steps: the full training/rollout quality comparison still requires completion.
+
+## Vision RL
+
+For the Qwen4Exp ModelScope bridge, set `actor.megatron.language_model_only: false`,
+`sglang.enable_multimodal: true`, and `sglang.skip_tokenizer_init: true`. Use the OpenAI
+chat-completions proxy with base64 image inputs and processor-produced modality IDs. The
+Qwen4Exp `WRAPPER_THD` path supports the chunked LM head: it preserves the visual
+forward and mRoPE preparation while bypassing only the language output projection.
+
+Vision actors require frozen-contract schema 2 with `language_model_only: false`. Both
+sides load the same checkpoint. The actor keeps the HF visual tower frozen on PP0's
+first virtual stage; AWEX excludes it on both sides and preserves the receiver's visual
+state across offload/resume. Before the first exchange, the binder compares actor visual
+values and shapes with the checkpoint. Every exchange validates the live original
+parameters, frozen state, and ownership. Schema 1 remains text-only.
+
+A reduced random Qwen4Exp with actual image processing and visual forward passed
+chunk/full loss and gradient comparisons at CP1 and CP2 on 2026-09-21. This is a
+numerical qualification, not evidence of full-model RL quality or benchmark parity.

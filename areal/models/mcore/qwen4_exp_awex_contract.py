@@ -20,6 +20,20 @@ import torch
 from torch import nn
 
 
+def mcore_visual_parameter_name(name: str, contract: "Qwen4ExpFrozenContract") -> str:
+    """Map the replicated ModelScope HF vision tower to receiver identities."""
+    while name.startswith("module."):
+        name = name[len("module.") :]
+    if not name.startswith("visual.visual."):
+        raise ValueError(f"Unsupported Qwen4Exp actor visual parameter: {name}")
+    canonical = "model.visual." + name[len("visual.visual.") :]
+    if canonical not in contract.visual_parameter_names:
+        canonical = canonical.replace(".attn.qkv.", ".attn.qkv_proj.")
+    if canonical not in contract.visual_parameter_names:
+        raise ValueError(f"Actor visual parameter is outside frozen contract: {name}")
+    return canonical
+
+
 @dataclass(frozen=True)
 class Qwen4ExpFrozenContract:
     checkpoint_manifest_sha256: str
@@ -30,10 +44,17 @@ class Qwen4ExpFrozenContract:
     schema_version: int = 1
 
     def __post_init__(self) -> None:
-        if type(self.schema_version) is not int or self.schema_version != 1:
+        if type(self.schema_version) is not int or self.schema_version not in (1, 2):
             raise ValueError("Unsupported Qwen4Exp frozen contract schema")
-        if self.language_model_only is not True or self.freeze_ple_table is not True:
-            raise ValueError("Frozen exclusions require language-only and frozen PLE")
+        if (
+            type(self.language_model_only) is not bool
+            or self.freeze_ple_table is not True
+        ):
+            raise ValueError(
+                "Frozen exclusions require an explicit model mode and frozen PLE"
+            )
+        if self.schema_version == 1 and not self.language_model_only:
+            raise ValueError("Vision actors require frozen contract schema 2")
         if not re.fullmatch(r"[0-9a-f]{64}", self.checkpoint_manifest_sha256):
             raise ValueError("Expected a SHA256 checkpoint manifest identity")
         for names in (self.ple_table_names, self.visual_parameter_names):
@@ -89,7 +110,8 @@ class Qwen4ExpFrozenContract:
         if side not in ("actor", "inference"):
             raise ValueError(f"Unknown contract side: {side}")
         return name in self.ple_table_names or (
-            side == "inference" and name in self.visual_parameter_names
+            (side == "inference" or not self.language_model_only)
+            and name in self.visual_parameter_names
         )
 
     @staticmethod
@@ -107,6 +129,7 @@ class Qwen4ExpFrozenContract:
         self,
         parameters: Mapping[str, nn.Parameter],
         local_table_names: frozenset[str],
+        local_visual_names: frozenset[str] | None = None,
     ) -> None:
         """Validate canonical original parameters on this PP stage, before detach.
 
@@ -115,10 +138,28 @@ class Qwen4ExpFrozenContract:
         """
         if not local_table_names <= self.ple_table_names:
             raise ValueError("Local PLE ownership is outside the frozen contract")
-        if any(name.startswith("model.visual.") for name in parameters):
+        observed_visual = frozenset(
+            n for n in parameters if n.startswith("model.visual.")
+        )
+        if self.language_model_only and observed_visual:
             raise ValueError(
                 "Language-only actor unexpectedly contains visual parameters"
             )
+        if not self.language_model_only:
+            if local_visual_names not in (frozenset(), self.visual_parameter_names):
+                raise ValueError("Explicit complete local visual ownership is required")
+            if observed_visual != local_visual_names:
+                raise ValueError("Actor visual parameters do not match local ownership")
+            for name in observed_visual:
+                parameter = parameters[name]
+                if not isinstance(parameter, nn.Parameter):
+                    raise TypeError(
+                        f"Validate original visual Parameter, not detached tensor: {name}"
+                    )
+                if parameter.requires_grad:
+                    raise ValueError(f"Frozen visual parameter is trainable: {name}")
+                if parameter.dtype != torch.bfloat16:
+                    raise ValueError(f"Expected BF16 frozen visual parameter: {name}")
         observed = {name for name in parameters if ".ple_embedding." in name}
         if observed != local_table_names:
             raise ValueError(

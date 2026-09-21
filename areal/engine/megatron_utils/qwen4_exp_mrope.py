@@ -60,11 +60,27 @@ def prepare_qwen4_exp_mrope_inputs(
         (input_ids == hf_config.image_token_id)
         | (input_ids == hf_config.video_token_id)
     ) & attention_mask
-    has_vision = bool(vision_tokens.any()) or any(
-        item.get(key) is not None
-        and (not torch.is_tensor(item[key]) or item[key].numel() > 0)
-        for item in samples
-        for key in _VISION_KEYS
+    # Generated special tokens are text, not evidence of image/video payloads.
+    # Only the rollout loss mask can establish this provenance; unmarked prompt
+    # placeholders still trigger the strict payload validation below.
+    loss_mask = data.get("loss_mask")
+    if loss_mask is not None:
+        if loss_mask.shape != input_ids.shape:
+            raise ValueError("loss_mask must have the same [B, S] shape as input_ids.")
+        vision_tokens = vision_tokens & ~loss_mask.to(
+            device=input_ids.device, dtype=torch.bool
+        )
+    token_types = data.get("mm_token_type_ids")
+    has_typed_vision = token_types is not None and bool((token_types != 0).any())
+    has_vision = (
+        has_typed_vision
+        or bool(vision_tokens.any())
+        or any(
+            item.get(key) is not None
+            and (not torch.is_tensor(item[key]) or item[key].numel() > 0)
+            for item in samples
+            for key in _VISION_KEYS
+        )
     )
     if not has_vision:
         return result

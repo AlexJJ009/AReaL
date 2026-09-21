@@ -13,7 +13,10 @@ from functools import cache, lru_cache
 import torch
 from torch import nn
 
-from areal.models.mcore.qwen4_exp_awex_contract import Qwen4ExpFrozenContract
+from areal.models.mcore.qwen4_exp_awex_contract import (
+    Qwen4ExpFrozenContract,
+    mcore_visual_parameter_name,
+)
 from areal.models.mcore.qwen4_exp_awex_layout import (
     Qwen4ExpGDNLayout,
     pack_qwen4_exp_gated_qkv,
@@ -74,6 +77,7 @@ def _refresh_frozen_binding(converter, binder: Callable[[object], None] | None) 
         "_qwen4_frozen_contract",
         "_qwen4_original_parameters",
         "_qwen4_local_table_names",
+        "_qwen4_local_visual_names",
         "_qwen4_preserved_visual_names",
     ):
         converter.__dict__.pop(attribute, None)
@@ -107,11 +111,15 @@ def build_mcore_converter(binder: Callable[[object], None] | None = None):
             contract: Qwen4ExpFrozenContract,
             parameters: Mapping[str, nn.Parameter],
             local_table_names: frozenset[str],
+            local_visual_names: frozenset[str] | None = None,
         ) -> None:
-            contract.validate_actor_parameters(parameters, local_table_names)
+            contract.validate_actor_parameters(
+                parameters, local_table_names, local_visual_names
+            )
             self._qwen4_frozen_contract = contract
             self._qwen4_original_parameters = parameters
             self._qwen4_local_table_names = local_table_names
+            self._qwen4_local_visual_names = local_visual_names
 
         def _convert_attention_param(self, name, parameter, layer_number):
             if name in (
@@ -186,6 +194,21 @@ def build_mcore_converter(binder: Callable[[object], None] | None = None):
         @torch.no_grad()
         def convert_param(self, name, parameter, vp_stage=None):
             clean = name.replace("module.", "")
+            contract = getattr(self, "_qwen4_frozen_contract", None)
+            if clean.startswith("visual."):
+                if contract is None or contract.language_model_only:
+                    raise ValueError(
+                        "Actor visual conversion requires a bound vision contract"
+                    )
+                canonical = mcore_visual_parameter_name(name, contract)
+                contract.validate_actor_parameters(
+                    self._qwen4_original_parameters,
+                    self._qwen4_local_table_names,
+                    self._qwen4_local_visual_names,
+                )
+                if canonical not in self._qwen4_local_visual_names:
+                    raise ValueError(f"Visual parameter is not owned locally: {name}")
+                return []
             if clean.startswith("language_model."):
                 clean = clean[len("language_model.") :]
             if clean.startswith("decoder."):
@@ -204,7 +227,9 @@ def build_mcore_converter(binder: Callable[[object], None] | None = None):
                 contract = getattr(self, "_qwen4_frozen_contract", None)
                 if contract is not None and contract.excludes(canonical, "actor"):
                     contract.validate_actor_parameters(
-                        self._qwen4_original_parameters, self._qwen4_local_table_names
+                        self._qwen4_original_parameters,
+                        self._qwen4_local_table_names,
+                        self._qwen4_local_visual_names,
                     )
                     return []
                 _reject_pending_contract(canonical)

@@ -1417,22 +1417,26 @@ class MegatronEngine(TrainEngine):
             has_vision_inputs = any(
                 _is_multi_modal_payload_key(key) for key in mb_input.padded_mb
             )
-            text_only_wrapper_thd = (
+            qwen4_wrapper_thd = (
                 self.bridge_cls == "mcore-bridge"
                 and self.sequence_packing_mode == SequencePackingMode.WRAPPER_THD
-                and self.mcore_config.language_model_only
+                and self.hf_config.architectures == ["Qwen4ExpForConditionalGeneration"]
             )
-            if use_chunked_lm_head and (
-                has_vision_inputs
-                or (
-                    self.is_vision_model
-                    and not self.use_padded_seq
-                    and not text_only_wrapper_thd
+            # Qwen4Exp's wrapper retains the visual embedding forward while
+            # bypassing only the inner language model's final projection. Its
+            # mRoPE and token masks are prepared before the shared THD/CP split.
+            if (
+                use_chunked_lm_head
+                and not qwen4_wrapper_thd
+                and (
+                    has_vision_inputs
+                    or (self.is_vision_model and not self.use_padded_seq)
                 )
             ):
                 raise NotImplementedError(
-                    "chunked LM Head loss does not support vision inputs; padded "
-                    "BSHD is supported only for text-only models such as Qwen3.5"
+                    "chunked LM Head vision inputs require the Qwen4Exp "
+                    "mcore-bridge WRAPPER_THD path; padded BSHD is supported "
+                    "only for text-only models such as Qwen3.5"
                 )
 
             # MTP training: feed the MTP head independent label and mask

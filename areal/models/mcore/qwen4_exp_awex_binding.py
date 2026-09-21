@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Bind frozen exclusions to live MCore Parameters and actual PP ownership."""
 
+import json
 import os
 import re
 from collections.abc import Callable
@@ -8,9 +9,13 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+import torch
 from torch import nn
 
-from areal.models.mcore.qwen4_exp_awex_contract import Qwen4ExpFrozenContract
+from areal.models.mcore.qwen4_exp_awex_contract import (
+    Qwen4ExpFrozenContract,
+    mcore_visual_parameter_name,
+)
 
 
 class McoreFrozenBinder:
@@ -25,15 +30,64 @@ class McoreFrozenBinder:
     def __init__(self, engine: Any, contract: Qwen4ExpFrozenContract) -> None:
         self.engine = engine
         self.contract = contract
+        self._visual_shapes: dict[str, tuple[int, ...]] | None = None
+
+    def _validate_visual_shapes(self, parameters: dict[str, nn.Parameter]) -> None:
+        """The HF vision tower is replicated, so checkpoint shapes must match."""
+        if self._visual_shapes is None:
+            from safetensors import safe_open
+
+            directory = Path(self.engine.config.path)
+            index = json.loads((directory / "model.safetensors.index.json").read_text())
+            shapes = {}
+            by_shard: dict[str, list[str]] = {}
+            for name, shard in index["weight_map"].items():
+                if name.startswith("model.visual."):
+                    by_shard.setdefault(shard, []).append(name)
+            for shard, names in by_shard.items():
+                with safe_open(
+                    directory / shard, framework="pt", device="cpu"
+                ) as source:
+                    for name in names:
+                        actor_name = "visual.visual." + name[len("model.visual.") :]
+                        canonical = mcore_visual_parameter_name(
+                            actor_name, self.contract
+                        )
+                        if canonical in shapes:
+                            raise ValueError(
+                                f"Duplicate checkpoint visual identity: {canonical}"
+                            )
+                        shapes[canonical] = tuple(source.get_slice(name).get_shape())
+                        parameter = parameters[canonical]
+                        if tuple(parameter.shape) != shapes[canonical]:
+                            raise ValueError(
+                                f"Frozen actor visual shape differs from checkpoint: {canonical}"
+                            )
+                        checkpoint = source.get_tensor(name).to(dtype=parameter.dtype)
+                        if not torch.equal(parameter.detach().cpu(), checkpoint):
+                            raise ValueError(
+                                f"Frozen actor visual values differ from checkpoint: {canonical}"
+                            )
+            if shapes.keys() != self.contract.visual_parameter_names:
+                raise ValueError("Checkpoint visual keys differ from frozen contract")
+            self._visual_shapes = shapes
+        for name, parameter in parameters.items():
+            if (
+                name.startswith("model.visual.")
+                and tuple(parameter.shape) != self._visual_shapes[name]
+            ):
+                raise ValueError(
+                    f"Frozen actor visual shape differs from checkpoint: {name}"
+                )
 
     def __call__(self, converter: Any) -> None:
         config = self.engine.mcore_config
         if (
-            config.language_model_only is not True
+            config.language_model_only is not self.contract.language_model_only
             or config.freeze_ple_table is not True
         ):
             raise ValueError(
-                "Frozen binding requires language-only actor and frozen PLE"
+                "Frozen binding requires matching actor mode and frozen PLE"
             )
         if self.engine.hf_config.architectures != ["Qwen4ExpForConditionalGeneration"]:
             raise ValueError("Frozen binding requires the Qwen4Exp architecture")
@@ -42,8 +96,26 @@ class McoreFrozenBinder:
             raise ValueError("Expected initialized MCore model chunks")
         parameters: dict[str, nn.Parameter] = {}
         global_layers: set[int] = set()
+        visual_owners = 0
+        local_visual_names: set[str] = set()
         stage_map = converter._pp_stage_layer_id_map
         for vp_stage, model in enumerate(models):
+            unwrapped = model
+            while hasattr(unwrapped, "module"):
+                unwrapped = unwrapped.module
+            owns_visual = False
+            if not self.contract.language_model_only:
+                if type(getattr(unwrapped, "pre_process", None)) is not bool:
+                    raise ValueError(
+                        "Vision binding requires explicit chunk pre_process ownership"
+                    )
+                owns_visual = unwrapped.pre_process
+                if owns_visual and (converter.rank_info.pp_rank != 0 or vp_stage != 0):
+                    raise ValueError(
+                        "Frozen visual owner must be the first PP/VP stage"
+                    )
+                visual_owners += int(owns_visual)
+            chunk_visual_names: set[str] = set()
             layers: dict[str, tuple[int, int]] = {}
             for path, layer in model.named_modules():
                 clean = _clean_name(path)
@@ -73,9 +145,18 @@ class McoreFrozenBinder:
             for name, parameter in model.named_parameters():
                 clean = _clean_name(name)
                 if clean.startswith("visual."):
-                    raise ValueError(
-                        "Language-only actor unexpectedly contains visual parameters"
-                    )
+                    if self.contract.language_model_only or not owns_visual:
+                        raise ValueError(
+                            "Unexpected actor visual parameters on this chunk"
+                        )
+                    canonical = mcore_visual_parameter_name(name, self.contract)
+                    if canonical in parameters:
+                        raise ValueError(
+                            f"Duplicate frozen parameter identity: {canonical}"
+                        )
+                    parameters[canonical] = parameter
+                    chunk_visual_names.add(canonical)
+                    continue
                 if ".ple_embedding." not in clean:
                     continue
                 match = re.fullmatch(r"(.+\.layers\.\d+)\.(.+)", name)
@@ -92,12 +173,27 @@ class McoreFrozenBinder:
                         f"Duplicate frozen parameter identity: {canonical}"
                     )
                 parameters[canonical] = parameter
+            if (
+                owns_visual
+                and chunk_visual_names != self.contract.visual_parameter_names
+            ):
+                raise ValueError(
+                    "Owning actor chunk must contain the complete visual tower"
+                )
+            local_visual_names.update(chunk_visual_names)
+        if not self.contract.language_model_only:
+            if visual_owners != int(converter.rank_info.pp_rank == 0):
+                raise ValueError("Missing or duplicate frozen visual PP owner")
+            if local_visual_names:
+                self._validate_visual_shapes(parameters)
         expected = frozenset(
             name
             for name in self.contract.ple_table_names
             if int(name.split(".")[2]) in global_layers
         )
-        converter.bind_frozen_contract(self.contract, parameters, expected)
+        converter.bind_frozen_contract(
+            self.contract, parameters, expected, frozenset(local_visual_names)
+        )
 
 
 def _clean_name(name: str) -> str:
@@ -114,15 +210,15 @@ def load_actor_frozen_contract(engine: Any) -> Qwen4ExpFrozenContract:
 
     if engine.bridge_cls != "mcore-bridge":
         raise ValueError("Qwen4Exp frozen contract requires mcore-bridge")
-    if (
-        engine.mcore_config.language_model_only is not True
-        or engine.mcore_config.freeze_ple_table is not True
-    ):
-        raise ValueError("Frozen binding requires language-only actor and frozen PLE")
+    if engine.mcore_config.freeze_ple_table is not True:
+        raise ValueError("Frozen binding requires frozen PLE")
     manifest = os.environ.get("QWEN_AWEX_FROZEN_CONTRACT")
     if not manifest:
         raise ValueError("Qwen4Exp AWEX requires QWEN_AWEX_FROZEN_CONTRACT")
-    return load_frozen_contract(Path(manifest), Path(engine.config.path))
+    contract = load_frozen_contract(Path(manifest), Path(engine.config.path))
+    if engine.mcore_config.language_model_only is not contract.language_model_only:
+        raise ValueError("Actor model mode differs from frozen contract")
+    return contract
 
 
 def build_awex_train_info(engine: Any, world_size: int) -> dict[str, Any]:
