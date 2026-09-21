@@ -391,3 +391,95 @@ async def test_proxy_system_error_overrides_model_failure_classifier(monkeypatch
         workflow_context.set(WorkflowContext())
 
     assert fake_client.last_reward is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_failure", [False, True])
+@pytest.mark.parametrize("explicit_reference", [None, 2.0])
+async def test_concat_episode_reward_fills_unscored_branch_and_cached_tensors(
+    monkeypatch, model_failure, explicit_reference
+):
+    missing = InteractionWithTokenLogpReward(reward=None)
+    missing._cache = {
+        "rewards": torch.zeros(2, dtype=torch.float64),
+        "original_rewards": torch.zeros(2, dtype=torch.float64),
+    }
+    explicit = InteractionWithTokenLogpReward(
+        reward=0.25, rollout_reward=explicit_reference
+    )
+
+    class BranchedClient(_FakeProxyClient):
+        context_overflow = False
+
+        async def export_interactions(self, **kwargs):
+            return {"child": missing, "explicit": explicit, "main": self.interaction}
+
+    client = BranchedClient()
+    monkeypatch.setattr(
+        workflow_module, "OpenAIProxyClient", lambda *args, **kwargs: client
+    )
+    agent = _ModelFailingAgent() if model_failure else _SuccessfulAgent()
+    workflow = OpenAIProxyWorkflow(mode="inline", agent=agent, export_style="concat")
+    monkeypatch.setattr(workflow, "_grant_capacity", AsyncMock())
+    monkeypatch.setattr(
+        workflow_context, "get_aiohttp_session", AsyncMock(return_value=object())
+    )
+    workflow_context.set(WorkflowContext(task_id=1))
+    try:
+        result = await workflow.arun_episode(None, {})
+    finally:
+        workflow_context.set(WorkflowContext())
+        stats_tracker.export_all(reset=True)
+    expected = 0.0 if model_failure else 1.0
+    assert result["child"].reward == expected
+    assert result["main"].reward == expected
+    assert result["explicit"].reward == 0.25
+    for key in ["rewards", "original_rewards"]:
+        torch.testing.assert_close(
+            missing._cache[key], torch.full((2,), expected, dtype=torch.float64)
+        )
+    assert result["main"].rollout_reward == (
+        expected if explicit_reference is None else None
+    )
+    assert explicit.rollout_reward == explicit_reference
+    assert normalize_logical_rollout_rewards([result])
+
+
+@pytest.mark.asyncio
+async def test_concat_per_completion_rewards_do_not_fill_unscored_branch(monkeypatch):
+    class PerCompletionAgent:
+        async def run(self, data, **kwargs):
+            return {"main": 1.0}
+
+    missing = InteractionWithTokenLogpReward(reward=None)
+
+    class BranchedClient(_FakeProxyClient):
+        context_overflow = False
+
+        async def set_reward(self, completion_id, reward):
+            assert completion_id == "main"
+            self.interaction.reward = reward
+
+        async def export_interactions(self, **kwargs):
+            return {"child": missing, "main": self.interaction}
+
+    client = BranchedClient()
+    monkeypatch.setattr(
+        workflow_module, "OpenAIProxyClient", lambda *args, **kwargs: client
+    )
+    workflow = OpenAIProxyWorkflow(
+        mode="inline", agent=PerCompletionAgent(), export_style="concat"
+    )
+    monkeypatch.setattr(workflow, "_grant_capacity", AsyncMock())
+    monkeypatch.setattr(
+        workflow_context, "get_aiohttp_session", AsyncMock(return_value=object())
+    )
+    workflow_context.set(WorkflowContext(task_id=1))
+    try:
+        result = await workflow.arun_episode(None, {})
+    finally:
+        workflow_context.set(WorkflowContext())
+        stats_tracker.export_all(reset=True)
+    assert result["child"].reward is None
+    assert result["main"].reward == 1.0
+    assert not normalize_logical_rollout_rewards([result])

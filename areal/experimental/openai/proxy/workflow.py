@@ -328,6 +328,36 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
             last = interactions[next(reversed(interactions))]
             last.rollout_reward = last.reward
 
+    def _fill_episode_leaf_rewards(
+        self,
+        interactions: dict[str, InteractionWithTokenLogpReward],
+        episode_reward: float | None,
+    ) -> None:
+        """Give unscored concat branches an explicit scalar episode outcome."""
+        if self.export_style != "concat" or episode_reward is None:
+            return
+        import torch
+
+        filled = False
+        for interaction in interactions.values():
+            if interaction.reward is not None:
+                continue
+            interaction.reward = episode_reward
+            if interaction._cache is not None:
+                interaction._cache["rewards"] = torch.full_like(
+                    interaction._cache["rewards"], episode_reward
+                )
+                original = interaction.original_reward
+                interaction._cache["original_rewards"] = torch.full_like(
+                    interaction._cache["original_rewards"],
+                    episode_reward if original is None else original,
+                )
+            filled = True
+        if filled and all(
+            interaction.rollout_reward is None for interaction in interactions.values()
+        ):
+            interactions[next(reversed(interactions))].rollout_reward = episode_reward
+
     @session_context()
     async def arun_episode(
         self, engine: TRolloutEngine, data: dict[str, Any]
@@ -406,6 +436,7 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
             metadata=await self._get_agent_session_metadata(data),
         )
         agent_error: Exception | None = None
+        episode_reward: float | None = None
         async with proxy_client:
             # Run the user code.
             try:
@@ -423,6 +454,7 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
                     for completion_id, reward in rewards.items():
                         await proxy_client.set_reward(completion_id, reward)
                 elif isinstance(rewards, float):
+                    episode_reward = rewards
                     await proxy_client.set_last_reward(rewards)
                 else:
                     raise ValueError(f"Invalid reward type: {type(rewards)}")
@@ -476,6 +508,7 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
                     None,
                 )
                 return None
+            episode_reward = 0.0
             await proxy_client.set_last_reward(0.0)
         else:
             stats_tracker.get(workflow_context.stat_scope()).scalar(
@@ -503,6 +536,7 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
             )
             return None
 
+        self._fill_episode_leaf_rewards(interactions, episode_reward)
         self._set_individual_rollout_reward(interactions)
 
         # Record stats
