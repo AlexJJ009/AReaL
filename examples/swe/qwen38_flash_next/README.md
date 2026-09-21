@@ -11,9 +11,11 @@ The long-context settings are:
 - PLE causal chunks: `QWEN_PLE_CHUNK_TOKENS=8192`; overlapping causal history is
   retained within each sequence, and shared weight gradients accumulate in FP32.
 - QSA query chunks: `QWEN_QSA_QUERY_CHUNK_SIZE=1024`.
-- Actor and rollout allocators: expandable segments disabled. The tested actor PyTorch
-  2.9.1 and rollout PyTorch 2.13.0 cannot exchange expandable CUDA IPC handles. CPU Adam
-  offload and full layer recomputation remain enabled.
+- Actor allocator: `expandable_segments:True`; rollout: `False`. AWEX allocates only its
+  IPC staging buffers with expandable segments temporarily disabled, restoring all
+  runtime allocator settings before serialization, including on packing errors. Training
+  allocations retain expandable storage. CPU Adam offload and full recomputation remain
+  enabled.
 - `QWEN_GDN_CP_COMPAT=1` installs the recipe-scoped Megatron-Core 0.17 GDN CP
   compatibility path, including the bridge's packed-sequence divisor correction. Use the
   clean pinned bridge checkout, not an experiment-patched bridge. Unexpected runtime
@@ -37,6 +39,14 @@ AWEX weight synchronization failed to deserialize expandable IPC handles. A same
 cross-image probe passes with expandable segments disabled and fails when enabled on the
 actor, independently of chunking or CP.
 
-The allocator settings above restore the working IPC path. The ten-step quality
-comparison and full-length memory gate with this corrected allocator setting still
-require validation; the earlier synthetic pass cannot establish either result.
+The actor PyTorch 2.9.1 IPC header lacks the `handle_type` field read by the rollout's
+PyTorch 2.13.0 build. The older 27B rollout image (PyTorch 2.11) passes with actor
+expandable segments enabled. See the
+[receiver allocator source](https://github.com/pytorch/pytorch/blob/cf30153c4c131c8164ee7798e5022d810682e2cb/c10/cuda/CUDACachingAllocator.cpp).
+
+The staging fix passed ten actual AWEX grouping/serialization/reconstruction cycles
+between the current images, including a 4.18 GiB BF16 group and noncontiguous FP32
+inputs. Received values matched exactly; training allocator settings, live expandable
+storage and backward gradients were preserved. Exception restoration also passed, and
+allocated memory after cleanup stayed constant. This validates IPC, not ten SWE training
+steps: the full training/rollout quality comparison still requires completion.

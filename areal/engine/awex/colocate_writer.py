@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 import torch
 import torch.distributed as dist
 
+from areal.engine.awex.cuda_ipc import cuda_ipc_allocation
 from areal.engine.megatron_utils.weight_residency import MegatronWeightResidency
 from areal.utils.environ import get_float_env_var
 from areal.utils.logging import getLogger
@@ -357,7 +358,8 @@ class AwexWeightPublisher:
             version,
         )
 
-        group_tensors, metadata = group_tensors_by_shape_and_dtype(tensors)
+        with cuda_ipc_allocation():
+            group_tensors, metadata = group_tensors_by_shape_and_dtype(tensors)
         torch.cuda.synchronize()
         logger.info(
             "Grouped into %d tensor groups for IPC serialization", len(group_tensors)
