@@ -79,7 +79,29 @@ def configure_training_rpc(scheduler):
     return scheduler
 
 
+def validate_evaluation_only(config, dataset):
+    """Reject settings that can train, recover weights, or omit evaluation tasks."""
+    if config.total_train_steps != 0 or not config.evaluator.eval_before_train:
+        raise ValueError("swe-eval requires zero training steps and eval_before_train")
+    if config.recover.mode not in ("off", "disabled"):
+        raise ValueError("swe-eval requires recovery to be disabled")
+    if config.eval_gconfig.n_samples != 1:
+        raise ValueError("swe-eval requires eval_gconfig.n_samples=1")
+    valid = config.valid_dataset
+    if valid is None or valid.shuffle or valid.drop_last:
+        raise ValueError(
+            "swe-eval requires an unshuffled validation set without drop_last"
+        )
+    if not len(dataset) or valid.batch_size != len(dataset):
+        raise ValueError(
+            "swe-eval validation batch size must equal the selected task count"
+        )
+
+
 def main(profile, args):
+    evaluation_only = profile == "swe-eval"
+    if evaluation_only:
+        profile = "swe"
     from examples.swe.train_swe_rl import get_arena_mixture_dataset
     from examples.swe.utils import SWEPPOConfig
 
@@ -96,6 +118,8 @@ def main(profile, args):
             config.econfig, size_multiple=config.train_dataset.batch_size
         )
         selection_file = os.environ.get("QWEN_ARENA_TASK_IDS_FILE")
+        if evaluation_only and not selection_file:
+            raise ValueError("swe-eval requires QWEN_ARENA_TASK_IDS_FILE")
         if selection_file:
             if len(streams) != 1:
                 raise ValueError("Task selection requires exactly one Arena stream")
@@ -110,14 +134,17 @@ def main(profile, args):
         config.econfig.arena_streams = streams
         config.econfig.arena_streams_file = ""
         config.econfig.arena_streams_yaml_b64 = ""
+        if evaluation_only:
+            validate_evaluation_only(config, dataset)
+        generation = config.eval_gconfig if evaluation_only else config.gconfig
         workflow = "examples.swe.arena_agent.ArenaStreamAgentWorkflow"
         kwargs = dict(
             econfig=asdict(config.econfig),
             gen_args=dict(
-                temperature=config.gconfig.temperature,
-                top_p=config.gconfig.top_p,
-                top_k=config.gconfig.top_k,
-                max_completion_tokens=config.gconfig.max_new_tokens,
+                temperature=generation.temperature,
+                top_p=generation.top_p,
+                top_k=generation.top_k,
+                max_completion_tokens=generation.max_new_tokens,
             ),
             timeout=config.econfig.timeout,
         )
@@ -152,9 +179,16 @@ def main(profile, args):
     )
     try:
         with RecipeTrainer(
-            config, train_dataset=dataset, valid_dataset=None
+            config,
+            train_dataset=dataset,
+            valid_dataset=dataset if evaluation_only else None,
         ) as trainer:
-            trainer.train(workflow=workflow, workflow_kwargs=kwargs, eval_workflow=None)
+            trainer.train(
+                workflow=workflow,
+                workflow_kwargs=kwargs,
+                eval_workflow=workflow if evaluation_only else None,
+                eval_workflow_kwargs=kwargs if evaluation_only else None,
+            )
     finally:
         RemoteSGLangEngine.as_controller = staticmethod(factory)
 
