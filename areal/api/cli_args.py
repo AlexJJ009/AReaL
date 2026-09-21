@@ -272,6 +272,38 @@ class GenerationHyperparameters:
             )
         },
     )
+    keep_partial_group_on_error: bool = field(
+        default=False,
+        metadata={
+            "help": "Keep usable siblings after a rollout error; v1 single-controller only."
+        },
+    )
+    legacy_reward_normalization: bool = field(
+        default=False,
+        metadata={
+            "help": "Normalize terminal rewards and broadcast within each rollout; v1 single-controller only."
+        },
+    )
+    reward_normalization_use_std: bool = field(
+        default=True,
+        metadata={"help": "Divide by population std in legacy reward normalization."},
+    )
+
+    def validate_group_compatibility(self) -> bool:
+        """Validate opt-in group behavior and report whether it is enabled."""
+        if self.keep_partial_group_on_error and self.drop_incomplete_group:
+            raise ValueError(
+                "Partial-group retention conflicts with dropping incomplete groups"
+            )
+        if (
+            not self.reward_normalization_use_std
+            and not self.legacy_reward_normalization
+        ):
+            raise ValueError(
+                "Mean-only normalization requires legacy_reward_normalization"
+            )
+        return self.keep_partial_group_on_error or self.legacy_reward_normalization
+
     # NOTE: to add new parameters, please correctly handle them in the `to_openai_args_dict` method.
 
     def new(self, **kwargs):
@@ -326,6 +358,9 @@ class GenerationHyperparameters:
     _WORKFLOW_ONLY_ARGS: ClassVar[set[str]] = {
         "reward_normalization",
         "drop_incomplete_group",
+        "keep_partial_group_on_error",
+        "legacy_reward_normalization",
+        "reward_normalization_use_std",
     }
 
     def to_openai_args_dict(

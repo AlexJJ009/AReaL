@@ -80,6 +80,9 @@ class GroupedRolloutWorkflow(RolloutWorkflow):
         logger: Logger,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        keep_partial_group_on_error: bool = False,
+        reward_normalization_use_std: bool = True,
+        legacy_reward_normalization: bool = False,
         min_usable_group_size: int = 1,
     ):
         validate_rollout_group_sizes(group_size, min_usable_group_size)
@@ -89,6 +92,17 @@ class GroupedRolloutWorkflow(RolloutWorkflow):
         self.logger = logger
         self.reward_normalization = reward_normalization
         self.drop_incomplete_group = drop_incomplete_group
+        if keep_partial_group_on_error and drop_incomplete_group:
+            raise ValueError(
+                "Partial-group retention conflicts with dropping incomplete groups"
+            )
+        if not reward_normalization_use_std and not legacy_reward_normalization:
+            raise ValueError(
+                "Mean-only normalization requires legacy_reward_normalization"
+            )
+        self.keep_partial_group_on_error = keep_partial_group_on_error
+        self.reward_normalization_use_std = reward_normalization_use_std
+        self.legacy_reward_normalization = legacy_reward_normalization
 
     def _record_group_stats(self, usable_slot_count: int, *, trainable: bool) -> None:
         trainable_slot_count = usable_slot_count if trainable else 0
@@ -132,7 +146,18 @@ class GroupedRolloutWorkflow(RolloutWorkflow):
                     processor_cache=shared_processor_cache,
                 )
             )
-            result = await self.workflow.arun_episode(engine, data)
+            try:
+                result = await self.workflow.arun_episode(engine, data)
+            except WorkflowContractError:
+                raise
+            except Exception as exc:
+                if not self.keep_partial_group_on_error:
+                    raise
+                self.logger.warning(
+                    f"GroupedRolloutWorkflow: rollout {sample_idx} raised "
+                    f"{type(exc).__name__}: {exc}; keeping other usable slots."
+                )
+                result = None
             completed_results[sample_idx] = result
             return sample_idx, result
 
@@ -282,6 +307,9 @@ class GroupedRolloutWorkflow(RolloutWorkflow):
         """
         from areal.experimental.openai.types import normalize_logical_rollout_rewards
 
+        if self.legacy_reward_normalization:
+            return self._normalize_legacy_rewards(results)
+
         try:
             if normalize_logical_rollout_rewards(results):
                 return True
@@ -298,6 +326,40 @@ class GroupedRolloutWorkflow(RolloutWorkflow):
                 f"{len(results)} usable rollouts have None reward)"
             )
         return False
+
+    def _normalize_legacy_rewards(
+        self, results: list[dict[str, InteractionWithTokenLogpReward]]
+    ) -> bool:
+        """Retain last-interaction reward broadcast for legacy workflows."""
+        import torch
+
+        references = [result[next(reversed(result))].reward for result in results]
+        if any(reward is None for reward in references):
+            return False
+        rewards = torch.tensor(references, dtype=torch.float32)
+        normalized = rewards - rewards.mean()
+        if self.reward_normalization_use_std:
+            std = (
+                rewards.std(unbiased=False)
+                if rewards.numel() > 1
+                else rewards.new_tensor(1.0)
+            )
+            normalized = normalized / (std + 1e-8)
+        for result, reward in zip(results, normalized.tolist()):
+            for interaction in result.values():
+                if interaction.reward is None:
+                    continue
+                interaction.original_reward = interaction.reward
+                interaction.reward = reward
+                # Preserve explicit membership metadata used by the current exporter.
+                interaction.rollout_reward = reward
+                if interaction._cache is not None:
+                    cached_rewards = interaction._cache["rewards"]
+                    interaction._cache["original_rewards"] = cached_rewards.clone()
+                    interaction._cache["rewards"] = torch.full_like(
+                        cached_rewards, reward
+                    )
+        return True
 
 
 class RemoteInfBackendProtocol(Protocol):
@@ -842,6 +904,9 @@ class RemoteInfEngine(InferenceEngine):
         proxy_addr: str | None = None,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        keep_partial_group_on_error: bool = False,
+        reward_normalization_use_std: bool = True,
+        legacy_reward_normalization: bool = False,
         min_usable_group_size: int = 1,
     ) -> RolloutWorkflow:
         validate_rollout_group_sizes(group_size, min_usable_group_size)
@@ -865,6 +930,9 @@ class RemoteInfEngine(InferenceEngine):
                     self.logger,
                     reward_normalization=reward_normalization,
                     drop_incomplete_group=drop_incomplete_group,
+                    keep_partial_group_on_error=keep_partial_group_on_error,
+                    reward_normalization_use_std=reward_normalization_use_std,
+                    legacy_reward_normalization=legacy_reward_normalization,
                     min_usable_group_size=min_usable_group_size,
                 )
             return resolved
@@ -963,6 +1031,9 @@ class RemoteInfEngine(InferenceEngine):
                 self.logger,
                 reward_normalization=reward_normalization,
                 drop_incomplete_group=drop_incomplete_group,
+                keep_partial_group_on_error=keep_partial_group_on_error,
+                reward_normalization_use_std=reward_normalization_use_std,
+                legacy_reward_normalization=legacy_reward_normalization,
                 min_usable_group_size=min_usable_group_size,
             )
 
@@ -1365,6 +1436,9 @@ class RemoteInfEngine(InferenceEngine):
         proxy_addr: str | None = None,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        keep_partial_group_on_error: bool = False,
+        reward_normalization_use_std: bool = True,
+        legacy_reward_normalization: bool = False,
         min_usable_group_size: int = 1,
     ) -> int:
         """Submit a request to the inference engine and return immediately.
@@ -1412,6 +1486,9 @@ class RemoteInfEngine(InferenceEngine):
             proxy_addr=proxy_addr,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
+            keep_partial_group_on_error=keep_partial_group_on_error,
+            reward_normalization_use_std=reward_normalization_use_std,
+            legacy_reward_normalization=legacy_reward_normalization,
         )
         resolved_should_accept_fn = self._resolve_should_accept_fn(should_accept_fn)
 
@@ -1472,6 +1549,9 @@ class RemoteInfEngine(InferenceEngine):
         group_size: int = 1,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        keep_partial_group_on_error: bool = False,
+        reward_normalization_use_std: bool = True,
+        legacy_reward_normalization: bool = False,
         min_usable_group_size: int = 1,
     ) -> list[dict[str, Any]]:
         """Submit a batch of requests and wait for results.
@@ -1508,6 +1588,9 @@ class RemoteInfEngine(InferenceEngine):
             min_usable_group_size=min_usable_group_size,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
+            keep_partial_group_on_error=keep_partial_group_on_error,
+            reward_normalization_use_std=reward_normalization_use_std,
+            legacy_reward_normalization=legacy_reward_normalization,
         )
 
         return self.workflow_executor.rollout_batch(
@@ -1525,6 +1608,9 @@ class RemoteInfEngine(InferenceEngine):
         dynamic_bs: bool = False,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        keep_partial_group_on_error: bool = False,
+        reward_normalization_use_std: bool = True,
+        legacy_reward_normalization: bool = False,
         min_usable_group_size: int = 1,
     ) -> list[dict[str, Any]]:
         """Asynchronously submit and wait until a full batch is ready.
@@ -1565,6 +1651,9 @@ class RemoteInfEngine(InferenceEngine):
             min_usable_group_size=min_usable_group_size,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
+            keep_partial_group_on_error=keep_partial_group_on_error,
+            reward_normalization_use_std=reward_normalization_use_std,
+            legacy_reward_normalization=legacy_reward_normalization,
         )
         resolved_should_accept_fn = self._resolve_should_accept_fn(should_accept_fn)
 
