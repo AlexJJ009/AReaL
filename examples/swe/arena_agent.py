@@ -61,7 +61,12 @@ def _record_arena_metrics(**metrics: float) -> None:
 
 
 def _record_arena_domain_reward(reward: float, arena_task_type: str) -> None:
-    _record_arena_metrics(**{f"{arena_task_type}/reward": float(reward)})
+    _record_arena_metrics(
+        **{
+            f"{arena_task_type}/reward": float(reward),
+            f"domain/{arena_task_type}/reward": float(reward),
+        }
+    )
 
 
 @dataclass
@@ -511,6 +516,9 @@ class ArenaStreamAgentWorkflow:
         self._task_result_dumped: ContextVar[bool] = ContextVar(
             "arena_task_result_dumped", default=False
         )
+        self._proxy_session_id: ContextVar[str] = ContextVar(
+            "arena_proxy_session_id", default=""
+        )
         self.result_dump_dir = str(
             self.econfig.get("arena_result_dump_dir", "") or ""
         ).strip()
@@ -550,6 +558,14 @@ class ArenaStreamAgentWorkflow:
             reward is not None and self._is_solved_reward(reward, stream_config)
             for reward in rewards
         )
+        group_quality = {
+            "all_correct": float(pass_count == group_size),
+            "all_wrong": float(pass_count == 0),
+            **{
+                f"group_pass_count_{count}_ratio": float(count == pass_count)
+                for count in range(group_size + 1)
+            },
+        }
         group_pass_distribution = {
             f"group_pass_{count}": float(count == pass_count)
             for count in range(group_size + 1)
@@ -560,6 +576,16 @@ class ArenaStreamAgentWorkflow:
                 f"{arena_task_type}/pass@k": float(pass_count > 0),
                 f"stream/{stream_config.name}/pass@k": float(pass_count > 0),
                 **group_pass_distribution,
+                **group_quality,
+                **{
+                    f"{prefix}/{name}": value
+                    for prefix in (
+                        f"domain/{arena_task_type}",
+                        f"stream/{stream_config.name}",
+                    )
+                    for name, value in group_quality.items()
+                },
+                f"domain/{arena_task_type}/pass@k": float(pass_count > 0),
             }
         )
 
@@ -680,6 +706,7 @@ class ArenaStreamAgentWorkflow:
                     # never the heterogeneous Arena ``raw`` object.
                     "raw_reward": result.score,
                     f"{arena_task_type}/raw_reward": result.score,
+                    f"domain/{arena_task_type}/raw_reward": result.score,
                     "arena_raw_present": float(result.raw is not None),
                     "arena_trace_present": float(result.trace_id is not None),
                     "arena_artifacts_present": float(result.artifacts_uri is not None),
@@ -705,6 +732,9 @@ class ArenaStreamAgentWorkflow:
         """Return bounded identifiers used to join rollout and Arena audits."""
 
         metadata: dict[str, str] = {}
+        session_id = self._proxy_session_id.get()
+        if session_id:
+            metadata["session_id"] = session_id
         result = self._task_result.get()
         if result is None:
             return metadata
@@ -760,6 +790,7 @@ class ArenaStreamAgentWorkflow:
         """Launch the row's task with the current rollout proxy session."""
         self._task_result.set(None)
         self._task_result_dumped.set(False)
+        self._proxy_session_id.set("")
         stream_config = self._stream_config_for_data(data)
         stream_id = str(data.get("stream_id") or stream_config.stream_id or "")
         data_id = str(data.get("data_id") or "")
@@ -769,6 +800,7 @@ class ArenaStreamAgentWorkflow:
         proxy_base_url = extra_kwargs.get("base_url")
         proxy_api_key = extra_kwargs.get("api_key")
         proxy_session_id = str(extra_kwargs.get("session_id") or "").strip()
+        self._proxy_session_id.set(proxy_session_id)
         arena_http_client: httpx.AsyncClient | None = extra_kwargs.get(
             "arena_http_client"
         ) or extra_kwargs.get("http_client")
@@ -1269,7 +1301,14 @@ class ArenaStreamAgentWorkflow:
                 "stream_id": str(data.get("stream_id") or stream_config.stream_id),
                 "data_id": str(data.get("data_id") or ""),
                 "task_id": result.task_id,
+                "arena_task_id": result.task_id,
+                "session_id": self._proxy_session_id.get() or None,
                 "status": result.status,
+                "harness_outcome_code": (
+                    self._gameagent_outcome_metric_code(result.raw)
+                    if result.status == "HARNESS_FAILED"
+                    else None
+                ),
                 "expected_reward_ref": {
                     "key": expected_ref.key,
                     "version": expected_ref.version,

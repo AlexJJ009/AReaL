@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import inspect
+import json
 import os
 import threading
 from concurrent.futures import ProcessPoolExecutor
@@ -225,12 +226,50 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
     def record_episode_metrics(
         self,
         data: dict[str, Any],
-        reward: float,
+        reward: float | None,
     ) -> None:
         """Delegate optional episode metrics after interactions are exported."""
+        if reward is None:
+            return
         recorder = getattr(self.agent, "record_episode_metrics", None)
         if callable(recorder):
             recorder(data, reward)
+
+    async def _get_agent_episode_metadata(self) -> dict[str, Any]:
+        """Collect bounded audit metadata from an optional agent hook."""
+
+        getter = getattr(self.agent, "get_episode_metadata", None)
+        if not callable(getter):
+            return {}
+        try:
+            metadata = getter()
+            if inspect.isawaitable(metadata):
+                metadata = await metadata
+            if not isinstance(metadata, dict):
+                raise TypeError("get_episode_metadata must return a dict")
+            if not all(isinstance(key, str) for key in metadata):
+                raise TypeError("get_episode_metadata keys must be strings")
+            json.dumps(metadata, allow_nan=False)
+            return metadata
+        except Exception:
+            logger.warning(
+                "Failed to collect optional agent episode metadata.",
+                exc_info=True,
+            )
+            return {}
+
+    @staticmethod
+    def _stamp_interaction_metadata(
+        interactions: dict[str, InteractionWithTokenLogpReward],
+        metadata: dict[str, Any],
+    ) -> None:
+        """Attach episode identifiers to every exported trajectory branch."""
+
+        for interaction in interactions.values():
+            interaction.metadata = {
+                **(interaction.metadata or {}),
+                **metadata,
+            }
 
     async def _call_agent_hook(self, name: str, *args: Any, **kwargs: Any) -> None:
         """Call an optional agent lifecycle hook without blocking the event loop."""
@@ -384,9 +423,16 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
 
         interaction = interactions[next(reversed(interactions))]
         tracker = stats_tracker.get(workflow_context.stat_scope())
-        tracker.scalar(reward=interaction.reward)
+        if interaction.reward is not None:
+            tracker.scalar(reward=interaction.reward)
         if interaction.has_tensor_data:
-            turn_ids = interaction.to_tensor_dict()["turn_ids"]
+            try:
+                turn_ids = interaction.to_tensor_dict().get("turn_ids")
+            except Exception:
+                logger.warning("Could not read turn data for metrics.", exc_info=True)
+                return
+            if turn_ids is None:
+                return
             valid_turn_ids = turn_ids[turn_ids >= 0]
             num_turns = int(torch.unique(valid_turn_ids).numel())
             OpenAIProxyWorkflow._record_turn_distribution(
@@ -474,11 +520,15 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
                 return None
 
             self._set_individual_rollout_reward(interactions)
-
-            # Record stats
-            last_id = next(reversed(interactions))
-            last_reward = interactions[last_id].reward
-            self._record_interaction_stats(interactions)
+            episode_metadata = await self._get_agent_episode_metadata()
+            episode_metadata["session_id"] = session_info.session_id
+            self._stamp_interaction_metadata(interactions, episode_metadata)
+            self._record_interaction_stats(
+                interactions,
+                is_harness_error=episode_metadata.get("arena_status")
+                == "HARNESS_FAILED",
+                harness_outcome_code=episode_metadata.get("harness_outcome_code"),
+            )
             return interactions
 
         # ---- Normal mode (inline / subproc) ----
@@ -592,6 +642,9 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
             return None
 
         self._set_individual_rollout_reward(interactions)
+        episode_metadata = await self._get_agent_episode_metadata()
+        episode_metadata["session_id"] = proxy_client.session_id
+        self._stamp_interaction_metadata(interactions, episode_metadata)
 
         # Record stats
         last_id = list(interactions.keys())[-1]
@@ -602,8 +655,6 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
                 data,
                 last_reward,
             )
-            metadata_getter = getattr(self.agent, "get_episode_metadata", None)
-            episode_metadata = metadata_getter() if callable(metadata_getter) else {}
             self._record_interaction_stats(
                 interactions,
                 is_harness_error=episode_metadata.get("arena_status")
