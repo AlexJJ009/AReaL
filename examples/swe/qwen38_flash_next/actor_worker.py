@@ -12,6 +12,10 @@ import runpy
 def main():
     os.environ.update(NVTE_FUSED_ATTN="0", NVTE_FLASH_ATTN="1", NVTE_UNFUSED_ATTN="0")
 
+    from examples.swe.qwen38_flash_next.grad_norm_guard import install as install_guard
+
+    install_guard()
+
     if os.environ.get("QWEN_GDN_CP_COMPAT") == "1":
         from examples.swe.qwen38_flash_next.gdn_cp_compat import install
 
