@@ -1818,12 +1818,14 @@ class PPOTrainer:
     ):
         eval_group_kwargs = {}
         eval_gconfig = self.config.eval_gconfig
+        if self.config.rollout._version == "v1":
+            eval_group_kwargs["min_usable_group_size"] = eval_gconfig.n_samples
         if eval_gconfig.validate_group_compatibility():
             if self.config.rollout._version != "v1" or not is_single_controller():
                 raise ValueError(
                     "Group compatibility requires single-controller v1 rollout"
                 )
-            eval_group_kwargs = dict(
+            eval_group_kwargs.update(
                 keep_partial_group_on_error=eval_gconfig.keep_partial_group_on_error,
                 legacy_reward_normalization=eval_gconfig.legacy_reward_normalization,
                 reward_normalization_use_std=eval_gconfig.reward_normalization_use_std,
