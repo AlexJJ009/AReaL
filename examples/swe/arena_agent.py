@@ -30,6 +30,7 @@ from examples.swe.arena_client import (
 from examples.swe.arena_config import load_arena_stream_configs
 from examples.swe.arena_types import ArenaStreamConfig
 
+from areal.experimental.openai.proxy.workflow import HARNESS_OUTCOME_METRIC_CODES
 from areal.infra import workflow_context
 from areal.utils import logging, stats_tracker
 from areal.utils.dynamic_import import import_from_string
@@ -50,6 +51,7 @@ _GAMEAGENT_MODEL_FAILURE_CODES = frozenset(
         "LLM_RESPONSE_TIMEOUT",
     }
 )
+_GAMEAGENT_OUTCOME_METRIC_CODES = tuple(sorted(HARNESS_OUTCOME_METRIC_CODES))
 _WORKER_GATEWAY_REGISTRY_ATTR = "_arena_session_gateway_registry_v1"
 _WORKER_GATEWAY_CLEANUP_KEY = "arena-session-gateway-registrations"
 
@@ -585,6 +587,13 @@ class ArenaStreamAgentWorkflow:
         return marker.group(1) if marker is not None else None
 
     @classmethod
+    def _gameagent_outcome_metric_code(cls, raw: Any) -> str:
+        """Normalize Harness outcomes to the bounded metric cardinality."""
+
+        code = cls._gameagent_outcome_code(raw)
+        return code if code in HARNESS_OUTCOME_METRIC_CODES else "OTHER"
+
+    @classmethod
     def _is_model_attributed_harness_failure(cls, error: ArenaTaskFailedError) -> bool:
         """Recognize explicit, allowlisted Harness model-failure outcomes."""
 
@@ -649,6 +658,20 @@ class ArenaStreamAgentWorkflow:
             "training_score": float(reward),
             f"stream/{stream_config.name}/training_score": float(reward),
         }
+        is_harness_error = result is not None and result.status == "HARNESS_FAILED"
+        is_harness_success = result is not None and result.status in {"DONE", "OK"}
+        outcome_code = (
+            self._gameagent_outcome_metric_code(result.raw)
+            if is_harness_error and result is not None
+            else None
+        )
+        metrics["harness_success"] = float(is_harness_success)
+        metrics["harness_error"] = float(is_harness_error)
+        for code in _GAMEAGENT_OUTCOME_METRIC_CODES:
+            metrics[f"harness_error/{code}"] = float(outcome_code == code)
+        metrics["harness_error/OTHER"] = float(
+            is_harness_error and outcome_code not in _GAMEAGENT_OUTCOME_METRIC_CODES
+        )
         if result is not None and result.score is not None:
             metrics.update(
                 {
@@ -677,6 +700,25 @@ class ArenaStreamAgentWorkflow:
         finally:
             self._task_result.set(None)
             self._task_result_dumped.set(False)
+
+    def get_episode_metadata(self) -> dict[str, str]:
+        """Return bounded identifiers used to join rollout and Arena audits."""
+
+        metadata: dict[str, str] = {}
+        result = self._task_result.get()
+        if result is None:
+            return metadata
+        metadata.update(
+            {
+                "arena_task_id": result.task_id,
+                "arena_status": result.status,
+            }
+        )
+        if result.status == "HARNESS_FAILED":
+            metadata["harness_outcome_code"] = self._gameagent_outcome_metric_code(
+                result.raw
+            )
+        return metadata
 
     async def persist_episode_result(
         self,

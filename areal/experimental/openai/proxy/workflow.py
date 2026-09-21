@@ -11,11 +11,13 @@ from concurrent.futures import ProcessPoolExecutor
 from typing import TYPE_CHECKING, Any, Literal
 
 import aiohttp
+import torch
 
 from areal.api import RolloutWorkflow
 from areal.infra import workflow_context
 from areal.utils import logging, stats_tracker
 from areal.utils.perf_tracer import session_context, trace_session
+from areal.utils.stats_tracker import DistributedStatsTracker, ReduceType
 
 from .client_session import OpenAIProxyClient, post_json
 from .server import (
@@ -35,6 +37,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("OpenAIProxyWorkflow")
 
+
+HARNESS_OUTCOME_METRIC_CODES = frozenset(
+    {
+        "AGENT_MAX_TURNS_EXCEEDED",
+        "AGENT_RUN_TIMEOUT",
+        "AUTONOMOUS_INCOMPLETE_NO_SHIP",
+        "GAMEAGENT_RUN_FAILED",
+        "LLM_RESPONSE_FAILED",
+        "LLM_RESPONSE_TIMEOUT",
+    }
+)
 
 AgentFailureDisposition = Literal[
     "model_failure_zero",
@@ -328,6 +341,81 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
             last = interactions[next(reversed(interactions))]
             last.rollout_reward = last.reward
 
+    @staticmethod
+    def _record_turn_distribution(
+        tracker: DistributedStatsTracker,
+        metric: str,
+        num_turns: int,
+        *,
+        include: bool = True,
+    ) -> None:
+        """Record average, minimum, and maximum turns for one sample."""
+        values = torch.tensor([float(num_turns)], dtype=torch.float32)
+        denominator = f"{metric}_count"
+        tracker.denominator(
+            **{
+                denominator: torch.full_like(
+                    values,
+                    include,
+                    dtype=torch.bool,
+                )
+            }
+        )
+        tracker.stat(
+            denominator,
+            reduce_type=ReduceType.AVG_MIN_MAX,
+            **{metric: values},
+        )
+
+    @staticmethod
+    def _record_interaction_stats(
+        interactions: dict[str, InteractionWithTokenLogpReward],
+        *,
+        is_harness_error: bool = False,
+        harness_outcome_code: str | None = None,
+    ) -> None:
+        """Record terminal reward and turns in the last exported interaction.
+
+        Concat exports contain cumulative turns; individual exports describe
+        only their final sequence. Episodes without usable exports are absent.
+        """
+        if not interactions:
+            return
+
+        interaction = interactions[next(reversed(interactions))]
+        tracker = stats_tracker.get(workflow_context.stat_scope())
+        tracker.scalar(reward=interaction.reward)
+        if interaction.has_tensor_data:
+            turn_ids = interaction.to_tensor_dict()["turn_ids"]
+            valid_turn_ids = turn_ids[turn_ids >= 0]
+            num_turns = int(torch.unique(valid_turn_ids).numel())
+            OpenAIProxyWorkflow._record_turn_distribution(
+                tracker, "num_turns", num_turns
+            )
+            OpenAIProxyWorkflow._record_turn_distribution(
+                tracker,
+                "num_turns_no_harness_err",
+                num_turns,
+                include=not is_harness_error,
+            )
+            if is_harness_error:
+                outcome_code = (
+                    harness_outcome_code
+                    if isinstance(harness_outcome_code, str)
+                    and harness_outcome_code in HARNESS_OUTCOME_METRIC_CODES
+                    else "OTHER"
+                )
+                OpenAIProxyWorkflow._record_turn_distribution(
+                    tracker,
+                    "num_turns_harness_err",
+                    num_turns,
+                )
+                OpenAIProxyWorkflow._record_turn_distribution(
+                    tracker,
+                    f"num_turns_harness_err/{outcome_code}",
+                    num_turns,
+                )
+
     @session_context()
     async def arun_episode(
         self, engine: TRolloutEngine, data: dict[str, Any]
@@ -390,7 +478,7 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
             # Record stats
             last_id = next(reversed(interactions))
             last_reward = interactions[last_id].reward
-            stats_tracker.get(workflow_context.stat_scope()).scalar(reward=last_reward)
+            self._record_interaction_stats(interactions)
             return interactions
 
         # ---- Normal mode (inline / subproc) ----
@@ -514,8 +602,14 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
                 data,
                 last_reward,
             )
-            tracker = stats_tracker.get(workflow_context.stat_scope())
-            tracker.scalar(reward=last_reward)
+            metadata_getter = getattr(self.agent, "get_episode_metadata", None)
+            episode_metadata = metadata_getter() if callable(metadata_getter) else {}
+            self._record_interaction_stats(
+                interactions,
+                is_harness_error=episode_metadata.get("arena_status")
+                == "HARNESS_FAILED",
+                harness_outcome_code=episode_metadata.get("harness_outcome_code"),
+            )
             self.record_episode_metrics(data, last_reward)
 
         return interactions
