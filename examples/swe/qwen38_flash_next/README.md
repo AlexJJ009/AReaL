@@ -11,8 +11,9 @@ The long-context settings are:
 - PLE causal chunks: `QWEN_PLE_CHUNK_TOKENS=8192`; overlapping causal history is
   retained within each sequence, and shared weight gradients accumulate in FP32.
 - QSA query chunks: `QWEN_QSA_QUERY_CHUNK_SIZE=1024`.
-- Actor allocator: expandable segments enabled; rollout retains disabled expandable
-  segments. CPU Adam offload and full layer recomputation remain enabled.
+- Actor and rollout allocators: expandable segments disabled. The tested actor PyTorch
+  2.9.1 and rollout PyTorch 2.13.0 cannot exchange expandable CUDA IPC handles. CPU Adam
+  offload and full layer recomputation remain enabled.
 - `QWEN_GDN_CP_COMPAT=1` installs the recipe-scoped Megatron-Core 0.17 GDN CP
   compatibility path, including the bridge's packed-sequence divisor correction. Use the
   clean pinned bridge checkout, not an experiment-patched bridge. Unexpected runtime
@@ -29,7 +30,13 @@ task subset for comparison; use the same model, tasks and sampling settings as t
 reference. The generation budget remains 65536 tokens with natural EOS.
 
 Validation on 2026-09-21 completed one synthetic optimizer update with 256 sequences of
-exactly 262144 tokens on 64 GPUs. All ranks reported successful updates and changed
-parameters. Peak allocated/reserved memory was 98.64/110.54 GiB. This validates the
-full-length memory configuration, not ten-step SWE quality or steady-state speed. The
-real SWE comparison is still pending.
+exactly 262144 tokens on 64 GPUs, with expandable segments enabled. All ranks reported
+successful updates and changed parameters; peak allocated/reserved memory was
+98.64/110.54 GiB. The first real SWE optimizer update also succeeded, but the following
+AWEX weight synchronization failed to deserialize expandable IPC handles. A same-GPU
+cross-image probe passes with expandable segments disabled and fails when enabled on the
+actor, independently of chunking or CP.
+
+The allocator settings above restore the working IPC path. The ten-step quality
+comparison and full-length memory gate with this corrected allocator setting still
+require validation; the earlier synthetic pass cannot establish either result.
