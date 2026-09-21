@@ -65,27 +65,19 @@ actor:
   mb_spec:
     max_tokens_per_mb: 9216
     granularity: 1
+  # Optimizer, clipping, reward transform, and async PPO correction are inherited
+  # from gsm8k_ppo. Keep one source of truth for the official recipe.
   optimizer:
-    type: adam
-    lr: 1.0e-6
-    weight_decay: 0.0
-    lr_scheduler_type: constant
-    gradient_clipping: 1.0
-    warmup_steps_proportion: 0.0
+    # Explicit user-approved exception: five actual optimizer updates of warmup.
+    warmup_steps: 5
   ppo_n_minibatches: 1
-  eps_clip: 0.2
   eps_clip_higher: null
   c_clip: null
   discount: 1.0
   gae_lambda: 1.0
   gae_timestep_unit: token
-  reward_scaling: 1.0
-  reward_bias: 0.0
   reward_norm: null
   kl_ctl: 0.0
-  use_decoupled_loss: false
-  recompute_logprob: false
-  rejection_sampling: null
   importance_sampling_level: token
   use_sapo_loss: false
   use_cispo_loss: false
@@ -116,16 +108,7 @@ critic:
   mb_spec:
     max_tokens_per_mb: 9216
     granularity: 1
-  optimizer:
-    type: adam
-    lr: 5.0e-6
-    weight_decay: 0.0
-    beta1: 0.9
-    beta2: 0.999
-    eps: 1.0e-8
-    lr_scheduler_type: constant
-    gradient_clipping: 1.0
-    warmup_steps_proportion: 0.0
+  optimizer: ${actor.optimizer}
   scheduling_strategy:
     type: colocation
     target: actor

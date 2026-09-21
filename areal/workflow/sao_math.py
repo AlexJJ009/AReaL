@@ -53,6 +53,9 @@ class AuditedMathWorkflow(RLVRWorkflow):
 
     async def arun_episode(self, engine, data):
         result = await super().arun_episode(engine, data)
+        # This math task ends and is scored at the response budget. Preserve the
+        # observed stop reason, but do not credit an unobserved continuation.
+        result["bootstrap_mask"] = torch.zeros_like(result["truncated"])
         context = workflow_context.get()
         # Small metadata tensors survive native group concatenation and remote
         # storage. The controller fetches these alone to prove actual consumption.

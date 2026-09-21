@@ -300,8 +300,22 @@ class PPOActor:
         # terminal regardless of padding or the lengths of other trajectories.
         bootstrap_values = None
         if explicit_termination:
+            bootstrap_mask = data.get("bootstrap_mask", seq_no_eos_mask)
+            if (
+                not isinstance(bootstrap_mask, torch.Tensor)
+                or bootstrap_mask.dtype != torch.bool
+                or bootstrap_mask.shape != (bs,)
+                or bootstrap_mask.device != values.device
+            ):
+                raise ValueError(
+                    "bootstrap_mask must be a bool tensor of shape (batch_size,) on the values device"
+                )
+            torch._assert_async(
+                torch.all(~bootstrap_mask | seq_no_eos_mask),
+                "bootstrap_mask may only enable continuation for truncated episodes",
+            )
             bootstrap_values = values.gather(1, (seqlens - 1).unsqueeze(1)).squeeze(1)
-            bootstrap_values = bootstrap_values * seq_no_eos_mask.to(values.dtype)
+            bootstrap_values = bootstrap_values * bootstrap_mask.to(values.dtype)
         if self._gae_lambda_is_custom:
             gae_lambda = self._compute_gae_lambda(loss_mask, turn_ids)
         else:

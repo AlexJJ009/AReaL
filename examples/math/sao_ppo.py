@@ -20,6 +20,7 @@ from datasets import load_from_disk
 from areal import PPOTrainer
 from areal.api.cli_args import PPOConfig, load_expr_config
 from areal.infra.rpc.rtensor import RTensor
+from areal.trainer.ppo.validation import verify_gamma_one_episodic_returns
 from areal.utils import logging
 from areal.utils.network import format_hostport
 
@@ -31,13 +32,12 @@ def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
         "actor.discount": (config.actor.discount, 1.0),
         "actor.gae_lambda": (config.actor.gae_lambda, 1.0),
         "actor.gae_timestep_unit": (config.actor.gae_timestep_unit, "token"),
-        "actor.reward_scaling": (config.actor.reward_scaling, 1.0),
-        "actor.reward_bias": (config.actor.reward_bias, 0.0),
-        "actor.use_decoupled_loss": (config.actor.use_decoupled_loss, False),
-        "actor.recompute_logprob": (config.actor.recompute_logprob, False),
-        "actor.rejection_sampling": (config.actor.rejection_sampling, None),
+        "actor.reward_scaling": (config.actor.reward_scaling, 10.0),
+        "actor.reward_bias": (config.actor.reward_bias, -0.5),
+        "actor.use_decoupled_loss": (config.actor.use_decoupled_loss, True),
+        "actor.recompute_logprob": (config.actor.recompute_logprob, True),
         "actor.reward_norm": (config.actor.reward_norm, None),
-        "actor.eps_clip": (config.actor.eps_clip, 0.2),
+        "actor.eps_clip": (config.actor.eps_clip, 0.4),
         "actor.eps_clip_higher": (config.actor.eps_clip_higher, None),
         "actor.kl_ctl": (config.actor.kl_ctl, 0.0),
         "actor.use_sapo_loss": (config.actor.use_sapo_loss, False),
@@ -72,6 +72,25 @@ def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
         raise ValueError("A trainable scalar critic is required")
     if config.critic.path != config.actor.path:
         raise ValueError("Actor and critic must share the pinned Base checkpoint")
+    rejection = config.actor.rejection_sampling
+    if rejection is None or (
+        rejection.level,
+        rejection.action,
+        rejection.metric,
+        rejection.upper,
+        rejection.lower,
+    ) != ("token", "mask", "ratio", 5.0, None):
+        raise ValueError("Expected official GSM8K token ratio rejection above 5")
+    for role in ("actor", "critic"):
+        optimizer = getattr(config, role).optimizer
+        if optimizer is None or (
+            optimizer.lr,
+            optimizer.weight_decay,
+            optimizer.warmup_steps_proportion,
+            optimizer.lr_scheduler_type,
+            optimizer.warmup_steps,
+        ) != (1.7e-5, 0.017, 0.001, "constant", 5):
+            raise ValueError(f"{role} optimizer must match the official GSM8K recipe")
     if config.ref is not None or config.teacher is not None:
         raise ValueError("No reference/privileged teacher belongs in this PPO baseline")
     if config.sglang.attention_backend == "fa3":
@@ -203,44 +222,6 @@ def split_trajectory_groups(batch: list[dict]) -> list[dict]:
     return individual
 
 
-def verify_episodic_returns(groups: list[dict]) -> dict:
-    """Independent gamma=lambda=1 reward-to-go oracle for real PPO tensors."""
-    samples = terminated = truncated = tokens = 0
-    max_error = 0.0
-    for group in groups:
-        values = group["values"].float()
-        lengths = group["attention_mask"].sum(-1).long()
-        terminal = group["terminated"].bool()
-        cutoff = group["truncated"].bool()
-        if not torch.all(terminal ^ cutoff):
-            raise RuntimeError("Invalid episode termination flags in return probe")
-        bootstrap = values.gather(1, (lengths - 1).unsqueeze(1)).squeeze(1) * cutoff
-        expected = (group["rewards"].float() + bootstrap).unsqueeze(1)
-        mask = group["loss_mask"].bool()
-        actual = group["returns"].float()
-        torch.testing.assert_close(
-            actual[mask], expected.expand_as(actual)[mask], rtol=1e-4, atol=2e-4
-        )
-        max_error = max(max_error, float((actual - expected).abs()[mask].max()))
-        samples += values.shape[0]
-        terminated += int(terminal.sum())
-        truncated += int(cutoff.sum())
-        tokens += int(mask.sum())
-    if not samples or not tokens:
-        raise RuntimeError("Return probe has no valid samples/tokens")
-    return {
-        "passed": True,
-        "samples": samples,
-        "terminated": terminated,
-        "truncated": truncated,
-        "tokens": tokens,
-        "max_abs_error": max_error,
-        "rtol": 1e-4,
-        "atol": 2e-4,
-        "oracle": "gamma=lambda=1: reward + truncated * V(real final token)",
-    }
-
-
 def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> None:
     """Keep native PPO execution; record consumed IDs and completed RPC spans."""
     consumed_dir = evidence / "consumed"
@@ -296,11 +277,17 @@ def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> 
                 "attention_mask",
                 "terminated",
                 "truncated",
+                "bootstrap_mask",
             )
             local = RTensor.localize(
                 [{key: group[key] for key in keys} for group in result]
             )
-            report = verify_episodic_returns(local)
+            report = verify_gamma_one_episodic_returns(
+                local,
+                reward_scaling=trainer.config.actor.reward_scaling,
+                reward_bias=trainer.config.actor.reward_bias,
+                reward_clip=trainer.config.actor.reward_clip,
+            )
             report["step"] = state["step"]
             report["consumed_sha256"] = hashlib.sha256(
                 (consumed_dir / f"{state['step']}.json").read_bytes()
