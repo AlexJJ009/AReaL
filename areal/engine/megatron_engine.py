@@ -1417,8 +1417,18 @@ class MegatronEngine(TrainEngine):
             has_vision_inputs = any(
                 _is_multi_modal_payload_key(key) for key in mb_input.padded_mb
             )
+            text_only_wrapper_thd = (
+                self.bridge_cls == "mcore-bridge"
+                and self.sequence_packing_mode == SequencePackingMode.WRAPPER_THD
+                and self.mcore_config.language_model_only
+            )
             if use_chunked_lm_head and (
-                has_vision_inputs or (self.is_vision_model and not self.use_padded_seq)
+                has_vision_inputs
+                or (
+                    self.is_vision_model
+                    and not self.use_padded_seq
+                    and not text_only_wrapper_thd
+                )
             ):
                 raise NotImplementedError(
                     "chunked LM Head loss does not support vision inputs; padded "

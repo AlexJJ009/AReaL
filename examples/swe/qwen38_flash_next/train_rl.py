@@ -65,6 +65,20 @@ def select_task_indices(data_ids, selected):
     return [positions[key] for key in selected]
 
 
+def configure_training_rpc(scheduler):
+    """Allow cold 256K steps without replaying a timed-out optimizer update."""
+    original = scheduler.async_call_engine
+
+    async def call_engine(worker_id, method, engine_name=None, *args, **kwargs):
+        if method == "ppo_update":
+            kwargs["http_timeout"] = 8 * 3600
+            kwargs["max_retries"] = 1
+        return await original(worker_id, method, engine_name, *args, **kwargs)
+
+    scheduler.async_call_engine = call_engine
+    return scheduler
+
+
 def main(profile, args):
     from examples.swe.train_swe_rl import get_arena_mixture_dataset
     from examples.swe.utils import SWEPPOConfig
@@ -122,8 +136,12 @@ def main(profile, args):
 
     class RecipeTrainer(PPOTrainer):
         def _init_scheduler(self):
-            return SlurmScheduler(
-                exp_config=self.config, container_mounts=os.environ["QWEN_MOUNTS"]
+            return configure_training_rpc(
+                SlurmScheduler(
+                    exp_config=self.config,
+                    container_mounts=os.environ["QWEN_MOUNTS"],
+                    startup_timeout=86400,
+                )
             )
 
     # This public controller hook supplies SGLang options missing from the config

@@ -14,7 +14,7 @@ cluster:
   name_resolve:
     type: nfs
     nfs_record_root: ${cluster.fileroot}/name_resolve/${experiment_name}/${trial_name}
-allocation_mode: megatron[actor]:(attn:d1p8t8|ffn:d1p8t1e8)|sglang[rollout]:d16t4
+allocation_mode: megatron[actor]:(attn:d1p4t8c2|ffn:d1p4t1e16)|sglang[rollout]:d16t4
 scheduler:
   type: slurm
 gconfig:
@@ -144,7 +144,7 @@ rollout:
   _version: v1
 actor:
   min_usable_group_size: 8
-  backend: megatron:(attn:d1p8t8|ffn:d1p8t1e8)
+  backend: megatron:(attn:d1p4t8c2|ffn:d1p4t1e16)
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   path: ${tokenizer_path}
@@ -177,6 +177,8 @@ actor:
       overlap_param_gather: false
       use_distributed_optimizer: true
     use_deterministic_algorithms: false
+    enable_chunked_logits: true
+    lm_head_loss_chunk_size: 1024
     enable_fp32_lm_head: false
     cross_entropy_loss_fusion: false
     recompute_granularity: full
@@ -243,6 +245,8 @@ actor:
       TMS_INIT_ENABLE_CPU_BACKUP: '0'
       QWEN_AWEX_FROZEN_CONTRACT: ${oc.env:QWEN_AWEX_FROZEN_CONTRACT}
       QWEN_QSA_QUERY_CHUNK_SIZE: '1024'
+      QWEN_PLE_CHUNK_TOKENS: '8192'
+      QWEN_GDN_CP_COMPAT: '1'
       QWEN_ISOLATE_REQUEST_CACHE: '1'
       QWEN_PRIVATE_ENV: ${oc.env:QWEN_PRIVATE_ENV}
       ARENA_OPENAPI_BASE: ${oc.env:ARENA_OPENAPI_BASE}
@@ -250,8 +254,8 @@ actor:
       no_proxy: '*'
       TOKENIZERS_PARALLELISM: 'false'
       PLE_CPU_OFFLOAD: '0'
-      AWEX_ACTOR_ALLOC_CONF: expandable_segments:False
-      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:False,garbage_collection_threshold:0.7
+      AWEX_ACTOR_ALLOC_CONF: expandable_segments:True
+      PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True,garbage_collection_threshold:0.7
       NCCL_DEBUG: WARN
       NCCL_ALGO: Ring
       NCCL_PROTO: Simple
