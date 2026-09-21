@@ -584,12 +584,79 @@ class ArenaStreamAgentWorkflow:
         marker = _GAMEAGENT_OUTCOME_CODE_PATTERN.search(detail)
         return marker.group(1) if marker is not None else None
 
+    @staticmethod
+    def _is_native_model_failure(raw: Any) -> bool:
+        """Require a complete, healthy native receipt with only model failures."""
+        if not isinstance(raw, dict):
+            return False
+        if (
+            raw.get("nativeRlReceiptVersion") != 1
+            or raw.get("nativeExecutionHealthy") is not True
+            or raw.get("nativeExportHealthy") is not True
+            or raw.get("status") != "ERROR"
+            or raw.get("trajectoryHealth") != "healthy"
+            or raw.get("nativeStopReason") != "completed"
+            or "nativeFailure" not in raw
+            or raw["nativeFailure"] is not None
+        ):
+            return False
+        terminals = raw.get("runTerminals")
+        failures = raw.get("runFailures")
+        if (
+            not isinstance(terminals, dict)
+            or not terminals
+            or raw.get("exportedRunCount") != len(terminals)
+            or not isinstance(failures, list)
+            or not failures
+        ):
+            return False
+        if any(
+            not isinstance(run_id, str)
+            or not run_id
+            or terminal not in ("run.completed", "run.failed")
+            for run_id, terminal in terminals.items()
+        ):
+            return False
+        failed_runs = {
+            run_id for run_id, terminal in terminals.items() if terminal == "run.failed"
+        }
+        seen = set()
+        for failure in failures:
+            if not isinstance(failure, dict):
+                return False
+            run_id = failure.get("runId")
+            if (
+                not isinstance(run_id, str)
+                or run_id not in failed_runs
+                or run_id in seen
+            ):
+                return False
+            error = failure.get("error")
+            if (
+                not isinstance(error, dict)
+                or error.get("code") != "RUNTIME_EXECUTION_FAILED"
+            ):
+                return False
+            details = error.get("details")
+            native = (
+                details.get("runtimeFailure") if isinstance(details, dict) else None
+            )
+            if not isinstance(native, dict) or (
+                native.get("code") != "DSH_PUBLIC_ANSWER_MISSING"
+                or native.get("reason") != "public_answer_missing"
+            ):
+                return False
+            seen.add(run_id)
+        return seen == failed_runs
+
     @classmethod
     def _is_model_attributed_harness_failure(cls, error: ArenaTaskFailedError) -> bool:
         """Recognize explicit, allowlisted Harness model-failure outcomes."""
 
         result = error.result
         raw = result.raw if result is not None else None
+        if cls._is_native_model_failure(raw):
+            return True
         if cls._gameagent_outcome_code(raw) in _GAMEAGENT_MODEL_FAILURE_CODES:
             return True
         if not isinstance(raw, dict):
