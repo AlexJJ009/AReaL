@@ -125,3 +125,51 @@ def capture_training_batches(actor, directory: Path, metadata: dict[str, Any]):
                 setattr(actor, name, original)
             else:
                 delattr(actor, name)
+
+
+def validate_diagnostic_replay(config) -> None:
+    """Limit replay to a fresh, single diagnostic update without evaluation."""
+    if config.total_train_steps != 1:
+        raise ValueError("Batch replay requires total_train_steps=1")
+    if config.recover.mode not in ("off", "disabled"):
+        raise ValueError("Batch replay requires recovery disabled")
+    if config.evaluator.eval_before_train:
+        raise ValueError("Batch replay requires eval_before_train=false")
+
+
+@contextmanager
+def replay_training_batch(actor, path: Path, expected_metadata: dict[str, Any]):
+    """Supply the first captured rollout once, without invoking live generation.
+
+    This diagnoses training from the configured initial weights, not exact RNG or
+    optimizer recovery. A second request fails rather than recollecting rollout.
+    """
+    payload = load_batch_snapshot(path)
+    metadata = payload["metadata"]
+    if metadata.get("method") != "prepare_batch" or metadata.get("call_index") != 0:
+        raise ValueError("Replay requires the first prepare_batch output snapshot")
+    for key, value in expected_metadata.items():
+        if metadata.get(key) != value:
+            raise ValueError(f"Replay metadata mismatch: {key}")
+    batch = payload["batch"]
+    if not isinstance(batch, list) or not batch:
+        raise ValueError("Replay requires a nonempty prepared batch list")
+    original = actor.prepare_batch
+    own = "prepare_batch" in vars(actor)
+    consumed = False
+
+    def prepare(*args, **kwargs):
+        nonlocal consumed
+        if consumed:
+            raise RuntimeError("Diagnostic replay batch already consumed")
+        consumed = True
+        return batch
+
+    try:
+        actor.prepare_batch = prepare
+        yield
+    finally:
+        if own:
+            actor.prepare_batch = original
+        else:
+            delattr(actor, "prepare_batch")

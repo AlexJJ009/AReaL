@@ -104,3 +104,14 @@ run. Load snapshots with `load_batch_snapshot(path)` from `batch_snapshot.py`; i
 support input replay investigations, but do not contain model/optimizer state or RNG
 state and do not by themselves reproduce an optimizer step. Repeated training on an old
 snapshot is not an on-policy RL experiment.
+
+For one diagnostic update without new rollout, set `QWEN_BATCH_REPLAY_PATH` to a
+`prepare_batch-0000.output.pt` snapshot, `total_train_steps=1`, `recover.mode=disabled`,
+and `evaluator.eval_before_train=false`. Use a fresh trial/output directory and the same
+initial checkpoint and sample count as the captured run. The recipe validates model path
+and sample count, replaces preparation once, and fails if another batch is requested. It
+still initializes the engines and exercises the regular training and weight-update path.
+This is not exact RNG/optimizer recovery or a reward evaluation; it does not verify that
+checkpoint bytes at the same path are unchanged. Never resume this diagnostic trial as a
+normal RL run. Optional new snapshots must use a different directory from the input
+snapshot.

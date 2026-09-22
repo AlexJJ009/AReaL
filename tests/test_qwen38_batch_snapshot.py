@@ -148,3 +148,55 @@ def test_snapshot_unknown_metadata_and_reserved_keys_are_rejected(tmp_path):
     )
     with pytest.raises(ValueError, match="Unsupported snapshot metadata"):
         load_batch_snapshot(path)
+
+
+def test_replay_supplies_visual_batch_once_without_live_rollout(tmp_path):
+    from examples.swe.qwen38_flash_next.batch_snapshot import replay_training_batch
+
+    def live(*args, **kwargs):
+        pytest.fail("Replay called live rollout")
+
+    actor = SimpleNamespace(prepare_batch=live, compute_advantages=lambda data: data)
+    path = tmp_path / "source.pt"
+    group = RolloutGroup((1, 1), (0.0, 1.0))
+    save_batch_snapshot(
+        path,
+        [{"rollout_group": group, "pixel_values": torch.ones(3, 4)}],
+        {"method": "prepare_batch", "call_index": 0, "n_samples": 2},
+    )
+    with replay_training_batch(actor, path, {"n_samples": 2}):
+        with capture_training_batches(actor, tmp_path / "captured", {}):
+            batch = actor.prepare_batch(None, group_size=2)
+            assert batch[0]["rollout_group"] == group
+            torch.testing.assert_close(batch[0]["pixel_values"], torch.ones(3, 4))
+            with pytest.raises(RuntimeError, match="already consumed"):
+                actor.prepare_batch(None)
+    assert actor.prepare_batch is live
+    captured = load_batch_snapshot(tmp_path / "captured/prepare_batch-0000.output.pt")
+    assert captured["batch"][0]["rollout_group"] == group
+    with pytest.raises(ValueError, match="metadata mismatch"):
+        with replay_training_batch(actor, path, {"n_samples": 4}):
+            pytest.fail("Mismatched replay accepted")
+    assert actor.prepare_batch is live
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"total_train_steps": 10},
+        {"recover": SimpleNamespace(mode="auto")},
+        {"evaluator": SimpleNamespace(eval_before_train=True)},
+    ],
+)
+def test_replay_rejects_training_resume_and_evaluation(changes):
+    from examples.swe.qwen38_flash_next.batch_snapshot import validate_diagnostic_replay
+
+    config = dict(
+        total_train_steps=1,
+        recover=SimpleNamespace(mode="disabled"),
+        evaluator=SimpleNamespace(eval_before_train=False),
+    )
+    validate_diagnostic_replay(SimpleNamespace(**config))
+    config.update(changes)
+    with pytest.raises(ValueError, match="Batch replay requires"):
+        validate_diagnostic_replay(SimpleNamespace(**config))
