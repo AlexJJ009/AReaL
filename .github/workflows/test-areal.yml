@@ -316,6 +316,7 @@ jobs:
         env:
           CI: true
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          PYTHONPATH: ${{ github.workspace }}
           TOKENIZERS_PARALLELISM: false
           AREAL_IS_IN_CI: 1
           VIRTUAL_ENV: /opt/.venv
