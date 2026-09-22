@@ -29,8 +29,13 @@ arguments and are scoped to this recipe.
 For native DSH tasks, the RL recipe sets `DSH_LLM_REQUEST_TIMEOUT_SECONDS=7200`:
 colocated inference pauses during training, and a cold 256K update can exceed the usual
 900-second stream idle timeout. Stream-specific `task_envs` can override this budget.
-Evaluation should retain its reference harness timeout. The task's overall deadline
-still applies.
+The published Harness's `agent.env` can also override task environment values: a Harness
+that pins this variable to `900` still uses 900 seconds even when the resolved training
+YAML says `7200`. Publish a separate RL Harness version with the intended budget and
+select it in the stream configuration. Verify a new task's native receipt reports
+`dshPolicy.llmRequestTimeoutSeconds=7200`; checking the YAML alone is insufficient.
+Existing tasks keep their original Harness. Evaluation should retain its reference
+Harness timeout. The task's overall deadline still applies.
 
 The actor rejects nonfinite optimizer gradient norms before clipping or updating
 weights. On failure it reports rank-local element finiteness and a chunked FP64 norm to
