@@ -5,12 +5,17 @@ import copy
 import os
 import tempfile
 from contextlib import contextmanager
+from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
 import torch
 
 from areal.infra.rpc.rtensor import RTensor
+from areal.utils.data import RolloutGroup, TrajBatchMeta
+
+_TYPE_KEY = "__areal_snapshot_type__"
+_METADATA_TYPES = {cls.__name__: cls for cls in (RolloutGroup, TrajBatchMeta)}
 
 
 def save_batch_snapshot(path: Path, batch: Any, metadata: dict[str, Any]) -> None:
@@ -23,7 +28,17 @@ def save_batch_snapshot(path: Path, batch: Any, metadata: dict[str, Any]) -> Non
             if id(value) not in memo:
                 memo[id(value)] = value.detach().to(device="cpu", copy=True)
             return memo[id(value)]
+        if type(value) in _METADATA_TYPES.values():
+            return {
+                _TYPE_KEY: type(value).__name__,
+                "fields": {
+                    field.name: cpu(getattr(value, field.name))
+                    for field in fields(value)
+                },
+            }
         if isinstance(value, dict):
+            if _TYPE_KEY in value:
+                raise ValueError("Reserved snapshot metadata key in batch")
             return {k: cpu(v) for k, v in value.items()}
         if isinstance(value, list):
             return [cpu(v) for v in value]
@@ -33,7 +48,7 @@ def save_batch_snapshot(path: Path, batch: Any, metadata: dict[str, Any]) -> Non
             return value
         raise TypeError(f"Unsupported batch snapshot value: {type(value).__name__}")
 
-    payload = {"schema_version": 1, "metadata": cpu(metadata), "batch": cpu(localized)}
+    payload = {"schema_version": 2, "metadata": cpu(metadata), "batch": cpu(localized)}
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         raise FileExistsError(path)
@@ -47,6 +62,29 @@ def save_batch_snapshot(path: Path, batch: Any, metadata: dict[str, Any]) -> Non
         os.link(temporary, path)
     finally:
         os.unlink(temporary)
+
+
+def load_batch_snapshot(path: Path) -> dict[str, Any]:
+    """Load safe tensor data and reconstruct the supported rollout metadata types."""
+    payload = torch.load(path, map_location="cpu", weights_only=True)
+    if payload.get("schema_version") not in (1, 2):
+        raise ValueError("Unsupported batch snapshot schema")
+
+    def restore(value):
+        if isinstance(value, dict):
+            if _TYPE_KEY in value:
+                kind = value[_TYPE_KEY]
+                if kind not in _METADATA_TYPES or set(value) != {_TYPE_KEY, "fields"}:
+                    raise ValueError("Unsupported snapshot metadata record")
+                return _METADATA_TYPES[kind](**restore(value["fields"]))
+            return {k: restore(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [restore(v) for v in value]
+        if isinstance(value, tuple):
+            return tuple(restore(v) for v in value)
+        return value
+
+    return restore(payload) if payload["schema_version"] == 2 else payload
 
 
 @contextmanager

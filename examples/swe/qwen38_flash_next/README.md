@@ -99,7 +99,8 @@ configuration are copied into snapshot metadata.
 
 This opt-in path adds CPU memory, remote tensor reads, and storage overhead. Publication
 is atomic and refuses to overwrite existing files; a save failure stops the diagnostic
-run. Load snapshots with `torch.load(path, map_location="cpu", weights_only=True)`.
-These files support input replay investigations, but do not contain model/optimizer
-state or RNG state and do not by themselves reproduce an optimizer step. Repeated
-training on an old snapshot is not an on-policy RL experiment.
+run. Load snapshots with `load_batch_snapshot(path)` from `batch_snapshot.py`; it uses
+`torch.load(..., weights_only=True)` and restores rollout group metadata. These files
+support input replay investigations, but do not contain model/optimizer state or RNG
+state and do not by themselves reproduce an optimizer step. Repeated training on an old
+snapshot is not an on-policy RL experiment.

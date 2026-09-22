@@ -8,11 +8,13 @@ import torch
 
 from examples.swe.qwen38_flash_next.batch_snapshot import (
     capture_training_batches,
+    load_batch_snapshot,
     save_batch_snapshot,
 )
 
 from areal.infra.rpc import rtensor
 from areal.infra.rpc.rtensor import RTensor, TensorShardInfo
+from areal.utils.data import RolloutGroup, TrajBatchMeta
 
 
 def test_snapshot_preserves_pixels_logps_aliases_and_live_batch(tmp_path):
@@ -101,3 +103,48 @@ def test_remote_snapshot_fetches_once_without_localizing_live_wrappers(
     finally:
         with rtensor._fetch_buffer_lock:
             rtensor._fetch_buffer.pop(shard.shard_id, None)
+
+
+def test_snapshot_real_rollout_metadata_roundtrips_without_mutating_batch(tmp_path):
+    group = RolloutGroup((1, 2, 1, 1), (0.0, 1.0, 1.0, 1.0))
+    pixels = torch.arange(12, dtype=torch.bfloat16).reshape(3, 4)
+    batch = [
+        {
+            "rollout_group": group,
+            "pixel_values": pixels,
+            "alias": pixels,
+            "logprobs": torch.zeros(5, 3),
+            "attention_mask": torch.ones(5, 3),
+        }
+    ]
+    actor = SimpleNamespace(
+        prepare_batch=lambda: batch, compute_advantages=lambda data: data
+    )
+    with capture_training_batches(actor, tmp_path, {}):
+        assert actor.prepare_batch() is batch
+        assert actor.compute_advantages(batch) is batch
+    path = tmp_path / "prepare_batch-0000.output.pt"
+    assert torch.load(path, weights_only=True)["schema_version"] == 2
+    restored = load_batch_snapshot(path)["batch"][0]
+    assert restored["rollout_group"].validate_rows(5) == group
+    assert batch[0]["rollout_group"] is group
+    assert restored["pixel_values"] is restored["alias"]
+    torch.testing.assert_close(restored["pixel_values"], pixels, rtol=0, atol=0)
+    meta = TrajBatchMeta(1, [5], [3], [group])
+    save_batch_snapshot(tmp_path / "meta.pt", {"meta": meta}, {})
+    assert load_batch_snapshot(tmp_path / "meta.pt")["batch"]["meta"] == meta
+
+
+def test_snapshot_unknown_metadata_and_reserved_keys_are_rejected(tmp_path):
+    path = tmp_path / "invalid.pt"
+    with pytest.raises(ValueError, match="Reserved"):
+        save_batch_snapshot(path, {"__areal_snapshot_type__": "user-value"}, {})
+    torch.save(
+        {
+            "schema_version": 2,
+            "batch": {"__areal_snapshot_type__": "Unknown", "fields": {}},
+        },
+        path,
+    )
+    with pytest.raises(ValueError, match="Unsupported snapshot metadata"):
+        load_batch_snapshot(path)
