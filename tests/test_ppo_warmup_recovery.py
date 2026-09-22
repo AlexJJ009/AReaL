@@ -223,6 +223,28 @@ def test_recover_info_loads_legacy_checkpoint_without_trainer_state(tmp_path):
     assert loaded.rollout_input_state is None
 
 
+def test_recover_dump_force_writes_without_configured_cadence(tmp_path):
+    handler = _handler(tmp_path)
+    step_info = StepInfo(epoch=0, epoch_step=0, global_step=0, steps_per_epoch=4)
+
+    handler.dump(
+        {"default": _FakeEngine(), "critic": _FakeEngine()},
+        step_info,
+        _Stateful({"saver": "state"}),
+        _Stateful({"evaluator": "state"}),
+        _Stateful({"stats": "state"}),
+        _DataLoader({"loader": "state"}),
+        trainer_state={"policy_version": 1},
+        force=True,
+    )
+
+    loaded = RecoverInfo.load(
+        RecoverHandler.recover_info_path("exp", "trial", str(tmp_path))
+    )
+    assert loaded.last_step_info.global_step == 0
+    assert loaded.trainer_state == {"policy_version": 1}
+
+
 def test_recover_load_rejects_warmup_config_mismatch(tmp_path):
     handler = _write_recover_tree(
         tmp_path,

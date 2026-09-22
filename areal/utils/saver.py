@@ -132,10 +132,14 @@ class Saver:
         processor: AutoProcessor | None = None,
         base_model_path: str | None = None,
         force: bool = False,
+        advance_cadence: bool = False,
     ) -> bool:
-        if not force and not self.freq_ctl.check(
-            epochs=int(step == self.ft_spec.steps_per_epoch - 1), steps=1
-        ):
+        should_save = True
+        if not force or advance_cadence:
+            should_save = self.freq_ctl.check(
+                epochs=int(step == self.ft_spec.steps_per_epoch - 1), steps=1
+            )
+        if not force and not should_save:
             return False
         path = Saver.get_model_save_path(
             self.config.experiment_name,

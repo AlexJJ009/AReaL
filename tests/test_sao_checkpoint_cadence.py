@@ -49,6 +49,59 @@ def test_actor_and_critic_save_together_every_twenty_steps_and_at_tail(
         ]
 
 
+def test_forced_save_counts_step_without_resetting_periodic_cadence(
+    tmp_path, monkeypatch
+):
+    saved = []
+    actor = SimpleNamespace(save=lambda meta: saved.append(meta.path))
+    config = SaverConfig(
+        experiment_name="cadence",
+        trial_name="forced",
+        fileroot=str(tmp_path),
+        mode="sync",
+        freq_steps=50,
+        freq_epochs=None,
+        freq_secs=None,
+    )
+    saver = Saver(
+        config,
+        FinetuneSpec(total_train_epochs=1, dataset_size=100, train_batch_size=1),
+    )
+    monkeypatch.setattr(saver, "_should_use_async", lambda engine: False)
+
+    saver.save(actor, 0, 50, 50, force=True, advance_cadence=True)
+    for step in range(51, 99):
+        assert not saver.save(actor, 0, step, step)
+    assert saver.save(actor, 0, 99, 99)
+
+    assert [path.split("globalstep")[-1] for path in saved] == ["50", "99"]
+
+
+def test_plain_forced_save_preserves_existing_cadence_bypass(tmp_path, monkeypatch):
+    saved = []
+    actor = SimpleNamespace(save=lambda meta: saved.append(meta.path))
+    config = SaverConfig(
+        experiment_name="cadence",
+        trial_name="plain-force",
+        fileroot=str(tmp_path),
+        mode="sync",
+        freq_steps=2,
+        freq_epochs=None,
+        freq_secs=None,
+    )
+    saver = Saver(
+        config,
+        FinetuneSpec(total_train_epochs=1, dataset_size=10, train_batch_size=1),
+    )
+    monkeypatch.setattr(saver, "_should_use_async", lambda engine: False)
+
+    assert saver.save(actor, 0, 0, 0, force=True)
+    assert not saver.save(actor, 0, 1, 1)
+    assert saver.save(actor, 0, 2, 2)
+
+    assert [path.split("globalstep")[-1] for path in saved] == ["0", "2"]
+
+
 def test_controller_critic_metrics_are_exported_without_overwriting_actor(monkeypatch):
     trainer = PPOTrainer.__new__(PPOTrainer)
     trainer.actor = SimpleNamespace(
@@ -57,6 +110,7 @@ def test_controller_critic_metrics_are_exported_without_overwriting_actor(monkey
     trainer.critic = SimpleNamespace(
         export_stats=lambda: {"grad_norm": 0.3, "optimizer_steps": 2}
     )
+    trainer.config = SimpleNamespace(num_critic_only_steps=0)
     trainer.rollout = SimpleNamespace(export_stats=lambda: {"reward": 0.5})
     trainer.eval_rollout = None
     recorded = []

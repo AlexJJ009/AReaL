@@ -259,6 +259,222 @@ def check_step_metrics(
     return roles
 
 
+def source_id_digest(source_ids: list[str]) -> str:
+    return hashlib.sha256(("\n".join(source_ids) + "\n").encode()).hexdigest()
+
+
+def source_key(source_id: str) -> int:
+    return int.from_bytes(
+        hashlib.sha256(str(source_id).encode()).digest()[:8], "big"
+    ) & ((1 << 63) - 1)
+
+
+def source_key_digest(source_ids: list[str]) -> str:
+    return hashlib.sha256(
+        (
+            "\n".join(str(source_key(source_id)) for source_id in source_ids) + "\n"
+        ).encode()
+    ).hexdigest()
+
+
+def weight_only_start_step_from_env() -> int:
+    raw = os.environ.get("SAO_WEIGHT_ONLY_START_STEP")
+    if raw in (None, ""):
+        return 0
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError("SAO_WEIGHT_ONLY_START_STEP must be an integer") from exc
+    if value < 0:
+        raise ValueError("SAO_WEIGHT_ONLY_START_STEP must be non-negative")
+    return value
+
+
+def _global_epoch_source_ids(
+    trainer,
+    train_dataset,
+    *,
+    config: PPOConfig,
+    count: int,
+) -> list[str]:
+    sampler = trainer.train_dataloader.sampler
+    dataset_len = len(train_dataset)
+    generator = torch.Generator()
+    generator.manual_seed(int(getattr(sampler, "seed", config.seed)))
+    if getattr(sampler, "shuffle", False):
+        indices = torch.randperm(dataset_len, generator=generator).tolist()
+    else:
+        indices = list(range(dataset_len))
+    total_size = int(getattr(sampler, "total_size", len(indices)))
+    if not getattr(sampler, "drop_last", False) and total_size > len(indices):
+        padding_size = total_size - len(indices)
+        if padding_size <= len(indices):
+            indices += indices[:padding_size]
+        else:
+            indices += (indices * math.ceil(padding_size / len(indices)))[:padding_size]
+    else:
+        indices = indices[:total_size]
+    if count > len(indices):
+        raise ValueError(
+            f"Weight-only start needs {count} skipped prompts, but the seeded epoch "
+            f"contains only {len(indices)} prompts"
+        )
+    source_ids = list(train_dataset["source_id"])
+    return [str(source_ids[index]) for index in indices[:count]]
+
+
+def _load_expected_weight_only_digest(
+    source: Path,
+    *,
+    start_step: int,
+    batch_size: int,
+) -> dict[str, str]:
+    if source.is_dir():
+        continuation = source / "weight-only-continuation.json"
+        if continuation.is_file():
+            return _load_expected_weight_only_digest(
+                continuation, start_step=start_step, batch_size=batch_size
+            )
+        consumed = None
+        if (source / "consumed").is_dir():
+            consumed = source / "consumed"
+        elif (source / "1.json").is_file():
+            consumed = source
+        if consumed is not None:
+            keys = []
+            seen = set()
+            for step in range(1, start_step + 1):
+                path = consumed / f"{step}.json"
+                if not path.is_file():
+                    raise ValueError(f"Missing consumed evidence file: {path}")
+                for row in json.loads(path.read_text(encoding="utf-8")):
+                    key = int(row["audit_source_key"])
+                    if key not in seen:
+                        seen.add(key)
+                        keys.append(str(key))
+            expected = start_step * batch_size
+            if len(keys) != expected:
+                raise ValueError(
+                    f"Consumed evidence has {len(keys)} unique prompts, expected {expected}"
+                )
+            return {
+                "source_key_sha256": hashlib.sha256(
+                    ("\n".join(keys) + "\n").encode()
+                ).hexdigest()
+            }
+        epoch_order = source / "epoch-order.json"
+        if epoch_order.is_file():
+            return _load_expected_weight_only_digest(
+                epoch_order, start_step=start_step, batch_size=batch_size
+            )
+        raise ValueError(f"No supported source evidence found in {source}")
+
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    if "skipped_source_id_sha256" in payload or "skipped_source_key_sha256" in payload:
+        return {
+            "source_id_sha256": payload.get("skipped_source_id_sha256"),
+            "source_key_sha256": payload.get("skipped_source_key_sha256"),
+        }
+    if "source_id_order_sha256" in payload and "source_ids" in payload:
+        ids = [str(item) for item in payload["source_ids"][: start_step * batch_size]]
+        return {
+            "source_id_sha256": source_id_digest(ids),
+            "source_key_sha256": source_key_digest(ids),
+        }
+    for key in (
+        "source_id_sha256",
+        "consumed_source_id_sha256",
+        "source_key_sha256",
+        "consumed_source_key_sha256",
+    ):
+        if key in payload:
+            return {key.replace("consumed_", ""): payload[key]}
+    raise ValueError(f"Unsupported source evidence payload: {source}")
+
+
+def prepare_weight_only_continuation(
+    trainer,
+    train_dataset,
+    evidence: Path,
+    *,
+    config: PPOConfig,
+    initial_step: int,
+) -> None:
+    if initial_step == 0:
+        return
+    if trainer.recover_info is not None:
+        raise ValueError(
+            "SAO_WEIGHT_ONLY_START_STEP is only valid when native recovery did not load"
+        )
+
+    skipped_prompt_count = initial_step * config.train_dataset.batch_size
+    skipped_source_ids = _global_epoch_source_ids(
+        trainer,
+        train_dataset,
+        config=config,
+        count=skipped_prompt_count,
+    )
+    payload = {
+        "mode": "weight_only",
+        "initial_step": initial_step,
+        "next_cumulative_step": initial_step + 1,
+        "skipped_prompt_count": skipped_prompt_count,
+        "train_batch_size": config.train_dataset.batch_size,
+        "seed": config.seed,
+        "skipped_source_id_sha256": source_id_digest(skipped_source_ids),
+        "skipped_source_key_sha256": source_key_digest(skipped_source_ids),
+        "source_evidence": os.environ.get("SAO_WEIGHT_ONLY_SOURCE_EVIDENCE"),
+        "optimizer_state": "reset",
+        "async_rollout_state": "reset",
+    }
+
+    expected_id_digest = os.environ.get("SAO_WEIGHT_ONLY_SOURCE_IDS_SHA256")
+    expected_key_digest = os.environ.get("SAO_WEIGHT_ONLY_SOURCE_KEYS_SHA256")
+    source_evidence = os.environ.get("SAO_WEIGHT_ONLY_SOURCE_EVIDENCE")
+    if not source_evidence and not expected_id_digest and not expected_key_digest:
+        raise ValueError(
+            "Weight-only continuation requires prior-source evidence. Set "
+            "SAO_WEIGHT_ONLY_SOURCE_EVIDENCE, SAO_WEIGHT_ONLY_SOURCE_IDS_SHA256, "
+            "or SAO_WEIGHT_ONLY_SOURCE_KEYS_SHA256."
+        )
+    if source_evidence:
+        expected = _load_expected_weight_only_digest(
+            Path(source_evidence).expanduser(),
+            start_step=initial_step,
+            batch_size=config.train_dataset.batch_size,
+        )
+        expected_id_digest = expected.get("source_id_sha256") or expected_id_digest
+        expected_key_digest = expected.get("source_key_sha256") or expected_key_digest
+    if expected_id_digest and expected_id_digest != payload["skipped_source_id_sha256"]:
+        raise ValueError(
+            "Skipped source_id digest does not match prior evidence: "
+            f"observed={payload['skipped_source_id_sha256']} expected={expected_id_digest}"
+        )
+    if (
+        expected_key_digest
+        and expected_key_digest != payload["skipped_source_key_sha256"]
+    ):
+        raise ValueError(
+            "Skipped source_key digest does not match prior evidence: "
+            f"observed={payload['skipped_source_key_sha256']} expected={expected_key_digest}"
+        )
+
+    iterator = iter(trainer.train_dataloader)
+    for _ in range(initial_step):
+        try:
+            next(iterator)
+        except StopIteration as exc:
+            raise ValueError(
+                f"Cannot skip {initial_step} dataloader batches for weight-only start"
+            ) from exc
+    state = trainer.train_dataloader.state_dict()
+    trainer.train_dataloader.load_state_dict(state)
+    (evidence / "weight-only-continuation.json").write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def verify_published_policy(trainer, evidence: Path, step: int) -> None:
     """Read the updated actor and every rollout replica on the same fixed tokens."""
     ids = trainer.tokenizer.encode(
@@ -332,14 +548,25 @@ def split_trajectory_groups(batch: list[dict]) -> list[dict]:
     return individual
 
 
-def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> None:
+def install_audit_hooks(
+    trainer,
+    evidence: Path,
+    *,
+    preflight: bool = False,
+    initial_step: int = 0,
+) -> None:
     """Keep native PPO execution; record consumed IDs and completed RPC spans."""
     consumed_dir = evidence / "consumed"
     consumed_dir.mkdir(exist_ok=True)
     start_step = (
         trainer.recover_info.last_step_info.next().global_step
         if trainer.recover_info is not None
-        else 0
+        else initial_step
+    )
+    optimizer_steps_base = (
+        trainer.recover_info.trainer_state.get("optimizer_steps_base", 0)
+        if trainer.recover_info is not None
+        else initial_step
     )
     state = {"step": start_step, "spans": []}
     original_prepare = trainer.actor.prepare_batch
@@ -374,6 +601,22 @@ def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> 
         return batch
 
     trainer.actor.prepare_batch = prepare
+    original_save_training_state = trainer._save_training_state
+
+    def save_training_state(*, epoch, epoch_step, global_step, force=False):
+        force = force or (
+            initial_step > 0
+            and trainer.recover_info is None
+            and global_step == initial_step
+        )
+        return original_save_training_state(
+            epoch=epoch,
+            epoch_step=epoch_step,
+            global_step=global_step,
+            force=force,
+        )
+
+    trainer._save_training_state = save_training_state
     original_advantages = trainer.actor.compute_advantages
 
     def advantages(*args, **kwargs):
@@ -457,7 +700,9 @@ def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> 
 
     def commit(epoch, step, global_step, data):
         completed_step = global_step + 1
-        roles = check_step_metrics(data, completed_step, completed_step - start_step)
+        roles = check_step_metrics(
+            data, completed_step, completed_step - optimizer_steps_base
+        )
         if data.get("ppo_actor/explicit_termination") != 1:
             raise RuntimeError(
                 "PPO update did not consume explicit episode termination metadata"
@@ -576,6 +821,7 @@ def main(args: list[str]) -> None:
     with PPOTrainer(
         config, train_dataset=train_dataset, valid_dataset=valid_dataset
     ) as trainer:
+        weight_only_initial_step = weight_only_start_step_from_env()
         trainer.rollout.prepare_batch = functools.partial(
             trainer.rollout.prepare_batch, finite_epoch=True, fail_on_rejection=True
         )
@@ -598,7 +844,20 @@ def main(args: list[str]) -> None:
             )
             + "\n"
         )
-        install_audit_hooks(trainer, evidence, preflight=preflight)
+        prepare_weight_only_continuation(
+            trainer,
+            train_dataset,
+            evidence,
+            config=config,
+            initial_step=weight_only_initial_step,
+        )
+        trainer._apply_initial_step_policy_version(weight_only_initial_step)
+        install_audit_hooks(
+            trainer,
+            evidence,
+            preflight=preflight,
+            initial_step=weight_only_initial_step,
+        )
         if preflight and trainer.recover_info is None:
             verify_published_policy(trainer, evidence, 0)
         if config.evaluator.eval_before_train and trainer.recover_info is None:
@@ -610,6 +869,7 @@ def main(args: list[str]) -> None:
             workflow_kwargs=workflow_kwargs,
             eval_workflow=workflow,
             eval_workflow_kwargs=eval_kwargs,
+            initial_step=weight_only_initial_step,
         )
         (evidence / "epoch-finished.json").write_text(
             json.dumps(
