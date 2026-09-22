@@ -156,15 +156,19 @@ def main(profile, args):
     from areal.utils.hf_utils import load_hf_tokenizer
 
     config, _ = load_expr_config(args, SWEPPOConfig if profile == "swe" else GRPOConfig)
-    replay_path = os.environ.get("QWEN_BATCH_REPLAY_PATH")
-    if replay_path:
-        from examples.swe.qwen38_flash_next.batch_snapshot import (
-            validate_diagnostic_replay,
-        )
+    from examples.swe.qwen38_flash_next.batch_snapshot import (
+        resolve_replay_paths,
+        validate_diagnostic_replay,
+    )
 
+    replay_paths = resolve_replay_paths(
+        os.environ.get("QWEN_BATCH_REPLAY_PATH"),
+        os.environ.get("QWEN_BATCH_REPLAY_PATHS"),
+    )
+    if replay_paths:
         if evaluation_only:
             raise ValueError("Batch replay is not an evaluation mode")
-        validate_diagnostic_replay(config)
+        validate_diagnostic_replay(config, len(replay_paths))
     if profile == "swe":
         dataset, streams = get_arena_mixture_dataset(
             config.econfig, size_multiple=config.train_dataset.batch_size
@@ -252,14 +256,14 @@ def main(profile, args):
                     },
                 )
             replay = nullcontext()
-            if replay_path:
+            if replay_paths:
                 from examples.swe.qwen38_flash_next.batch_snapshot import (
-                    replay_training_batch,
+                    replay_training_batches,
                 )
 
-                replay = replay_training_batch(
+                replay = replay_training_batches(
                     trainer.actor,
-                    Path(replay_path),
+                    replay_paths,
                     {
                         "model_path": config.tokenizer_path,
                         "n_samples": config.gconfig.n_samples,

@@ -116,3 +116,11 @@ preceding optimizer or AWEX cycles. This is not exact RNG/optimizer recovery or 
 evaluation; it does not verify that checkpoint bytes at the same path are unchanged.
 Never resume this diagnostic trial as a normal RL run. Optional new snapshots must use a
 different directory from the input snapshot.
+
+To diagnose state carried across weight transfers, use `QWEN_BATCH_REPLAY_PATHS` instead
+of the single-path variable: a JSON array of snapshot paths in call order, starting at
+call zero from one source trial. Set `total_train_steps` to the number of paths. Each
+batch is consumed once, with the normal optimizer update and AWEX transfer between
+batches; exhaustion cannot fall back to live rollout. This reproduces the sequence of
+inputs, not exact RNG, concurrent generation, or optimizer recovery. It is a diagnostic,
+not an RL learning or evaluation run.

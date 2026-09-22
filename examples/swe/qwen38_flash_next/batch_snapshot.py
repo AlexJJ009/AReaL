@@ -2,6 +2,7 @@
 """Opt-in, lossless CPU snapshots for diagnosing a collected training batch."""
 
 import copy
+import json
 import os
 import tempfile
 from contextlib import contextmanager
@@ -127,10 +128,32 @@ def capture_training_batches(actor, directory: Path, metadata: dict[str, Any]):
                 delattr(actor, name)
 
 
-def validate_diagnostic_replay(config) -> None:
-    """Limit replay to a fresh, single diagnostic update without evaluation."""
-    if config.total_train_steps != 1:
-        raise ValueError("Batch replay requires total_train_steps=1")
+def resolve_replay_paths(path: str | None, paths_json: str | None) -> list[Path]:
+    """Read either a single snapshot path or an ordered JSON array of paths."""
+    if path and paths_json:
+        raise ValueError(
+            "Set only one of QWEN_BATCH_REPLAY_PATH and QWEN_BATCH_REPLAY_PATHS"
+        )
+    if paths_json:
+        paths = json.loads(paths_json)
+        if (
+            not isinstance(paths, list)
+            or not paths
+            or any(not isinstance(item, str) or not item for item in paths)
+        ):
+            raise ValueError(
+                "QWEN_BATCH_REPLAY_PATHS requires a nonempty JSON array of paths"
+            )
+        return [Path(item) for item in paths]
+    return [Path(path)] if path else []
+
+
+def validate_diagnostic_replay(config, batch_count: int = 1) -> None:
+    """Limit replay to one update per supplied batch without recovery or evaluation."""
+    if batch_count < 1 or config.total_train_steps != batch_count:
+        raise ValueError(
+            "Batch replay requires total_train_steps equal to snapshot count"
+        )
     if config.recover.mode not in ("off", "disabled"):
         raise ValueError("Batch replay requires recovery disabled")
     if config.evaluator.eval_before_train:
@@ -139,33 +162,65 @@ def validate_diagnostic_replay(config) -> None:
 
 @contextmanager
 def replay_training_batch(actor, path: Path, expected_metadata: dict[str, Any]):
-    """Supply one captured rollout once, without invoking live generation.
+    """Supply one captured batch once without invoking live generation."""
+    with replay_training_batches(actor, [path], expected_metadata):
+        yield
 
-    This diagnoses training from the configured initial weights, not exact RNG or
-    optimizer recovery. A second request fails rather than recollecting rollout.
+
+@contextmanager
+def replay_training_batches(
+    actor, paths: list[Path], expected_metadata: dict[str, Any]
+):
+    """Supply captured batches in order, exercising normal updates between calls.
+
+    Multiple batches must start at call zero and be contiguous from one source
+    trial. Initial weights, optimizer and RNG are not recovered from snapshots.
+    Exhaustion fails rather than recollecting rollout or reusing an old batch.
     """
-    payload = load_batch_snapshot(path)
-    metadata = payload["metadata"]
-    index = metadata.get("call_index")
-    if metadata.get("method") != "prepare_batch" or type(index) is not int or index < 0:
-        raise ValueError(
-            "Replay requires a prepare_batch snapshot with a valid call index"
-        )
-    for key, value in expected_metadata.items():
-        if metadata.get(key) != value:
-            raise ValueError(f"Replay metadata mismatch: {key}")
-    batch = payload["batch"]
-    if not isinstance(batch, list) or not batch:
-        raise ValueError("Replay requires a nonempty prepared batch list")
+    if not paths:
+        raise ValueError("Replay requires at least one snapshot")
+    batches = []
+    origin = None
+    for position, path in enumerate(paths):
+        payload = load_batch_snapshot(path)
+        metadata = payload["metadata"]
+        index = metadata.get("call_index")
+        if (
+            metadata.get("method") != "prepare_batch"
+            or type(index) is not int
+            or index < 0
+        ):
+            raise ValueError(
+                "Replay requires a prepare_batch snapshot with a valid call index"
+            )
+        for key, value in expected_metadata.items():
+            if metadata.get(key) != value:
+                raise ValueError(f"Replay metadata mismatch: {key}")
+        if len(paths) > 1:
+            source = (metadata.get("experiment"), metadata.get("trial"))
+            if not all(isinstance(item, str) and item for item in source):
+                raise ValueError("Replay sequence requires source experiment and trial")
+            if origin is None:
+                origin = source
+            if source != origin or index != position:
+                raise ValueError(
+                    "Replay sequence must be contiguous from call zero in one trial"
+                )
+        batch = payload["batch"]
+        if not isinstance(batch, list) or not batch:
+            raise ValueError("Replay requires a nonempty prepared batch list")
+        batches.append(batch)
     original = actor.prepare_batch
     own = "prepare_batch" in vars(actor)
-    consumed = False
+    consumed = 0
 
     def prepare(*args, **kwargs):
         nonlocal consumed
-        if consumed:
+        if consumed == len(batches):
             raise RuntimeError("Diagnostic replay batch already consumed")
-        consumed = True
+        batch = batches[consumed]
+        batches[consumed] = None
+        consumed += 1
         return batch
 
     try:

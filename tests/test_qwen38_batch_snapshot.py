@@ -219,3 +219,100 @@ def test_replay_rejects_invalid_source_call_index(tmp_path, call_index):
         with replay_training_batch(actor, path, {}):
             pytest.fail("Invalid source index accepted")
     assert actor.prepare_batch is original
+
+
+def test_replay_sequence_preserves_order_and_restores_actor(tmp_path):
+    from examples.swe.qwen38_flash_next.batch_snapshot import replay_training_batches
+
+    def live():
+        pytest.fail("Sequence replay called live rollout")
+
+    actor = SimpleNamespace(prepare_batch=live)
+    paths = []
+    for index in range(2):
+        path = tmp_path / f"batch-{index}.pt"
+        save_batch_snapshot(
+            path,
+            [{"pixel_values": torch.full((2, 3), float(index))}],
+            {
+                "method": "prepare_batch",
+                "call_index": index,
+                "experiment": "exp",
+                "trial": "source",
+                "n_samples": 4,
+            },
+        )
+        paths.append(path)
+    with pytest.raises(RuntimeError, match="already consumed"):
+        with replay_training_batches(actor, paths, {"n_samples": 4}):
+            first = actor.prepare_batch()
+            first[0]["pixel_values"].fill_(99)
+            second = actor.prepare_batch()
+            torch.testing.assert_close(second[0]["pixel_values"], torch.ones(2, 3))
+            actor.prepare_batch()
+    assert actor.prepare_batch is live
+    # Loading another replay starts with pristine tensors, even after mutation.
+    with replay_training_batches(actor, paths, {"n_samples": 4}):
+        torch.testing.assert_close(
+            actor.prepare_batch()[0]["pixel_values"], torch.zeros(2, 3)
+        )
+
+
+@pytest.mark.parametrize(
+    "second_index,second_trial", [(0, "source"), (2, "source"), (1, "other")]
+)
+def test_replay_sequence_rejects_gaps_duplicates_and_mixed_trials(
+    tmp_path, second_index, second_trial
+):
+    from examples.swe.qwen38_flash_next.batch_snapshot import replay_training_batches
+
+    actor = SimpleNamespace(prepare_batch=lambda: pytest.fail("Live rollout invoked"))
+    original = actor.prepare_batch
+    paths = []
+    for position, (index, trial) in enumerate(
+        [(0, "source"), (second_index, second_trial)]
+    ):
+        path = tmp_path / f"batch-{position}.pt"
+        save_batch_snapshot(
+            path,
+            [{"input_ids": torch.tensor([[1]])}],
+            {
+                "method": "prepare_batch",
+                "call_index": index,
+                "experiment": "exp",
+                "trial": trial,
+            },
+        )
+        paths.append(path)
+    with pytest.raises(ValueError, match="contiguous"):
+        with replay_training_batches(actor, paths, {}):
+            pytest.fail("Invalid sequence accepted")
+    assert actor.prepare_batch is original
+
+
+def test_replay_sequence_configuration_and_path_selection():
+    from pathlib import Path
+
+    from examples.swe.qwen38_flash_next.batch_snapshot import (
+        resolve_replay_paths,
+        validate_diagnostic_replay,
+    )
+
+    config = SimpleNamespace(
+        total_train_steps=2,
+        recover=SimpleNamespace(mode="disabled"),
+        evaluator=SimpleNamespace(eval_before_train=False),
+    )
+    validate_diagnostic_replay(config, 2)
+    with pytest.raises(ValueError, match="snapshot count"):
+        validate_diagnostic_replay(config, 1)
+    assert resolve_replay_paths("one.pt", None) == [Path("one.pt")]
+    assert resolve_replay_paths(None, '["zero.pt", "one.pt"]') == [
+        Path("zero.pt"),
+        Path("one.pt"),
+    ]
+    with pytest.raises(ValueError, match="only one"):
+        resolve_replay_paths("one.pt", '["zero.pt"]')
+    for invalid in ("[]", "{}", '"one.pt"', "[null]", '[""]'):
+        with pytest.raises(ValueError, match="nonempty JSON array"):
+            resolve_replay_paths(None, invalid)
