@@ -2,6 +2,7 @@
 
 """FSDP checkpointing utilities for DCP (Distributed Checkpoint) integration."""
 
+from collections.abc import Mapping
 from typing import Any
 
 import torch
@@ -25,10 +26,17 @@ class DCPState(Stateful):
     """
 
     def __init__(
-        self, model: nn.Module, optimizer: torch.optim.Optimizer | None = None
+        self,
+        model: nn.Module,
+        optimizer: torch.optim.Optimizer | None = None,
+        *,
+        include_uninitialized_state_manifest: bool = True,
     ):
         self.model = model
         self.optimizer = optimizer
+        self._include_uninitialized_state_manifest = (
+            include_uninitialized_state_manifest
+        )
 
     def state_dict(self) -> dict[str, Any]:
         """
@@ -40,7 +48,18 @@ class DCPState(Stateful):
             model_state_dict, optimizer_state_dict = get_state_dict(
                 self.model, self.optimizer
             )
+            (
+                optimizer_state_dict,
+                uninitialized_optimizer_state,
+            ) = _complete_missing_adam_state_for_save(
+                self.model, self.optimizer, model_state_dict, optimizer_state_dict
+            )
             state_dict = {"model": model_state_dict, "optim": optimizer_state_dict}
+            if (
+                self._include_uninitialized_state_manifest
+                or uninitialized_optimizer_state
+            ):
+                state_dict["optim_uninitialized_state"] = uninitialized_optimizer_state
         else:
             state_dict = {"model": get_model_state_dict(self.model)}
         return state_dict
@@ -56,8 +75,111 @@ class DCPState(Stateful):
                 model_state_dict=state_dict["model"],
                 optim_state_dict=state_dict["optim"],
             )
+            _drop_adam_state_for_fqns(
+                self.model,
+                self.optimizer,
+                list(state_dict.get("optim_uninitialized_state", [])),
+            )
         else:
             set_model_state_dict(
                 self.model,
                 model_state_dict=state_dict["model"],
             )
+
+
+def _complete_missing_adam_state_for_save(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    model_state_dict: Mapping[str, Any],
+    optim_state_dict: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Add CPU zero Adam slots for trainable params missing lazy optimizer state.
+
+    Adam/AdamW initialize per-parameter state lazily on the first gradient. If a
+    trainable parameter is unused before checkpointing, PyTorch DCP can emit it
+    in ``param_groups`` without a matching ``state`` entry. Fresh DCP loads build
+    a complete optimizer template and then reject the missing state. Fill only
+    the returned checkpoint state dict so the live optimizer is not mutated, and
+    place missing moment tensors on CPU to avoid consuming scarce GPU headroom
+    during checkpoint save.
+    """
+    if not _is_adam_optimizer(optimizer):
+        return optim_state_dict, []
+
+    state = optim_state_dict.get("state")
+    param_groups = optim_state_dict.get("param_groups")
+    if not isinstance(state, dict) or not isinstance(param_groups, list):
+        return optim_state_dict, []
+
+    uninitialized_state: list[str] = []
+
+    named_parameters = dict(model.named_parameters())
+    for group in param_groups:
+        params = group.get("params") if isinstance(group, dict) else None
+        if not isinstance(params, list):
+            continue
+        for fqn in params:
+            if not isinstance(fqn, str) or fqn in state:
+                continue
+            parameter = named_parameters.get(fqn)
+            if parameter is None or not parameter.requires_grad:
+                continue
+            state[fqn] = _new_adam_zero_state(fqn, parameter, group, model_state_dict)
+            uninitialized_state.append(fqn)
+    return optim_state_dict, uninitialized_state
+
+
+def _drop_adam_state_for_fqns(
+    model: nn.Module, optimizer: torch.optim.Optimizer, fqns: list[str]
+) -> None:
+    if not fqns or not _is_adam_optimizer(optimizer):
+        return
+    parameters = dict(model.named_parameters())
+    for fqn in dict.fromkeys(fqns):
+        parameter = parameters.get(fqn)
+        if parameter is not None:
+            optimizer.state.pop(parameter, None)
+
+
+def _is_adam_optimizer(optimizer: torch.optim.Optimizer) -> bool:
+    return isinstance(optimizer, (torch.optim.Adam, torch.optim.AdamW))
+
+
+def _new_adam_zero_state(
+    fqn: str,
+    parameter: torch.nn.Parameter,
+    group: Mapping[str, Any],
+    model_state_dict: Mapping[str, Any],
+) -> dict[str, torch.Tensor]:
+    tensor = model_state_dict.get(fqn, parameter)
+    state = {
+        "step": _new_adam_zero_step(parameter, group),
+        "exp_avg": _zeros_like_for_checkpoint(tensor),
+        "exp_avg_sq": _zeros_like_for_checkpoint(tensor),
+    }
+    if group.get("amsgrad", False):
+        state["max_exp_avg_sq"] = _zeros_like_for_checkpoint(tensor)
+    return state
+
+
+def _new_adam_zero_step(
+    parameter: torch.nn.Parameter, group: Mapping[str, Any]
+) -> torch.Tensor:
+    dtype = torch.float32
+    if not group.get("fused", False) and torch.get_default_dtype() == torch.float64:
+        dtype = torch.float64
+    device = (
+        parameter.device if group.get("capturable") or group.get("fused") else "cpu"
+    )
+    return torch.zeros((), dtype=dtype, device=device)
+
+
+def _zeros_like_for_checkpoint(tensor: Any) -> torch.Tensor:
+    if not isinstance(tensor, torch.Tensor):
+        raise TypeError(f"Expected tensor optimizer slot source, got {type(tensor)!r}")
+    try:
+        return torch.zeros_like(
+            tensor, device="cpu", memory_format=torch.preserve_format
+        )
+    except TypeError:
+        return torch.zeros_like(tensor, device="cpu")

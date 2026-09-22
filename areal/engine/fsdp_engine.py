@@ -230,6 +230,12 @@ def _use_qwen35_token_critic_adapter(
     return bool(config.is_critic and is_qwen3_5_model(model_config.model_type))
 
 
+def _dcp_has_uninitialized_state_manifest(path: str) -> bool:
+    metadata = dcp.FileSystemReader(path).read_metadata()
+    state_dict_metadata = getattr(metadata, "state_dict_metadata", {})
+    return "dcp.optim_uninitialized_state" in state_dict_metadata
+
+
 class FSDPEngine(TrainEngine):
     def __init__(self, config: TrainEngineConfig):
         self.config = config
@@ -1902,18 +1908,29 @@ class FSDPEngine(TrainEngine):
 
         dcp_state = DCPState(self.model, self.optimizer if with_optim else None)
         state_dict = {"dcp": dcp_state}
-        dcp.save(state_dict, checkpoint_id=path)
+        # DCP exchanges Python save plans via object collectives. Use the
+        # existing CPU group: lazily initializing the default NCCL group here
+        # can exhaust GPU memory even after training on FSDP subgroups succeeds.
+        dcp.save(state_dict, checkpoint_id=path, process_group=self.cpu_group)
 
     def _load_from_dcp(self, path: str, with_optim: bool):
         """Load model from Distributed Checkpoint (DCP) format."""
         if self.model is None:
             raise RuntimeError("Model not initialized")
 
-        dcp_state = DCPState(self.model, self.optimizer if with_optim else None)
+        include_uninitialized_state_manifest = (
+            with_optim and _dcp_has_uninitialized_state_manifest(path)
+        )
+        dcp_state = DCPState(
+            self.model,
+            self.optimizer if with_optim else None,
+            include_uninitialized_state_manifest=include_uninitialized_state_manifest,
+        )
         state_dict = {"dcp": dcp_state}
         dcp.load(
             state_dict=state_dict,
             checkpoint_id=path,
+            process_group=self.cpu_group,
         )
 
     def _save_optimizer_state(self, path: str):
