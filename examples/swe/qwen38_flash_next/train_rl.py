@@ -187,6 +187,12 @@ def main(profile, args):
             raise ValueError("swe-eval requires QWEN_ARENA_TASK_IDS_FILE")
         select_task_indices(selected, selected)
         configure_evaluation_only(config, len(selected))
+    else:
+        # Training pauses can outlast the harness default. Evaluation keeps its
+        # stream/server defaults; explicit task env overrides win in both modes.
+        config.econfig.arena_task_envs.setdefault(
+            "DSH_LLM_REQUEST_TIMEOUT_SECONDS", "7200"
+        )
     from examples.swe.qwen38_flash_next.batch_snapshot import (
         resolve_replay_paths,
         validate_diagnostic_replay,

@@ -45,11 +45,15 @@ uses a 32768-token response budget. Task count is derived from the manifest. It 
 no optimizer update or asynchronous training prefetch. Match sampling and harness
 settings before comparing scores; one sampled run does not guarantee identical results.
 
+Training defaults `DSH_LLM_REQUEST_TIMEOUT_SECONDS` to 7200 to allow weight-update
+pauses. Evaluation leaves this unset, using stream/server defaults. Explicit
+`econfig.arena_task_envs` values are preserved; per-stream task envs take precedence.
+
 ## Required runtime support
 
 Both dependency declarations and lockfiles pin the official ModelScope bridge to
 `bc58ea9cf9b1dd2314637703973904f359e67c75`, and AWEX to
-`dc665c44d61c193fd83997bdda43a7dc8e86cd62`
+`c2360eaa4cd4fa3f96bd5384a3486b9c3d34c01f`
 ([AWEX #121](https://github.com/inclusionAI/Awex/pull/121)). Actor and rollout images
 must use these revisions. The released `awex==0.8.1` lacks the required APIs.
 

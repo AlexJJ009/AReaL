@@ -32,6 +32,53 @@ LAYERS_PREFIX = "model.language_model.layers"
 PLE_PREFIX = f"{LAYERS_PREFIX}.1.ple.ple_embedding."
 
 
+@pytest.mark.parametrize("profile", ["swe", "swe-eval"])
+@pytest.mark.parametrize("explicit_timeout", [None, "120"])
+def test_recipe_task_timeout_preserves_eval_defaults_and_explicit_overrides(
+    profile, explicit_timeout, monkeypatch, tmp_path
+):
+    import yaml
+
+    from examples.swe import train_swe_rl
+    from examples.swe.qwen38_flash_next import train_rl
+    from examples.swe.utils import SWEPPOConfig
+
+    from areal.api import cli_args
+
+    recipe = yaml.safe_load(
+        Path(train_rl.__file__).with_name("swe_mm_rl.yaml").read_text()
+    )
+    config = SWEPPOConfig()
+    config.actor.optimizer = cli_args.OptimizerConfig(**recipe["actor"]["optimizer"])
+    config.econfig.arena_task_envs = recipe["econfig"].get("arena_task_envs", {})
+    config.econfig.arena_task_envs["UNRELATED_SETTING"] = "preserved"
+    if explicit_timeout is not None:
+        config.econfig.arena_task_envs["DSH_LLM_REQUEST_TIMEOUT_SECONDS"] = (
+            explicit_timeout
+        )
+    selection = tmp_path / "tasks.json"
+    selection.write_text(json.dumps(["env:example@1"]))
+    monkeypatch.setenv("QWEN_ARENA_TASK_IDS_FILE", str(selection))
+    monkeypatch.delenv("QWEN_BATCH_REPLAY_PATH", raising=False)
+    monkeypatch.delenv("QWEN_BATCH_REPLAY_PATHS", raising=False)
+    monkeypatch.setattr(cli_args, "load_expr_config", lambda *_: (config, None))
+
+    class DatasetBoundaryReached(Exception):
+        pass
+
+    def check_task_envs(econfig, **kwargs):
+        expected = explicit_timeout or ("7200" if profile == "swe" else None)
+        assert (
+            econfig.arena_task_envs.get("DSH_LLM_REQUEST_TIMEOUT_SECONDS") == expected
+        )
+        assert econfig.arena_task_envs["UNRELATED_SETTING"] == "preserved"
+        raise DatasetBoundaryReached
+
+    monkeypatch.setattr(train_swe_rl, "get_arena_mixture_dataset", check_task_envs)
+    with pytest.raises(DatasetBoundaryReached):
+        train_rl.main(profile, [])
+
+
 @pytest.fixture
 def ple_checkpoint():
     config = SimpleNamespace(

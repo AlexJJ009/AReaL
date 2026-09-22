@@ -285,8 +285,6 @@ econfig:
   arena_request_timeout: 180.0
   arena_request_retries: 1
   arena_poll_interval: 5.0
-  arena_task_envs:
-    DSH_LLM_REQUEST_TIMEOUT_SECONDS: '7200'
   timeout: 15000.0
   arena_streams_file: ${oc.env:QWEN_ARENA_STREAMS_FILE}
   arena_mixture_epoch_size: 0
