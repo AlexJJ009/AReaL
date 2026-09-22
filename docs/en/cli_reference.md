@@ -1328,11 +1328,12 @@ Control how direct process signals modify outcome advantages.
 
 Process-reward scoring and advantage shaping for agent rollouts.
 
-| Parameter           | Type                                                         | Default                     | Description                                                                                 |
-| ------------------- | ------------------------------------------------------------ | --------------------------- | ------------------------------------------------------------------------------------------- |
-| `enabled`           | boolean                                                      | `True`                      | Enable process rewards when scorers are configured. An empty scorer list is always a no-op. |
-| `advantage_shaping` | [`PRMAdvantageShapingConfig`](section-prm-advantage-shaping) | *PRMAdvantageShapingConfig* | How direct process signals are combined with outcome advantages.                            |
-| `scorers`           | list of [`PRMScorerConfig`](section-prm-scorer)              | `[]`                        | Process-reward scorers whose weighted outputs are summed.                                   |
+| Parameter           | Type                                                         | Default                     | Description                                                                                                       |
+| ------------------- | ------------------------------------------------------------ | --------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `enabled`           | boolean                                                      | `True`                      | Enable process rewards when scorers are configured. An empty scorer list is always a no-op.                       |
+| `advantage_shaping` | [`PRMAdvantageShapingConfig`](section-prm-advantage-shaping) | *PRMAdvantageShapingConfig* | How direct process signals are combined with outcome advantages.                                                  |
+| `scorers`           | list of [`PRMScorerConfig`](section-prm-scorer)              | `[]`                        | Process-reward scorers whose weighted outputs are summed.                                                         |
+| `error_policy`      | string                                                       | `"reject"`                  | On v1 proxy PRM errors: reject the trajectory or keep pre-scoring rewards. **Choices:** `reject`, `keep_original` |
 
 (section-prm-scorer)=
 
