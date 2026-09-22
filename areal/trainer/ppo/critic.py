@@ -17,6 +17,7 @@ from areal.utils.data import (
 )
 from areal.utils.functional import ppo_critic_loss_fn
 from areal.utils.perf_tracer import trace_perf
+from areal.utils.stats_tracker import ReduceType
 from areal.v2.training_service.controller.controller import (
     GatewayTrainController,
 )
@@ -136,6 +137,15 @@ def ppo_loss_fn(
         critic_loss=stat["loss"],
         clip_ratio=stat["clip_mask"].float(),
         denominator="n_valid_tokens",
+    )
+    residual = value.detach() - target_value
+    stats_tracker.stat(
+        critic_residual=residual,
+        critic_mse=residual.square(),
+        critic_target=target_value,
+        critic_target_second_moment=target_value.square(),
+        denominator="n_valid_tokens",
+        reduce_type=ReduceType.AVG,
     )
 
     clip_mask = stat["clip_mask"]

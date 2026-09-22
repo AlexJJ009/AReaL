@@ -146,15 +146,16 @@ class StatsLogger:
         for i, item in enumerate(data):
             # Filter out counter keys for scalar variables
             item = {k: v for k, v in item.items() if not k.endswith("__count")}
+            log_item = {k: v for k, v in item.items() if v is not None}
 
             logger.info(f"Stats ({i + 1}/{len(data)}):")
             self.print_stats(item)
-            wandb.log(item, step=log_step + i)
-            swanlab.log(item, step=log_step + i)
+            wandb.log(log_item, step=log_step + i)
+            swanlab.log(log_item, step=log_step + i)
             if getattr(self, "_trackio_enabled", False):
-                trackio.log(item, step=log_step + i)
+                trackio.log(log_item, step=log_step + i)
             if self.summary_writer is not None:
-                for key, val in item.items():
+                for key, val in log_item.items():
                     self.summary_writer.add_scalar(f"{key}", val, log_step + i)
         self._last_commit_step = log_step + len(data) - 1
 

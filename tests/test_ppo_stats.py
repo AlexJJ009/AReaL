@@ -1,10 +1,14 @@
 from unittest.mock import MagicMock, patch
 
+import pytest
 import torch
 
 from areal.trainer.ppo.actor import _infer_prompt_lens, grpo_loss_fn
 from areal.trainer.ppo.critic import ppo_loss_fn
-from areal.trainer.ppo.stats import infer_token_denominator
+from areal.trainer.ppo.stats import (
+    derive_critic_update_metrics,
+    infer_token_denominator,
+)
 from areal.utils.stats_tracker import DistributedStatsTracker
 
 
@@ -109,6 +113,94 @@ def test_critic_loss_fn_uses_full_cu_seqlens_for_n_tokens():
     n_tokens = mock_tracker.denominator.call_args.kwargs["n_tokens"]
     assert n_tokens.shape == torch.Size([4])
     assert torch.all(n_tokens)
+
+
+def _collect_critic_stats(
+    batches: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]],
+) -> dict:
+    tracker = DistributedStatsTracker()
+    with patch("areal.trainer.ppo.critic.stats_tracker", tracker):
+        with tracker.scope("ppo_critic"):
+            for value, target, loss_mask in batches:
+                ppo_loss_fn(
+                    value=value.unsqueeze(0),
+                    input_data={
+                        "values": value.clone().unsqueeze(0),
+                        "returns": target.unsqueeze(0),
+                        "loss_mask": loss_mask.unsqueeze(0),
+                    },
+                    eps_clip=10.0,
+                )
+    return derive_critic_update_metrics(tracker.export(reset=True))
+
+
+def test_critic_update_metrics_ignore_masked_padding():
+    value = torch.tensor([0.0, 1.0, 2.0, 999.0])
+    target = torch.tensor([0.0, 2.0, 4.0, -999.0])
+    loss_mask = torch.tensor([True, True, True, False])
+
+    stats = _collect_critic_stats([(value, target, loss_mask)])
+
+    assert stats["ppo_critic/critic_residual"] == -1.0
+    assert stats["ppo_critic/critic_mse"] == pytest.approx(5.0 / 3.0)
+    assert stats["ppo_critic/critic_target"] == 2.0
+    assert stats["ppo_critic/critic_target_second_moment"] == pytest.approx(20.0 / 3.0)
+    assert stats["ppo_critic/critic_target_variance"] == pytest.approx(8.0 / 3.0)
+    assert stats["ppo_critic/critic_residual_variance"] == pytest.approx(2.0 / 3.0)
+    assert stats["ppo_critic/critic_explained_variance"] == pytest.approx(0.75)
+    assert stats["ppo_critic/critic_explained_variance_defined"] == 1.0
+
+
+def test_critic_update_metrics_weight_uneven_microbatches_by_tokens():
+    batches = [
+        (
+            torch.tensor([0.0, 100.0]),
+            torch.tensor([0.0, -100.0]),
+            torch.tensor([True, False]),
+        ),
+        (
+            torch.tensor([10.0, 20.0, 0.0]),
+            torch.tensor([10.0, 20.0, 30.0]),
+            torch.tensor([True, True, True]),
+        ),
+    ]
+
+    stats = _collect_critic_stats(batches)
+
+    assert stats["ppo_critic/critic_target"] == 15.0
+    assert stats["ppo_critic/critic_target_second_moment"] == 350.0
+    assert stats["ppo_critic/critic_target_variance"] == 125.0
+    assert stats["ppo_critic/critic_mse"] == 225.0
+    assert stats["ppo_critic/critic_residual_variance"] == 168.75
+    assert stats["ppo_critic/critic_explained_variance"] == pytest.approx(-0.35)
+    assert stats["ppo_critic/critic_explained_variance_defined"] == 1.0
+
+
+def test_critic_explained_variance_uses_residual_variance_not_mse():
+    value = torch.tensor([1.0, 2.0, 3.0])
+    target = torch.tensor([0.0, 1.0, 2.0])
+    loss_mask = torch.tensor([True, True, True])
+
+    stats = _collect_critic_stats([(value, target, loss_mask)])
+
+    assert stats["ppo_critic/critic_mse"] == 1.0
+    assert stats["ppo_critic/critic_residual"] == 1.0
+    assert stats["ppo_critic/critic_residual_variance"] == 0.0
+    assert stats["ppo_critic/critic_target_variance"] == pytest.approx(2.0 / 3.0)
+    assert stats["ppo_critic/critic_explained_variance"] == 1.0
+
+
+def test_critic_update_metrics_leave_explained_variance_undefined_for_zero_variance():
+    value = torch.tensor([1.0, 2.0, 3.0])
+    target = torch.zeros(3)
+    loss_mask = torch.tensor([True, True, True])
+
+    stats = _collect_critic_stats([(value, target, loss_mask)])
+
+    assert stats["ppo_critic/critic_target_variance"] == 0.0
+    assert stats["ppo_critic/critic_explained_variance"] is None
+    assert stats["ppo_critic/critic_explained_variance_defined"] == 0.0
+    assert stats["ppo_critic/critic_mse"] == pytest.approx(14.0 / 3.0)
 
 
 def test_grpo_loss_fn_uses_packed_denominator_for_tree_vocab_stats():
