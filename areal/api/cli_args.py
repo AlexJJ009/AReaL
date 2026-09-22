@@ -2624,7 +2624,7 @@ class PRMConfig:
     error_policy: str = field(
         default="reject",
         metadata={
-            "help": "On PRM export errors: reject the trajectory or keep pre-scoring rewards.",
+            "help": "On v1 proxy PRM errors: reject the trajectory or keep pre-scoring rewards.",
             "choices": ["reject", "keep_original"],
         },
     )

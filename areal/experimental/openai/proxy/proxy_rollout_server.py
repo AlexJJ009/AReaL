@@ -37,7 +37,7 @@ from areal.experimental.openai.types import InteractionWithTokenLogpReward
 from areal.infra.processor_cache import ProcessorCacheRegistry
 from areal.infra.rpc.serialization import deserialize_value, serialize_value
 from areal.infra.utils.http import validate_admin_api_key
-from areal.utils import name_resolve, names, seeding
+from areal.utils import name_resolve, names, seeding, stats_tracker
 from areal.utils.dynamic_import import import_from_string
 from areal.utils.hf_utils import load_hf_processor_and_tokenizer
 from areal.utils.logging import getLogger
