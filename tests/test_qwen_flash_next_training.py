@@ -1,0 +1,476 @@
+# SPDX-License-Identifier: Apache-2.0
+
+import importlib.util
+import json
+import sys
+import time
+from datetime import timedelta
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock, Mock
+
+import pytest
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from safetensors.torch import save_file
+from transformers import GenerationConfig, PretrainedConfig
+
+from areal.engine.core.model import SequencePackingMode, resolve_sequence_packing_mode
+from areal.models.mcore.mcore_bridge_adapter import (
+    MCoreBridgeAdapter,
+    _configure_qwen4_exp_parameters,
+    qwen4_exp_optimizer_overrides,
+)
+from areal.models.mcore.mcore_bridge_checkpoint import (
+    finalize_mcore_bridge_checkpoint,
+)
+
+LAYERS_PREFIX = "model.language_model.layers"
+
+
+PLE_PREFIX = f"{LAYERS_PREFIX}.1.ple.ple_embedding."
+
+
+@pytest.fixture
+def ple_checkpoint():
+    config = SimpleNamespace(
+        hf_model_type="qwen4_exp",
+        ngram_size=3,
+        heads_per_ngram=1,
+        ple_embed_dim=4,
+        split_ngram_parts=3,
+        make_ngram_vocab_size_divisible_by=4,
+        ple_layer_ids=[2],
+    )
+    tensors = {
+        PLE_PREFIX + "layer_multipliers": torch.tensor([11, 13, 17]),
+        PLE_PREFIX + "ngram_heads_offsets": torch.tensor([0, 5]),
+        PLE_PREFIX + "ngram_heads_vocab_sizes": torch.tensor([5, 7]),
+        PLE_PREFIX + "ngram_embedding.weight_scale": torch.tensor(0.25),
+    }
+    for part in range(config.split_ngram_parts):
+        tensors[f"{PLE_PREFIX}ngram_embedding.shard_{part}.weight"] = (
+            torch.arange(8, dtype=torch.float32).reshape(4, 2).to(torch.float8_e4m3fn)
+        )
+    return config, tensors
+
+
+def test_load_missing_ple_shard_fails_before_bridge_io(tmp_path, ple_checkpoint):
+    pytest.importorskip("mcore_bridge")
+    config, tensors = ple_checkpoint
+    del tensors[PLE_PREFIX + "ngram_embedding.shard_0.weight"]
+    save_file(tensors, tmp_path / "model.safetensors")
+    adapter = MCoreBridgeAdapter.__new__(MCoreBridgeAdapter)
+    adapter.config = config
+    adapter.bridge = SimpleNamespace(
+        hf_layers_prefix=LAYERS_PREFIX, load_weights=Mock()
+    )
+
+    with pytest.raises(ValueError, match="Missing required PLE"):
+        adapter.load_weights([], str(tmp_path))
+
+    adapter.bridge.load_weights.assert_not_called()
+
+
+@pytest.fixture
+def qwen_model_with_embeddings():
+    model = torch.nn.Module()
+    model.visual = torch.nn.Linear(2, 2)
+    model.language_model = torch.nn.Module()
+    model.language_model.embedding = torch.nn.Module()
+    model.language_model.embedding.word_embeddings = torch.nn.Embedding(8, 2)
+    model.language_model.decoder = torch.nn.Module()
+    layer = torch.nn.Module()
+    layer.self_attention = torch.nn.Module()
+    layer.self_attention.indexer = torch.nn.Linear(2, 2)
+    layer.self_attention.linear_qkv = torch.nn.Linear(2, 2)
+    layer.ple = torch.nn.Module()
+    layer.ple.ple_embedding = torch.nn.Module()
+    layer.ple.ple_embedding.cpu_offload = False
+    layer.ple.ple_embedding.ngram_embedding = torch.nn.Embedding(8, 2)
+    layer.ple.value_proj = torch.nn.Linear(2, 2)
+    model.language_model.decoder.layers = torch.nn.ModuleList([layer])
+    return model, layer
+
+
+def test_qwen_training_rejects_runtime_host_ple_even_when_env_disabled(
+    qwen_model_with_embeddings, monkeypatch
+):
+    model, layer = qwen_model_with_embeddings
+    monkeypatch.setenv("PLE_CPU_OFFLOAD", "0")
+    layer.ple.ple_embedding.cpu_offload = True
+    layer.ple.ple_embedding.host_table = torch.ones(8, 2, requires_grad=True)
+
+    with pytest.raises(NotImplementedError, match="host table has no backward path"):
+        _configure_qwen4_exp_parameters(model)
+
+
+def test_qwen_freeze_ple_table_keeps_small_parameters_trainable(
+    qwen_model_with_embeddings,
+):
+    model, layer = qwen_model_with_embeddings
+    frozen = _configure_qwen4_exp_parameters(model, freeze_ple_table=True)
+
+    assert not layer.ple.ple_embedding.ngram_embedding.weight.requires_grad
+    assert not hasattr(
+        layer.ple.ple_embedding.ngram_embedding.weight, "no_weight_decay"
+    )
+    assert model.language_model.embedding.word_embeddings.weight.requires_grad
+    assert all(
+        parameter.requires_grad for parameter in layer.ple.value_proj.parameters()
+    )
+    assert (
+        "language_model.decoder.layers.0.ple.ple_embedding.ngram_embedding.weight"
+        in frozen
+    )
+
+
+def test_qwen_training_rejects_unregistered_plain_tensor_table(
+    qwen_model_with_embeddings,
+):
+    model, layer = qwen_model_with_embeddings
+    table = layer.ple.ple_embedding.ngram_embedding
+    del table.weight
+    table.weight = torch.ones(8, 2, requires_grad=True)
+
+    with pytest.raises(ValueError, match="registered trainable Parameter"):
+        _configure_qwen4_exp_parameters(model)
+
+
+def test_qwen_mcore_optimizer_groups_train_embeddings_with_ple_zero_decay(
+    qwen_model_with_embeddings, tmp_path
+):
+    if importlib.util.find_spec("megatron") is None:
+        pytest.skip("MCore optimizer grouping requires the pinned training runtime")
+    from megatron.core.optimizer import OptimizerConfig, _get_param_groups
+
+    model, layer = qwen_model_with_embeddings
+    _configure_qwen4_exp_parameters(model, freeze_ple_table=False)
+    config = OptimizerConfig(optimizer="adam", lr=0.01, min_lr=0.0, weight_decay=0.1)
+    overrides = qwen4_exp_optimizer_overrides(config)
+    dist.init_process_group(
+        backend="gloo",
+        init_method=f"file://{tmp_path / 'optimizer-group-store'}",
+        rank=0,
+        world_size=1,
+        timeout=timedelta(seconds=20),
+    )
+    try:
+        groups = _get_param_groups([model], config, overrides)
+    finally:
+        dist.destroy_process_group()
+    grouped_parameters = {
+        id(parameter): group for group in groups for parameter in group["params"]
+    }
+    token_embedding = model.language_model.embedding.word_embeddings
+    ple_table = layer.ple.ple_embedding.ngram_embedding
+    assert grouped_parameters[id(token_embedding.weight)]["wd_mult"] == 1.0
+    assert grouped_parameters[id(ple_table.weight)]["wd_mult"] == 0.0
+    assert grouped_parameters[id(layer.ple.value_proj.bias)]["wd_mult"] == 0.0
+    assert id(layer.self_attention.indexer.weight) not in grouped_parameters
+    assert id(model.visual.weight) not in grouped_parameters
+    optimizer = torch.optim.AdamW(
+        [
+            {**group, "weight_decay": config.weight_decay * group["wd_mult"]}
+            for group in groups
+        ],
+        lr=config.lr,
+    )
+    token_ids = torch.tensor([1, 2, 1])
+    ngram_ids = torch.tensor([3, 5, 3])
+    before_tokens = token_embedding.weight.detach().clone()
+    before_ple = ple_table.weight.detach().clone()
+    (
+        token_embedding(token_ids).square().mean()
+        + ple_table(ngram_ids).square().mean()
+    ).backward()
+    optimizer.step()
+    assert not torch.equal(token_embedding.weight[token_ids], before_tokens[token_ids])
+    assert not torch.equal(ple_table.weight[ngram_ids], before_ple[ngram_ids])
+    torch.testing.assert_close(ple_table.weight[0], before_ple[0], atol=0, rtol=0)
+
+
+@pytest.fixture
+def packed_forward(monkeypatch):
+    mpu = SimpleNamespace(
+        get_tensor_model_parallel_world_size=lambda: 1,
+        get_context_parallel_world_size=lambda: 1,
+        get_context_parallel_rank=lambda: 0,
+        is_pipeline_last_stage=lambda **_kwargs: True,
+    )
+    core = ModuleType("megatron.core")
+    core.parallel_state = mpu
+    metadata = ModuleType("megatron.core.packed_seq_params")
+    metadata.PackedSeqParams = SimpleNamespace
+    for name, module in (
+        ("megatron", ModuleType("megatron")),
+        ("megatron.core", core),
+        ("megatron.core.packed_seq_params", metadata),
+    ):
+        monkeypatch.setitem(sys.modules, name, module)
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "areal/engine/megatron_utils/packed_context_parallel.py"
+    )
+    spec = importlib.util.spec_from_file_location("_test_packed_inputs", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("cp_size", [1, 2, 4])
+@pytest.mark.parametrize("language_model_only", [False, True])
+def test_qwen_text_packing_partitions_ids_and_positions_once(
+    packed_forward, monkeypatch, cp_size, language_model_only
+):
+    module = packed_forward
+    assert (
+        resolve_sequence_packing_mode("qwen4_exp", "mcore-bridge")
+        == SequencePackingMode.WRAPPER_THD
+    )
+    ids = torch.arange(24, dtype=torch.long) + 10
+    cu_seqlens = torch.tensor([0, 8, 24], dtype=torch.int32)
+    positions = torch.cat([torch.arange(8), torch.arange(16)])
+    monkeypatch.setattr(module.mpu, "get_context_parallel_world_size", lambda: cp_size)
+    outputs = []
+    for cp_rank in range(cp_size):
+        monkeypatch.setattr(
+            module.mpu, "get_context_parallel_rank", lambda rank=cp_rank: rank
+        )
+        model = MagicMock(
+            side_effect=lambda **inputs: (
+                inputs["input_ids"] * 7 + inputs["position_ids"]
+            ).unsqueeze(-1)
+        )
+        output = module.packed_context_parallel_forward(
+            model,
+            {"input_ids": ids, "cu_seqlens": cu_seqlens},
+            gather_cp_output=False,
+            is_vision_model=True,
+            use_wrapper_packed_seq=True,
+            language_model_only=language_model_only,
+        )
+        inputs = model.call_args.kwargs
+        if cp_size == 1:
+            expected_indices = torch.arange(24)
+        else:
+            # Megatron's balanced CP layout assigns chunk r and its mirror
+            # independently within each packed document.
+            expected_indices = torch.cat(
+                [
+                    doc.reshape(2 * cp_size, -1)[
+                        [cp_rank, 2 * cp_size - cp_rank - 1]
+                    ].flatten()
+                    for doc in (torch.arange(8), torch.arange(8, 24))
+                ]
+            )
+        assert inputs["input_ids"].shape == (1, 24 // cp_size)
+        assert inputs["position_ids"].shape == inputs["input_ids"].shape
+        assert inputs["attention_mask"] is None
+        torch.testing.assert_close(
+            inputs["input_ids"][0], ids[expected_indices], atol=0, rtol=0
+        )
+        torch.testing.assert_close(
+            inputs["position_ids"][0], positions[expected_indices], atol=0, rtol=0
+        )
+        metadata = inputs["packed_seq_params"]
+        assert metadata.qkv_format == "thd"
+        assert metadata.max_seqlen_q == 16
+        torch.testing.assert_close(metadata.cu_seqlens_q, cu_seqlens, atol=0, rtol=0)
+        outputs.append(output.squeeze(-1))
+
+    indices = module._build_cp_reassemble_indices(cu_seqlens, cp_size)
+    reconstructed = torch.cat(outputs)[indices]
+    torch.testing.assert_close(reconstructed, ids * 7 + positions, atol=0, rtol=0)
+
+
+def test_model_owned_thd_keeps_full_ids_and_video_payload(packed_forward):
+    module = packed_forward
+    model = MagicMock(return_value=torch.ones(1, 8, 2))
+    pixels = torch.ones(2, 4)
+    module.packed_context_parallel_forward(
+        model,
+        {
+            "input_ids": torch.arange(8),
+            "cu_seqlens": torch.tensor([0, 4, 8], dtype=torch.int32),
+            "pixel_values_videos": pixels,
+        },
+        gather_cp_output=False,
+        is_vision_model=True,
+        use_model_packed_seq=True,
+    )
+    inputs = model.call_args.kwargs
+    torch.testing.assert_close(inputs["input_ids"], torch.arange(8).reshape(2, 4))
+    assert inputs["position_ids"] is None
+    assert inputs["attention_mask"].all()
+    assert inputs["pixel_values_videos"] is pixels
+
+
+def test_wrapper_mtp_preserves_thd_labels_without_padding_mask(packed_forward):
+    model = MagicMock(return_value=torch.zeros(1, 8, 1))
+    labels = torch.arange(8)
+    mask = torch.tensor([1, 1, 1, 0, 1, 1, 1, 0], dtype=torch.float32)
+    packed_forward.packed_context_parallel_forward(
+        model,
+        {
+            "input_ids": torch.arange(8),
+            "cu_seqlens": torch.tensor([0, 4, 8], dtype=torch.int32),
+            "mtp_kwargs": {"mtp_labels": labels, "mtp_loss_mask": mask},
+        },
+        gather_cp_output=False,
+        is_vision_model=True,
+        use_wrapper_packed_seq=True,
+    )
+    kwargs = model.call_args.kwargs
+    assert kwargs["attention_mask"] is None
+    torch.testing.assert_close(kwargs["mtp_kwargs"]["mtp_labels"].reshape(-1), labels)
+    torch.testing.assert_close(kwargs["mtp_kwargs"]["mtp_loss_mask"].reshape(-1), mask)
+
+
+class _SourceConfig(PretrainedConfig):
+    model_type = "qwen4_exp"
+
+
+def _source_config():
+    return _SourceConfig(
+        text_config=PretrainedConfig(
+            mtp={
+                "hybrid": True,
+                "num_hidden_layers": 1,
+                "layer_types": ["full_attention"],
+            },
+            mtp_num_hidden_layers=1,
+            mtp_use_dedicated_embeddings=False,
+        )
+    )
+
+
+class _TokenizerWriter:
+    def __init__(self, fail: bool = False):
+        self.fail = fail
+
+    def save_pretrained(self, path):
+        if self.fail:
+            raise OSError("tokenizer save failed")
+        (Path(path) / "tokenizer_config.json").write_text("{}")
+
+
+class _TensorSaveAlreadyFinished:
+    hf_layers_prefix = "model.language_model.layers"
+
+    def save_weights(self, models, path):
+        # The real bridge has returned from its own tensor-save collectives.
+        # This double exercises only the following CPU validation contract.
+        pass
+
+
+def _checkpoint_collective_worker(rank: int, directory: str):
+    root = Path(directory)
+    dist.init_process_group(
+        backend="gloo",
+        init_method=f"file://{root / 'rendezvous'}",
+        rank=rank,
+        world_size=2,
+        timeout=timedelta(seconds=30),
+    )
+    group = dist.group.WORLD
+    try:
+        config = _source_config()
+        before = config.to_dict()
+        for name, expected_error in (
+            ("success", None),
+            ("missing_text", "missing required non-restorable"),
+            ("tokenizer_error", "tokenizer save failed"),
+        ):
+            try:
+                report = finalize_mcore_bridge_checkpoint(
+                    str(root / "source"),
+                    str(root / name),
+                    hf_config=config,
+                    language_model_only=True,
+                    mtp_enabled=False,
+                    cpu_group=group,
+                    tokenizer=_TokenizerWriter(fail=name == "tokenizer_error"),
+                )
+            except RuntimeError as exc:
+                assert expected_error is not None and expected_error in str(exc)
+            else:
+                assert expected_error is None
+                assert report["restored_keys"] == ["model.visual.patch_embed.weight"]
+                assert report["omitted_mtp_keys"] == ["mtp.fc_hidden.weight"]
+                saved = json.loads((root / name / "config.json").read_text())
+                assert saved["text_config"]["mtp"] is None
+                assert saved["text_config"]["mtp_num_hidden_layers"] == 0
+                assert (root / name / "tokenizer_config.json").is_file()
+                assert (
+                    root / name / "chat_template.jinja"
+                ).read_text() == "{{ messages[0]['content'] }}"
+                assert (
+                    GenerationConfig.from_pretrained(root / name).max_new_tokens == 16
+                )
+            assert config.to_dict() == before
+            # Both success and error paths leave peers able to do another collective.
+            dist.barrier(group=group)
+
+        adapter = MCoreBridgeAdapter.__new__(MCoreBridgeAdapter)
+        adapter.config = SimpleNamespace(
+            hf_model_type="qwen4_exp",
+            ngram_size=3,
+            heads_per_ngram=1,
+            ple_embed_dim=4,
+            split_ngram_parts=1,
+            make_ngram_vocab_size_divisible_by=4,
+            ple_layer_ids=[] if rank == 0 else [1],
+        )
+        adapter.bridge = _TensorSaveAlreadyFinished()
+        try:
+            adapter.save_weights([], str(root / "success"), cpu_group=group)
+        except RuntimeError as exc:
+            assert "rank 1" in str(exc)
+            assert "Missing required PLE checkpoint tensor" in str(exc)
+        else:
+            raise AssertionError("A single-rank PLE failure must reach every rank")
+        dist.barrier(group=group)
+    finally:
+        dist.destroy_process_group()
+
+
+@pytest.mark.slow
+@pytest.mark.ci
+def test_checkpoint_finalization_errors_reach_all_cpu_ranks(tmp_path):
+    pytest.importorskip("mcore_bridge.utils.qwen4_exp_checkpoint")
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "config.json").write_text(json.dumps({"model_type": "qwen4_exp"}))
+    GenerationConfig(eos_token_id=2, max_new_tokens=16).save_pretrained(source)
+    (source / "chat_template.jinja").write_text("{{ messages[0]['content'] }}")
+    save_file(
+        {
+            "lm_head.weight": torch.ones(2),
+            "model.visual.patch_embed.weight": torch.ones(3),
+            "mtp.fc_hidden.weight": torch.ones(2),
+        },
+        source / "model.safetensors",
+    )
+    for name in ("success", "missing_text", "tokenizer_error"):
+        output = tmp_path / name
+        output.mkdir()
+        weights = (
+            {} if name == "missing_text" else {"lm_head.weight": torch.full((2,), 7.0)}
+        )
+        save_file(weights, output / "model.safetensors")
+    context = mp.spawn(
+        _checkpoint_collective_worker, args=(str(tmp_path),), nprocs=2, join=False
+    )
+    deadline = time.monotonic() + 60
+    try:
+        while not context.join(timeout=1):
+            if time.monotonic() >= deadline:
+                pytest.fail("CPU checkpoint collective timed out")
+    finally:
+        for process in context.processes:
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=5)

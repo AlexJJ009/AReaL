@@ -1,0 +1,692 @@
+# SPDX-License-Identifier: Apache-2.0
+
+from dataclasses import dataclass, replace
+from types import (
+    ModuleType,
+    SimpleNamespace,
+)
+from typing import Any
+
+import pytest
+import torch
+from awex.transfer.nccl_bounded_stream import (
+    BoundedMemoryNcclColocateStreamBatchTransport,
+)
+from torch import nn
+
+from areal.engine.awex.colocate_reader import _DeviceBoundWeightsReader
+from areal.models.mcore.qwen4_exp_awex import (
+    _MIXER_WEIGHTS,
+    build_mcore_converter,
+    build_sharding_strategy,
+)
+from areal.models.mcore.qwen4_exp_awex_binding import McoreFrozenBinder
+from areal.models.mcore.qwen4_exp_awex_contract import Qwen4ExpFrozenContract
+from areal.models.mcore.qwen4_exp_awex_layout import Qwen4ExpGDNLayout
+from areal.models.mcore.qwen4_exp_awex_memory import install_kv_residency_hooks
+from areal.models.mcore.qwen4_exp_frozen_state import (
+    snapshot_visual_parameters,
+)
+
+
+@pytest.fixture
+def writer():
+    cls = build_mcore_converter()
+    instance = cls.__new__(cls)
+    instance.rank_info = SimpleNamespace(
+        pp_rank=1, pp_size=2, attn_tp_size=4, attn_tp_rank=2
+    )
+    instance.hf_config = SimpleNamespace(
+        linear_num_key_heads=16,
+        linear_num_value_heads=48,
+        linear_key_head_dim=128,
+        linear_value_head_dim=128,
+    )
+    instance.tf_config = SimpleNamespace()
+    instance.infer_atten_tp_size = 4
+    instance._pp_stage_layer_id_map = {(1, 0): {0: 24}, (1, 1): {0: 36}}
+    return instance
+
+
+@pytest.mark.parametrize("mixer_suffix", [None, *sorted(_MIXER_WEIGHTS)])
+def test_qwen_norm_and_final_mixer_do_not_inherit_qwen35_offset(writer, mixer_suffix):
+    parameter = torch.tensor([0.5, 1.0, 1.5], dtype=torch.bfloat16)
+    if mixer_suffix is None:
+        actual = writer._convert_attention_param(
+            "self_attention.out_norm.weight", parameter, "0"
+        )
+        expected_name = "linear_attn.norm.weight"
+    else:
+        actual = writer.convert_param(
+            f"language_model.decoder.{mixer_suffix}", parameter
+        )
+        expected_name = f"model.{mixer_suffix}"
+    assert actual[0][0] == expected_name
+    torch.testing.assert_close(actual[0][1], parameter, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("component,rows", [("qkvz", 16384), ("ba", 96)])
+def test_actual_decoupled_gdn_entry_points(writer, component, rows):
+    from areal.models.mcore.qwen4_exp_awex_layout import Qwen4ExpGDNLayout
+
+    full = torch.arange(rows * 3, dtype=torch.float32).reshape(rows, 3)
+    writer._full_tp_tensor = lambda parameter: full
+    actual = writer._convert_attention_param(
+        f"self_attention.in_proj_{component}.weight", full.chunk(4)[2], "0"
+    )
+    expected = Qwen4ExpGDNLayout(16, 48, 128, 128).pack_decoupled(full, 4, 4, component)
+    assert actual[0][0] == f"linear_attn.in_proj_{component}.weight"
+    torch.testing.assert_close(actual[0][1], expected.chunk(4)[2], rtol=0, atol=0)
+
+
+def test_gdn_a_log_expands_bf16_values_to_native_sglang_float32(writer):
+    parameter = torch.tensor([-2.25, 0.5, 1.75], dtype=torch.bfloat16)
+    name, actual = writer._convert_attention_param(
+        "self_attention.A_log", parameter, "0"
+    )[0]
+    assert name == "linear_attn.A_log"
+    assert actual.dtype == torch.float32
+    assert parameter.dtype == torch.bfloat16
+    torch.testing.assert_close(actual, torch.tensor([-2.25, 0.5, 1.75]), rtol=0, atol=0)
+
+
+def _labels(heads, widths, tail):
+    # Encode each semantic coordinate independently of the implementation's
+    # reshape/split operations. MCore concatenates whole head groups.
+    rows = []
+    lookup = {}
+    for head in range(heads):
+        for category, width in enumerate(widths):
+            for channel in range(width):
+                value = category * 100000 + head * 1000 + channel
+                rows.append(value)
+                lookup[category, head, channel] = value
+    tensor = torch.tensor(rows, dtype=torch.int64)
+    return tensor.reshape(-1, *([1] * len(tail))).expand(-1, *tail).clone(), lookup
+
+
+def _expected(lookup, heads, widths, categories, infer_tp, tail):
+    rows = []
+    for rank in range(infer_tp):
+        for category in categories:
+            for head in range(rank * heads // infer_tp, (rank + 1) * heads // infer_tp):
+                for channel in range(widths[category]):
+                    rows.append(lookup[category, head, channel])
+    return (
+        torch.tensor(rows, dtype=torch.int64)
+        .reshape(-1, *([1] * len(tail)))
+        .expand(-1, *tail)
+    )
+
+
+@pytest.mark.parametrize("train_tp", [1, 2, 4, 8])
+@pytest.mark.parametrize("infer_tp", [1, 2, 4, 8])
+def test_gdn_packing_multiple_heads_preserves_semantic_coordinates(train_tp, infer_tp):
+    """Actual model head geometry; narrow hidden width keeps this CPU test small."""
+    layout = Qwen4ExpGDNLayout(16, 48, 128, 128)
+    widths = (128, 128, 384, 384, 3, 3)
+    source, lookup = _labels(16, widths, (3,))
+    original = source.clone()
+    qkvz, ba = layout.pack_input(source, train_tp, infer_tp)
+    for actual, categories in ((qkvz, range(4)), (ba, range(4, 6))):
+        expected = _expected(lookup, 16, widths, categories, infer_tp, (3,))
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    torch.testing.assert_close(source, original, rtol=0, atol=0)
+
+    conv, conv_lookup = _labels(16, widths[:3], (1, 4))
+    actual_conv = layout.pack_conv(conv, train_tp, infer_tp)
+    expected_conv = _expected(conv_lookup, 16, widths[:3], range(3), infer_tp, (1, 4))
+    torch.testing.assert_close(actual_conv, expected_conv, rtol=0, atol=0)
+    for component, sizes in (("qkvz", widths[:4]), ("ba", widths[4:])):
+        decoupled, labels = _labels(16, sizes, (3,))
+        actual = layout.pack_decoupled(decoupled, train_tp, infer_tp, component)
+        expected = _expected(labels, 16, sizes, range(len(sizes)), infer_tp, (3,))
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("infer_tp", [1, 2, 4, 8])
+@pytest.mark.parametrize("tail", [(), (3,)])
+def test_gated_qkv_preserves_head_gate_pairs_and_replicates_kv(infer_tp, tail):
+    from areal.models.mcore.qwen4_exp_awex_layout import pack_qwen4_exp_gated_qkv
+
+    heads, kv_heads, dim = 24, 2, 4
+    queries = [
+        [10000 + h * 100 + g * 10 + c for g in range(2) for c in range(dim)]
+        for h in range(heads)
+    ]
+    keys = [[20000 + h * 100 + c for c in range(dim)] for h in range(kv_heads)]
+    values = [[30000 + h * 100 + c for c in range(dim)] for h in range(kv_heads)]
+    source = []
+    for kv in range(kv_heads):
+        for head in range(kv * 12, (kv + 1) * 12):
+            source.extend(queries[head])
+        source.extend(keys[kv])
+        source.extend(values[kv])
+    expected = []
+    for rank in range(infer_tp):
+        for head in range(rank * heads // infer_tp, (rank + 1) * heads // infer_tp):
+            expected.extend(queries[head])
+        owners = range(kv_heads) if infer_tp == 1 else [rank // (infer_tp // kv_heads)]
+        for category in (keys, values):
+            for owner in owners:
+                expected.extend(category[owner])
+
+    def tensor(rows):
+        return torch.tensor(rows).reshape(-1, *([1] * len(tail))).expand(-1, *tail)
+
+    actual = pack_qwen4_exp_gated_qkv(tensor(source), heads, kv_heads, dim, infer_tp)
+    torch.testing.assert_close(actual, tensor(expected), rtol=0, atol=0)
+
+
+def _metadata(raw):
+    from awex.meta.meta_resolver import ParamMetaResolver
+
+    class Resolver(ParamMetaResolver):
+        def get_model_arch_name(self):
+            return "Qwen4ExpForConditionalGeneration"
+
+        def get_parameters_meta(self):
+            return self._build_params_meta()
+
+        def _get_params_raw_meta(self):
+            return raw
+
+        def _get_sharding_info(self, name, rank_info, param_meta):
+            strategy = build_sharding_strategy()(
+                engine_name="sglang" if rank_info.is_infer else "mcore",
+                enable_dp_attention=False,
+                enable_dp_lm_head=False,
+                moe_dense_tp_size=rank_info.tp_size,
+                tp_size=rank_info.tp_size,
+                ep_size=1,
+                ep_tp_size=1,
+                rank_info=rank_info,
+            )
+            return strategy.get_sharding_strategy(name)
+
+    return Resolver(SimpleNamespace(num_hidden_layers=48)).get_parameters_meta()
+
+
+def _rank(tp, rank, pp, pp_rank, dp, dp_rank, inference):
+    from awex.sharding.rank_info import RankInfo
+
+    global_rank = dp_rank * pp * tp + pp_rank * tp + rank
+    return RankInfo(
+        tp_rank=rank,
+        tp_size=tp,
+        pp_rank=pp_rank,
+        pp_size=pp,
+        dp_rank=dp_rank,
+        dp_size=dp,
+        ep_rank=0,
+        ep_size=1,
+        ep_tp_rank=0,
+        ep_tp_size=1,
+        attn_tp_rank=rank,
+        attn_tp_size=tp,
+        attn_dp_rank=dp_rank,
+        world_size=tp * pp * dp,
+        global_rank=global_rank,
+        local_rank=global_rank % 8,
+        engine_rank=0,
+        is_infer=inference,
+    )
+
+
+def _raw(ranks, full_weights, tp):
+    entries, tensors = [], {}
+    for rank in ranks:
+        params = []
+        for name, full in full_weights.items():
+            replicated = "hyper_connection" in name
+            value = full if replicated else full.chunk(tp, dim=0)[rank.tp_rank]
+            params.append(
+                dict(
+                    name=name,
+                    shape=tuple(value.shape),
+                    numel=value.numel(),
+                    dtype=value.dtype,
+                )
+            )
+            tensors[name, rank.global_rank] = value.clone()
+        entries.append(
+            dict(
+                rank_info=rank,
+                params_meta=params,
+                model_arch_name="Qwen4ExpForConditionalGeneration",
+            )
+        )
+    return entries, tensors
+
+
+@pytest.mark.parametrize(
+    "train_tp,infer_tp,dp,owner_pp",
+    [(4, 4, 1, 1), (8, 4, 2, 3), (2, 4, 2, 1), (4, 8, 1, 1)],
+)
+def test_native_metadata_plan_reconstructs_every_destination_once(
+    train_tp, infer_tp, dp, owner_pp
+):
+    from awex.transfer.transfer_plan import TransferPlanBuilder
+
+    layout = Qwen4ExpGDNLayout(16, 48, 128, 128)
+    source = torch.arange(16480 * 3, dtype=torch.float32).reshape(16480, 3)
+    qkvz, ba = layout.pack_input(source, train_tp, infer_tp)
+    conv = layout.pack_conv(
+        torch.arange(10240 * 4, dtype=torch.float32).reshape(10240, 1, 4),
+        train_tp,
+        infer_tp,
+    )
+    weights = {
+        "model.layers.24.linear_attn.in_proj_qkvz.weight": qkvz,
+        "model.layers.24.linear_attn.in_proj_ba.weight": ba,
+        "model.layers.24.linear_attn.conv1d.weight": conv,
+        "model.layers.24.attn_hyper_connection.input_mix_weight_down.weight": torch.arange(
+            15, dtype=torch.float32
+        ).reshape(3, 5),
+    }
+    pp = owner_pp + 1
+    train_ranks = [
+        _rank(train_tp, rank, pp, owner_pp, dp, replica, False)
+        for replica in range(dp)
+        for rank in range(train_tp)
+    ]
+    infer_ranks = [_rank(infer_tp, rank, 1, 0, 1, 0, True) for rank in range(infer_tp)]
+    train_raw, train_tensors = _raw(train_ranks, weights, train_tp)
+    infer_raw, expected = _raw(infer_ranks, weights, infer_tp)
+    train_meta, infer_meta = _metadata(train_raw), _metadata(infer_raw)
+    for meta in train_meta + infer_meta:
+        assert tuple(meta.global_shape) == tuple(weights[meta.name].shape)
+    builder = TransferPlanBuilder(
+        infer_world_size=infer_tp,
+        train_world_size=train_tp * pp * dp,
+        num_infer_engines=1,
+        strict_param_key_match=True,
+    )
+    ops = builder.build_weights_mapping_operations(infer_meta, train_meta)
+    destinations = {key: torch.empty_like(value) for key, value in expected.items()}
+    written = {
+        key: torch.zeros_like(value, dtype=torch.bool)
+        for key, value in expected.items()
+    }
+    for op in ops:
+        src_key = (op.send_shard_meta.name, op.send_rank - infer_tp)
+        dst_key = (op.recv_shard_meta.name, op.recv_rank)
+        assert not written[dst_key][op.inf_slices].any()
+        destinations[dst_key][op.inf_slices].copy_(
+            train_tensors[src_key][op.train_slices]
+        )
+        written[dst_key][op.inf_slices] = True
+    for key in expected:
+        assert written[key].all(), key
+        torch.testing.assert_close(destinations[key], expected[key], rtol=0, atol=0)
+
+
+TABLE = "model.layers.1.ple.ple_embedding.ngram_embedding.weight"
+
+
+VISUAL = "model.visual.patch_embed.proj.weight"
+
+
+QSA = "model.layers.3.self_attn.indexer.index_qk_proj.weight"
+
+
+@pytest.fixture
+def contract():
+    return Qwen4ExpFrozenContract(
+        "a" * 64, frozenset({TABLE}), frozenset({VISUAL}), True, True
+    )
+
+
+def table():
+    return nn.Parameter(torch.ones(4, 3, dtype=torch.bfloat16), requires_grad=False)
+
+
+@pytest.fixture
+def manifest_files(tmp_path, contract):
+    import hashlib
+    import json
+
+    model = tmp_path / "model"
+    model.mkdir()
+    config = b'{"architectures":["Qwen4ExpForConditionalGeneration"]}'
+    index = b"{}"
+    (model / "config.json").write_bytes(config)
+    (model / "model.safetensors.index.json").write_bytes(index)
+    basis = {
+        "config_sha256": hashlib.sha256(config).hexdigest(),
+        "weight_index_sha256": hashlib.sha256(index).hexdigest(),
+        "ple_source_shards": [
+            {
+                "name": "model.language_model.layers.1.ple.ple_embedding.ngram_embedding.shard_0.weight",
+                "sha256": "b" * 64,
+            }
+        ],
+        "visual_reference": [{"tp_rank": 0, "parameters": [{"name": VISUAL}]}],
+    }
+    digest = hashlib.sha256(
+        json.dumps(basis, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    declared = replace(contract, checkpoint_manifest_sha256=digest)
+    manifest = {"contract": declared.to_dict(), "identity_basis": basis}
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+    return path, model, declared
+
+
+@pytest.mark.parametrize("fault", ["evidence", "ple", "visual", "config"])
+def test_manifest_rejects_identity_or_exclusion_drift(manifest_files, fault):
+    import json
+
+    from areal.models.mcore.qwen4_exp_awex_contract import load_frozen_contract
+
+    path, model, _ = manifest_files
+    data = json.loads(path.read_text())
+    if fault == "evidence":
+        data["identity_basis"]["ple_source_shards"][0]["sha256"] = "c" * 64
+    elif fault == "ple":
+        data["contract"]["ple_table_names"] = [TABLE.replace("layers.1", "layers.2")]
+    elif fault == "visual":
+        data["contract"]["visual_parameter_names"] = ["model.visual.other.weight"]
+    else:
+        (model / "config.json").write_text("{}")
+    path.write_text(json.dumps(data))
+    with pytest.raises(ValueError):
+        load_frozen_contract(path, model)
+
+
+def setup_binding(global_id=0, mapped=False, table=True):
+    layer = nn.Module()
+    layer.layer_number = global_id + 1
+    layer.ple = nn.Module()
+    layer.ple.ple_embedding = nn.Module()
+    if table:
+        layer.ple.ple_embedding.ngram_embedding = nn.Embedding(
+            3, 2, dtype=torch.bfloat16
+        )
+        layer.ple.ple_embedding.ngram_embedding.weight.requires_grad_(False)
+    chunk = nn.Module()
+    chunk.decoder = nn.Module()
+    chunk.decoder.layers = nn.ModuleList([layer])
+    engine = SimpleNamespace(
+        model=[chunk],
+        mcore_config=SimpleNamespace(language_model_only=True, freeze_ple_table=True),
+        hf_config=SimpleNamespace(architectures=["Qwen4ExpForConditionalGeneration"]),
+    )
+    contract = Qwen4ExpFrozenContract(
+        "a" * 64,
+        frozenset(
+            {f"model.layers.{global_id}.ple.ple_embedding.ngram_embedding.weight"}
+        ),
+        frozenset({"model.visual.weight"}),
+        True,
+        True,
+    )
+    converter_cls = build_mcore_converter()
+    converter = converter_cls.__new__(converter_cls)
+    converter.rank_info = SimpleNamespace(pp_rank=1)
+    converter._pp_stage_layer_id_map = {(1, 0): {0: global_id}} if mapped else {}
+    return engine, converter, McoreFrozenBinder(engine, contract)
+
+
+def test_production_conversion_refreshes_binding_before_detach():
+    from areal.engine.awex.colocate_writer import AwexWeightPublisher
+
+    engine, unused, binder = setup_binding()
+    cls = build_mcore_converter(binder)
+    converter = cls.__new__(cls)
+    converter.rank_info = SimpleNamespace(pp_rank=0, pp_size=1)
+    converter._pp_stage_layer_id_map = {}
+    converter.hf_config = engine.hf_config
+    converter.tf_config = SimpleNamespace()
+    adapter = AwexWeightPublisher(engine)
+    adapter._qwen4_frozen_binder = binder
+    adapter._weight_converter = converter
+    adapter._rank_info = converter.rank_info
+    assert adapter._convert_parameters() == {}
+    embedding = engine.model[0].decoder.layers[0].ple.ple_embedding.ngram_embedding
+    old = embedding.weight
+    embedding.weight = nn.Parameter(torch.zeros_like(old), requires_grad=False)
+    assert adapter._convert_parameters() == {}
+    assert next(iter(converter._qwen4_original_parameters.values())) is embedding.weight
+    embedding.weight = nn.Parameter(torch.ones_like(old))
+    with pytest.raises(ValueError, match="trainable"):
+        adapter._convert_parameters()
+    assert getattr(converter, "_qwen4_frozen_contract", None) is None
+
+
+def _vision_binding(tmp_path, *, pp_rank=0):
+    import json
+
+    from safetensors.torch import save_file
+
+    engine, converter, old_binder = setup_binding()
+    chunk = engine.model[0]
+    chunk.pre_process = pp_rank == 0
+    contract = replace(old_binder.contract, language_model_only=False, schema_version=2)
+    engine.mcore_config.language_model_only = False
+    converter.rank_info.pp_rank = pp_rank
+    if pp_rank == 0:
+        chunk.visual = nn.Module()
+        chunk.visual.visual = nn.Linear(2, 3, bias=False, dtype=torch.bfloat16)
+        chunk.visual.requires_grad_(False)
+        chunk.visual.visual.weight.data.fill_(1)
+    engine.config = SimpleNamespace(path=str(tmp_path))
+    save_file(
+        {"model.visual.weight": torch.ones(3, 2, dtype=torch.bfloat16)},
+        tmp_path / "vision.safetensors",
+    )
+    (tmp_path / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": {"model.visual.weight": "vision.safetensors"}})
+    )
+    return engine, converter, McoreFrozenBinder(engine, contract)
+
+
+@pytest.mark.parametrize("pp_rank", [0, 1, 3])
+def test_vision_binding_and_converter_respect_pp_ownership(tmp_path, pp_rank):
+    engine, converter, binder = _vision_binding(tmp_path, pp_rank=pp_rank)
+    binder(converter)
+    expected = frozenset({"model.visual.weight"}) if pp_rank == 0 else frozenset()
+    assert converter._qwen4_local_visual_names == expected
+    if pp_rank == 0:
+        original = engine.model[0].visual.visual.weight
+        assert converter._qwen4_original_parameters["model.visual.weight"] is original
+        assert (
+            converter.convert_param("module.visual.visual.weight", original.detach())
+            == []
+        )
+        original.requires_grad_(True)
+        with pytest.raises(ValueError, match="trainable"):
+            converter.convert_param("module.visual.visual.weight", original.detach())
+    else:
+        with pytest.raises(ValueError, match="not owned"):
+            converter.convert_param("visual.visual.weight", torch.ones(3, 2))
+
+
+@pytest.mark.parametrize(
+    "fault", ["missing", "extra", "shape", "values", "trainable", "owner", "mode"]
+)
+def test_vision_binding_rejects_invalid_live_state(tmp_path, fault):
+    engine, converter, binder = _vision_binding(tmp_path)
+    chunk = engine.model[0]
+    if fault == "missing":
+        chunk.visual = None
+    elif fault == "extra":
+        chunk.visual.visual.register_parameter("unknown", table())
+    elif fault == "shape":
+        chunk.visual.visual.weight = nn.Parameter(
+            torch.ones(2, 2, dtype=torch.bfloat16), requires_grad=False
+        )
+    elif fault == "values":
+        chunk.visual.visual.weight.data.zero_()
+    elif fault == "trainable":
+        chunk.visual.visual.requires_grad_(True)
+    elif fault == "owner":
+        chunk.pre_process = False
+    else:
+        engine.mcore_config.language_model_only = True
+    with pytest.raises(ValueError):
+        binder(converter)
+
+
+@pytest.fixture
+def lifecycle(monkeypatch):
+    events = []
+    memory = SimpleNamespace(resident=True, enabled=True)
+    monkeypatch.setattr(
+        "areal.models.mcore.qwen4_exp_awex_memory.torch.get_device_module",
+        lambda: SimpleNamespace(synchronize=lambda: events.append("sync")),
+    )
+
+    class Scheduler:
+        def __init__(self):
+            self._engine_paused = True
+            self.running_batch = SimpleNamespace(is_empty=lambda: True)
+            self.idle = True
+            self.flush_success = True
+
+        def flush_cache(self):
+            if not memory.resident:
+                raise RuntimeError("write to unmapped KV")
+            events.append("clear")
+            return self.idle and self.flush_success
+
+    @dataclass(slots=True)
+    class Manager:
+        scheduler: Any
+        tp_worker: Any
+        memory_saver_adapter: Any
+        is_fully_idle: Any
+        flush_cache: Any
+        fail_resume: bool = False
+
+        def release_memory_occupation(self, request):
+            if not request.tags or "kv_cache" in request.tags:
+                assert self.is_fully_idle()
+                events.append("unmap")
+                memory.resident = False
+                self.flush_cache()
+            return "released"
+
+        def resume_memory_occupation(self, request):
+            if self.fail_resume:
+                raise RuntimeError("mapping failed")
+            if not request.tags or "kv_cache" in request.tags:
+                events.append("map")
+                memory.resident = True
+            return "resumed"
+
+    module = ModuleType("fake_weight_updater")
+    module.SchedulerWeightUpdaterManager = Manager
+    module.GPU_MEMORY_TYPE_KV_CACHE = "kv_cache"
+    install_kv_residency_hooks(module, Scheduler)
+    scheduler = Scheduler()
+    model = type("Qwen4ExpForConditionalGeneration", (), {})()
+    manager = Manager(
+        scheduler,
+        SimpleNamespace(model_runner=SimpleNamespace(model=model)),
+        memory,
+        lambda: scheduler.idle,
+        scheduler.flush_cache,
+    )
+    return SimpleNamespace(
+        scheduler=scheduler,
+        manager=manager,
+        memory=memory,
+        events=events,
+        module=module,
+        scheduler_type=Scheduler,
+    )
+
+
+@pytest.mark.parametrize("tags", [["kv_cache"], ["weights", "kv_cache"], None, []])
+def test_kv_multiple_cycles_reset_only_resident_memory(lifecycle, tags):
+    case = lifecycle
+    request = SimpleNamespace(tags=tags)
+    bound_flush = case.manager.flush_cache
+    for _ in range(2):
+        assert case.manager.release_memory_occupation(request) == "released"
+        assert not case.memory.resident
+        assert case.manager.flush_cache is bound_flush
+        assert case.scheduler.flush_cache() is True
+        assert case.manager.resume_memory_occupation(request) == "resumed"
+        assert case.memory.resident
+    assert case.events == ["clear", "sync", "unmap", "map", "clear", "sync"] * 2
+
+
+def test_busy_release_does_not_clear_or_unmap(lifecycle):
+    lifecycle.scheduler.idle = False
+    with pytest.raises(RuntimeError, match="idle or retract-paused"):
+        lifecycle.manager.release_memory_occupation(SimpleNamespace(tags=["kv_cache"]))
+    assert lifecycle.memory.resident
+    assert lifecycle.events == []
+
+
+def test_failed_flush_does_not_unmap(lifecycle):
+    lifecycle.scheduler.flush_success = False
+    with pytest.raises(RuntimeError, match="before KV release"):
+        lifecycle.manager.release_memory_occupation(SimpleNamespace(tags=["kv_cache"]))
+    assert lifecycle.memory.resident
+    assert lifecycle.events == ["clear"]
+
+
+def test_failed_resume_does_not_touch_unmapped_cache(lifecycle):
+    case = lifecycle
+    request = SimpleNamespace(tags=["kv_cache"])
+    case.manager.release_memory_occupation(request)
+    case.manager.fail_resume = True
+    with pytest.raises(RuntimeError, match="mapping failed"):
+        case.manager.resume_memory_occupation(request)
+    assert case.scheduler._areal_qwen4_exp_kv_state.released
+    assert case.events == ["clear", "sync", "unmap"]
+
+
+class Qwen4ExpForConditionalGeneration(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.visual = nn.Linear(3, 2)
+        self.model = nn.Linear(3, 2)
+
+
+def test_static_hooks_preserve_visual_and_native_buffer_lifecycle():
+    from types import SimpleNamespace
+
+    from areal.models.mcore.qwen4_exp_frozen_state import install_static_state_hooks
+
+    events = []
+    updater = SimpleNamespace(
+        _export_static_state=lambda model: {"native": "buffer-state"},
+        _import_static_state=lambda model, state: events.append(state["native"]),
+    )
+    install_static_state_hooks(updater)
+    exporter = updater._export_static_state
+    install_static_state_hooks(updater)
+    assert updater._export_static_state is exporter
+    model = Qwen4ExpForConditionalGeneration()
+    initial = snapshot_visual_parameters(model)
+    for _ in range(2):
+        state = updater._export_static_state(model)
+        with torch.no_grad():
+            for parameter in model.parameters():
+                parameter.fill_(42)
+        updater._import_static_state(model, state)
+        for name, parameter in model.named_parameters():
+            if name in initial:
+                torch.testing.assert_close(parameter, initial[name], rtol=0, atol=0)
+    assert events == ["buffer-state", "buffer-state"]
+    with pytest.raises(ValueError, match="not saved"):
+        updater._import_static_state(model, {"native": "buffer-state"})
+
+
+def test_reader_selects_bounded_awex_transport(monkeypatch):
+    import awex.transfer.nccl_stream_batch as stream_batch
+
+    monkeypatch.setattr(stream_batch.device_util, "create_stream", lambda: object())
+    reader = object.__new__(_DeviceBoundWeightsReader)
+    reader.transfer_rank = 7
+    reader.infer_world_size = 64
+
+    transport = reader.create_colocate_transport()
+
+    assert isinstance(transport, BoundedMemoryNcclColocateStreamBatchTransport)
+    assert transport.transfer_rank == 7
+    assert transport.world_size == 64

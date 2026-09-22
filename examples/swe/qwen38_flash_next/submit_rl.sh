@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
-# Usage: bash submit_rl.sh swe|swe-eval|rlvr [training config overrides...]
+# Usage: bash submit_rl.sh swe|swe-eval [training config overrides...]
 # Inference: SGLang 0.5.19.dev125+g119b5ffe4 in a fresh writable container layer.
 # Both QSA patches run before rollout startup and reject other/already-patched sources.
 set -euo pipefail
 recipe_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 export QWEN_REPO=${QWEN_REPO:-$(cd "$recipe_dir/../../.." && pwd)}
-profile=${1:?Usage: submit_rl.sh swe|swe-eval|rlvr [overrides...]}
+profile=${1:?Usage: submit_rl.sh swe|swe-eval [overrides...]}
 shift
-case "$profile" in swe|swe-eval|rlvr) ;; *) echo 'Expected swe, swe-eval or rlvr' >&2; exit 2 ;; esac
+case "$profile" in swe|swe-eval) ;; *) echo 'Expected swe or swe-eval' >&2; exit 2 ;; esac
 if [[ -n ${QWEN_LAUNCH_ENV:-} ]]; then
   set -a; source "$QWEN_LAUNCH_ENV"; set +a
 fi
@@ -18,16 +18,11 @@ for name in QWEN_OUTPUT_ROOT QWEN_MODEL QWEN_ACTOR_IMAGE QWEN_ROLLOUT_IMAGE \
   : "${!name:?Set $name in the launch environment}"
   export "$name"
 done
-if [[ $profile == swe || $profile == swe-eval ]]; then
-  for name in QWEN_PRIVATE_ENV QWEN_ARENA_STREAMS_FILE; do
-    : "${!name:?Set $name for SWE}"
-    test -f "${!name}"
-    export "$name"
-  done
-else
-  : "${QWEN_GSM8K_DATA:?Set the GSM8K dataset path}"
-  export QWEN_GSM8K_DATA
-fi
+for name in QWEN_PRIVATE_ENV QWEN_ARENA_STREAMS_FILE; do
+  : "${!name:?Set $name for SWE}"
+  test -f "${!name}"
+  export "$name"
+done
 : "${QWEN_AWEX_FROZEN_CONTRACT:?Set a validated frozen-weight contract for this model}"
 test -f "$QWEN_AWEX_FROZEN_CONTRACT"
 export QWEN_AWEX_FROZEN_CONTRACT

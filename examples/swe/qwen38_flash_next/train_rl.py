@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Launch the standard SWE/GSM8K workflow with Qwen runtime options."""
+"""Launch the standard Arena workflow with Qwen runtime options."""
 
 import json
 import os
@@ -141,21 +141,52 @@ def validate_evaluation_only(config, dataset):
         )
 
 
+def configure_evaluation_only(config, task_count):
+    """Reuse the MM recipe for one complete, fixed-weight benchmark pass."""
+    from areal.api.cli_args import ValidDatasetConfig
+
+    if task_count < 1:
+        raise ValueError("swe-eval requires a nonempty task selection")
+    config.total_train_epochs = 1
+    config.total_train_steps = 0
+    config.recover.mode = "disabled"
+    config.evaluator.eval_before_train = True
+    config.gconfig.n_samples = config.eval_gconfig.n_samples = 1
+    config.gconfig.reward_normalization = False
+    config.gconfig.max_new_tokens = config.eval_gconfig.max_new_tokens = 32768
+    config.rollout.max_concurrent_rollouts = 64
+    config.rollout.queue_size = config.rollout.consumer_batch_size = task_count
+    config.rollout.max_head_offpolicyness = 0
+    config.actor.min_usable_group_size = 1
+    config.actor.mb_spec.n_mbs = ((task_count + 7) // 8) * 8
+    config.actor.mb_spec.n_mbs_divisor = 8
+    config.actor.optimizer.lr = 0.0
+    config.train_dataset.batch_size = task_count
+    config.valid_dataset = ValidDatasetConfig(
+        **{**asdict(config.train_dataset), "shuffle": False, "drop_last": False}
+    )
+
+
 def main(profile, args):
+    if profile not in ("swe", "swe-eval"):
+        raise ValueError("Expected swe or swe-eval")
     evaluation_only = profile == "swe-eval"
-    if evaluation_only:
-        profile = "swe"
     from examples.swe.train_swe_rl import get_arena_mixture_dataset
     from examples.swe.utils import SWEPPOConfig
 
     from areal import PPOTrainer
-    from areal.api.cli_args import GRPOConfig, load_expr_config
-    from areal.dataset import get_custom_dataset
+    from areal.api.cli_args import load_expr_config
     from areal.engine.sglang_remote import RemoteSGLangEngine
     from areal.infra.scheduler.slurm import SlurmScheduler
-    from areal.utils.hf_utils import load_hf_tokenizer
 
-    config, _ = load_expr_config(args, SWEPPOConfig if profile == "swe" else GRPOConfig)
+    config, _ = load_expr_config(args, SWEPPOConfig)
+    selection_file = os.environ.get("QWEN_ARENA_TASK_IDS_FILE")
+    selected = json.loads(Path(selection_file).read_text()) if selection_file else None
+    if evaluation_only:
+        if selected is None:
+            raise ValueError("swe-eval requires QWEN_ARENA_TASK_IDS_FILE")
+        select_task_indices(selected, selected)
+        configure_evaluation_only(config, len(selected))
     from examples.swe.qwen38_flash_next.batch_snapshot import (
         resolve_replay_paths,
         validate_diagnostic_replay,
@@ -169,51 +200,32 @@ def main(profile, args):
         if evaluation_only:
             raise ValueError("Batch replay is not an evaluation mode")
         validate_diagnostic_replay(config, len(replay_paths))
-    if profile == "swe":
-        dataset, streams = get_arena_mixture_dataset(
-            config.econfig, size_multiple=config.train_dataset.batch_size
-        )
-        selection_file = os.environ.get("QWEN_ARENA_TASK_IDS_FILE")
-        if evaluation_only and not selection_file:
-            raise ValueError("swe-eval requires QWEN_ARENA_TASK_IDS_FILE")
-        if selection_file:
-            if len(streams) != 1:
-                raise ValueError("Task selection requires exactly one Arena stream")
-            selected = json.loads(Path(selection_file).read_text())
-            dataset = select_arena_dataset(dataset, selected)
-            if len(dataset) < config.train_dataset.batch_size:
-                raise ValueError(
-                    "Task selection must contain at least one training batch"
-                )
-        config.econfig.arena_streams = streams
-        config.econfig.arena_streams_file = ""
-        config.econfig.arena_streams_yaml_b64 = ""
-        if evaluation_only:
-            validate_evaluation_only(config, dataset)
-        generation = config.eval_gconfig if evaluation_only else config.gconfig
-        workflow = "examples.swe.arena_agent.ArenaStreamAgentWorkflow"
-        kwargs = dict(
-            econfig=asdict(config.econfig),
-            gen_args=dict(
-                temperature=generation.temperature,
-                top_p=generation.top_p,
-                top_k=generation.top_k,
-                max_completion_tokens=generation.max_new_tokens,
-            ),
-            timeout=config.econfig.timeout,
-        )
-    else:
-        dataset = get_custom_dataset(
-            split="train",
-            dataset_config=config.train_dataset,
-            tokenizer=load_hf_tokenizer(config.tokenizer_path),
-        )
-        workflow = "areal.workflow.openai.math_agent.MathAgent"
-        kwargs = dict(
-            temperature=config.gconfig.temperature,
-            top_p=config.gconfig.top_p,
-            max_completion_tokens=config.gconfig.max_new_tokens,
-        )
+    dataset, streams = get_arena_mixture_dataset(
+        config.econfig, size_multiple=config.train_dataset.batch_size
+    )
+    if selection_file:
+        if len(streams) != 1:
+            raise ValueError("Task selection requires exactly one Arena stream")
+        dataset = select_arena_dataset(dataset, selected)
+        if len(dataset) < config.train_dataset.batch_size:
+            raise ValueError("Task selection must contain at least one training batch")
+    config.econfig.arena_streams = streams
+    config.econfig.arena_streams_file = ""
+    config.econfig.arena_streams_yaml_b64 = ""
+    if evaluation_only:
+        validate_evaluation_only(config, dataset)
+    generation = config.eval_gconfig if evaluation_only else config.gconfig
+    workflow = "examples.swe.arena_agent.ArenaStreamAgentWorkflow"
+    kwargs = dict(
+        econfig=asdict(config.econfig),
+        gen_args=dict(
+            temperature=generation.temperature,
+            top_p=generation.top_p,
+            top_k=generation.top_k,
+            max_completion_tokens=generation.max_new_tokens,
+        ),
+        timeout=config.econfig.timeout,
+    )
 
     class RecipeTrainer(PPOTrainer):
         def _init_scheduler(self):
