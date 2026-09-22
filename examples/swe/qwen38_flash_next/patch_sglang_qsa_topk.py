@@ -15,7 +15,11 @@ TARGET_RELATIVE = Path("srt/layers/attention/qsa/kernel.py")
 
 
 def stable_qsa_topk(logits, row_starts, row_ends, topk):
-    """Reference selection: score descending, lower relative ID wins exact ties."""
+    """Select by descending score, breaking exact ties by lower relative ID.
+
+    CUDA validates tensor contents asynchronously. A failed device assertion
+    invalidates the CUDA context; the worker must terminate rather than retry.
+    """
     import torch
 
     if (
@@ -35,11 +39,17 @@ def stable_qsa_topk(logits, row_starts, row_ends, topk):
         raise ValueError("Row bounds must be integer tensors")
     starts = row_starts.to(device=logits.device, dtype=torch.long)
     ends = row_ends.to(device=logits.device, dtype=torch.long)
-    if not ((starts >= 0) & (starts <= ends) & (ends <= keys)).all():
+    bounds_valid = ((starts >= 0) & (starts <= ends) & (ends <= keys)).all()
+    if logits.is_cuda:
+        torch._assert_async(bounds_valid, "Invalid row bounds")
+    elif not bounds_valid:
         raise ValueError("Invalid row bounds")
     positions = torch.arange(keys, device=logits.device)[None, :]
     valid = (positions >= starts[:, None]) & (positions < ends[:, None])
-    if not torch.isfinite(logits[valid]).all():
+    scores_finite = (torch.isfinite(logits) | ~valid).all()
+    if logits.is_cuda:
+        torch._assert_async(scores_finite, "Nonfinite valid scores")
+    elif not scores_finite:
         raise ValueError("Nonfinite valid scores")
     # Invalid positions cannot beat any finite candidate. Stable sort retains
     # ascending absolute (and hence relative) IDs when scores are exactly equal.

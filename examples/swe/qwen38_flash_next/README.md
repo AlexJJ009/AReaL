@@ -51,6 +51,12 @@ pauses. Evaluation leaves this unset, using stream/server defaults. Explicit
 
 ## Required runtime support
 
+Stable QSA top-k preserves score ordering and resolves exact ties by lower relative
+index. Row bounds and finite scores within those bounds are always validated. On CUDA,
+device assertions avoid per-call host synchronization; invalid inputs invalidate the
+CUDA context and require terminating the worker, not retrying the request. Errors may
+surface at a subsequent CUDA operation. CPU inputs retain immediate `ValueError`s.
+
 Qwen4Exp vision needs a Transformers runtime exposing `Qwen4ExpModel.get_rope_index` and
 `get_vision_position_ids`, validated with Transformers 5.16.1. The standard locked
 SGLang/vLLM environments (Transformers 5.3.0/5.7.0) do not provide this model. Supply a
