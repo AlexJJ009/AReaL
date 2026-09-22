@@ -6,7 +6,7 @@ import asyncio
 import shutil
 import threading
 import traceback
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from threading import Lock
@@ -39,13 +39,16 @@ from areal.api.cli_args import (
 from areal.infra.rpc.serialization import deserialize_value
 from areal.infra.utils.concurrent import run_async_task
 from areal.utils import logging, perf_tracer
-from areal.utils.data import cycle_dataloader
 from areal.utils.dynamic_import import import_from_string
 from areal.utils.network import find_free_ports, format_hostport, gethostip
 from areal.utils.perf_tracer import trace_perf
 
 from ..staleness_manager import StalenessManager
-from ..workflow_executor import BatchTaskDispatcher, TaskIdGenerator
+from ..workflow_executor import (
+    BatchTaskDispatcher,
+    TaskIdGenerator,
+    _RecoveryInputGenerator,
+)
 
 logger = logging.getLogger("RolloutController")
 
@@ -100,6 +103,8 @@ class RolloutController:
         self._version = 0
 
         self._task_id_generator = TaskIdGenerator()
+        self._input_recovery_buffer: deque[dict[str, Any]] = deque()
+        self._recovery_replay: deque[dict[str, Any]] = deque()
 
         # Use provided staleness manager or create a default one
         # The manager will be properly initialized in initialize()
@@ -1045,23 +1050,28 @@ class RolloutController:
         if workflow_kwargs is None:
             workflow_kwargs = {}
 
-        def task_input_generator():
-            data_iter = dataloader if finite_epoch else cycle_dataloader(dataloader)
-            for data in data_iter:
-                for item in data:
-                    yield _RemoteRolloutTaskInput(
-                        data=item,
-                        workflow=workflow_str,
-                        workflow_kwargs=workflow_kwargs,
-                        should_accept_fn=should_accept_fn,
-                        task_id=self._task_id_generator.next(),
-                        group_size=group_size,
-                        reward_normalization=reward_normalization,
-                        drop_incomplete_group=drop_incomplete_group,
-                    )
-
         if not hasattr(self, "data_generator"):
-            self.data_generator = task_input_generator()
+            self._input_recovery_buffer.extend(self._recovery_replay)
+            self._recovery_replay.clear()
+
+            def make_task_input(item: dict[str, Any]) -> _RemoteRolloutTaskInput:
+                return _RemoteRolloutTaskInput(
+                    data=item,
+                    workflow=workflow_str,
+                    workflow_kwargs=workflow_kwargs,
+                    should_accept_fn=should_accept_fn,
+                    task_id=self._task_id_generator.next(),
+                    group_size=group_size,
+                    reward_normalization=reward_normalization,
+                    drop_incomplete_group=drop_incomplete_group,
+                )
+
+            self.data_generator = _RecoveryInputGenerator(
+                dataloader,
+                finite_epoch,
+                self._input_recovery_buffer,
+                make_task_input,
+            )
 
         # Delegate to dispatcher
         assert dataloader.batch_size is not None
@@ -1076,6 +1086,24 @@ class RolloutController:
         # Return list of trajectories
         trajectories = [r.trajectory if r is not None else None for r in results]
         return [t for t in trajectories if t is not None]
+
+    def get_input_recovery_state(self) -> dict[str, list[Any]]:
+        """Return raw outstanding rollout inputs and the partial batch buffer."""
+        state = self.dispatcher.get_input_recovery_state()
+        state["buffer"] = list(self._input_recovery_buffer)
+        return state
+
+    def load_input_recovery_state(self, state: dict[str, Any] | None) -> None:
+        """Replay raw rollout inputs before reading the restored dataloader."""
+        if not state:
+            return
+        if hasattr(self, "data_generator"):
+            raise RuntimeError(
+                "Cannot load rollout input recovery after prepare_batch."
+            )
+        outstanding = list(state.get("outstanding", []))
+        buffered = list(state.get("buffer", []))
+        self._recovery_replay = deque(outstanding + buffered)
 
     def compute_logp(self, data: list[dict[str, Any]]) -> list[Any]:
         """Compute token log-probabilities for trajectories via remote workers."""

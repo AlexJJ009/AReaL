@@ -493,6 +493,9 @@ class PPOTrainer:
                 sm = self.rollout.workflow_executor.staleness_manager
             if sm is not None:
                 sm.on_version_recovered(recovery_version)
+            input_state = self.recover_info.rollout_input_state
+            if input_state is not None:
+                self.rollout.load_input_recovery_state(input_state)
 
         self._config_perf_tracer()
         self._apply_initial_offload_policy()
@@ -1418,6 +1421,13 @@ class PPOTrainer:
                     0, global_step + 1 - self.config.num_critic_only_steps
                 ),
             },
+            rollout_input_state=(
+                self.rollout.get_input_recovery_state()
+                if self.config.num_critic_only_steps
+                and is_single_controller()
+                and hasattr(self.rollout, "get_input_recovery_state")
+                else None
+            ),
         )
 
         if not is_single_controller():

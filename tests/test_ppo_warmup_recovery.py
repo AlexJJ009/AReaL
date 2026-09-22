@@ -199,8 +199,10 @@ def test_recover_info_roundtrips_trainer_state(tmp_path):
         trainer_state={"policy_version": 3, "num_critic_only_steps": 4},
     )
 
+    source.rollout_input_state = {"pending_inputs": [{"id": 7}]}
     source.dump(str(tmp_path))
     loaded = RecoverInfo.load(str(tmp_path))
+    assert loaded.rollout_input_state == source.rollout_input_state
 
     assert loaded.last_step_info.global_step == 6
     assert loaded.trainer_state == {
@@ -213,10 +215,12 @@ def test_recover_info_loads_legacy_checkpoint_without_trainer_state(tmp_path):
     source = _info(global_step=2, trainer_state={})
     source.dump(str(tmp_path))
     (tmp_path / "trainer_state.json").unlink()
+    (tmp_path / "rollout_input_state.pkl").unlink()
 
     loaded = RecoverInfo.load(str(tmp_path))
 
     assert loaded.trainer_state == {}
+    assert loaded.rollout_input_state is None
 
 
 def test_recover_load_rejects_warmup_config_mismatch(tmp_path):
@@ -394,3 +398,21 @@ def test_recover_load_treats_legacy_missing_trainer_state_as_zero_warmup(tmp_pat
     assert actor.updated_versions == [2]
     assert actor.versions == [2]
     assert rollout.versions == [2]
+
+
+def test_input_recovery_roundtrips_in_single_controller_process_group(tmp_path):
+    import torch.distributed as dist
+
+    assert not dist.is_initialized()
+    dist.init_process_group(
+        "gloo", init_method=f"file://{tmp_path / 'rendezvous'}", rank=0, world_size=1
+    )
+    try:
+        source = _info(global_step=4)
+        source.rollout_input_state = {"outstanding": [{"id": 20}], "buffer": []}
+        source.dump(str(tmp_path / "checkpoint"))
+        loaded = RecoverInfo.load(str(tmp_path / "checkpoint"))
+        assert loaded.rollout_input_state == source.rollout_input_state
+        _assert_state_equal(loaded.dataloader_info, source.dataloader_info)
+    finally:
+        dist.destroy_process_group()

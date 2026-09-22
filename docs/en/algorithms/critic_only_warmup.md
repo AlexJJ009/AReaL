@@ -55,7 +55,16 @@ rollout capacity from the real policy version. Legacy checkpoints without this
 file imply zero critic-only rounds. Changing warmup length on resume is rejected.
 Actor evaluation is skipped during critic-only rounds because the actor is
 unchanged. Checkpointing still runs, including the unchanged actor, so a warmup
-interruption is recoverable.
+interruption is recoverable. FSDP checkpoints also preserve the learning-rate
+scheduler and optimizer update counter in `fsdp_engine_state.pt`. Older FSDP
+checkpoints without that sidecar emit a warning when restored.
+
+In controller mode, warmup recovery also saves raw prefetched, unconsumed prompt
+inputs and the partial dataloader batch. Resume regenerates those rollouts before
+reading from the saved dataloader cursor. In-flight responses are not serialized,
+so stochastic regenerated responses need not be bitwise identical; consumed
+prompts must not be replayed. This input recovery currently applies to runs with
+`num_critic_only_steps > 0`.
 
 ## Scope and use
 

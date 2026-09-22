@@ -320,6 +320,10 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
         self._pending_inputs: deque[TInput] = deque()
         self._pending_results: dict[int, TimedResult[TResult]] = {}
         self._active_task_ids: set[int] = set()
+        # Keep the original request alongside the task id until its result is
+        # consumed.  The runner only retains executable callables, so this
+        # dispatcher-owned map is the picklable recovery boundary.
+        self._active_task_inputs: dict[int, TInput] = {}
 
         # Condition variables for coordination
         self._input_lock = threading.Lock()
@@ -562,14 +566,17 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
             Task input to be processed.
         """
         self._check_thread_exception()
+        with self._result_cv:
+            if task_input.task_id in self._active_task_inputs:
+                raise ValueError(f"Task {task_input.task_id} is already submitted.")
+            self._active_task_ids.add(task_input.task_id)
+            self._active_task_inputs[task_input.task_id] = task_input
         with self._input_cv:
             self._pending_inputs.append(task_input)
             self.staleness_manager.on_rollout_enqueued()
             if self.enable_tracing:
                 self.logger.info(f"Enqueue rollout. {self._rollout_stats()}")
             self._input_cv.notify()
-        with self._result_cv:
-            self._active_task_ids.add(task_input.task_id)
 
     def wait_results(
         self, count: int, timeout: float | None = None, raise_timeout: bool = True
@@ -629,6 +636,7 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
                 self._result_cv.notify_all()
             for r in selected:
                 self._active_task_ids.discard(r.task_id)
+                self._active_task_inputs.pop(r.task_id, None)
 
         return [r.data for r in selected]
 
@@ -658,8 +666,23 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
 
             found_result = self._pending_results.pop(task_id)
             self._active_task_ids.remove(task_id)
+            self._active_task_inputs.pop(task_id, None)
             self._result_cv.notify_all()
             return found_result.data
+
+    def get_input_recovery_state(self) -> dict[str, list[Any]]:
+        """Return raw data for all submitted but unconsumed requests.
+
+        Dict insertion order is the submission order.  This includes queued,
+        running, and completed results which are still waiting in this
+        dispatcher, while excluding results already returned to the caller.
+        """
+        with self._result_cv:
+            return {
+                "outstanding": [
+                    task_input.data for task_input in self._active_task_inputs.values()
+                ]
+            }
 
     def active_submit_and_wait(
         self,
@@ -731,7 +754,13 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
                     )
                 for _ in range(min(batch_size, capacity)):
                     try:
-                        self.submit_task_input(next(input_generator))
+                        task_input = next(input_generator)
+                        self.submit_task_input(task_input)
+                        acknowledge = getattr(
+                            input_generator, "acknowledge_submission", None
+                        )
+                        if acknowledge is not None:
+                            acknowledge(task_input)
                     except StopIteration:
                         if finite_epoch:
                             input_exhausted = True
@@ -800,6 +829,52 @@ class TaskIdGenerator:
         return task_id
 
 
+class _RecoveryInputGenerator:
+    """Yield task inputs while retaining the current item until submission."""
+
+    def __init__(
+        self,
+        dataloader: StatefulDataLoader,
+        finite_epoch: bool,
+        recovery_buffer: deque[dict[str, Any]],
+        task_factory: Callable[[dict[str, Any]], TInput],
+    ):
+        self._dataloader = dataloader
+        self._finite_epoch = finite_epoch
+        self._recovery_buffer = recovery_buffer
+        self._task_factory = task_factory
+        self._data_iter = None
+        self._current: TInput | None = None
+
+    def __iter__(self):
+        return self
+
+    def __next__(self) -> TInput:
+        if self._current is not None:
+            raise RuntimeError(
+                "Input was requested before the previous one was submitted."
+            )
+        if self._data_iter is None:
+            self._data_iter = (
+                iter(self._dataloader)
+                if self._finite_epoch
+                else iter(cycle_dataloader(self._dataloader))
+            )
+        while not self._recovery_buffer:
+            batch = next(self._data_iter)
+            self._recovery_buffer.extend(batch)
+        self._current = self._task_factory(self._recovery_buffer[0])
+        return self._current
+
+    def acknowledge_submission(self, task_input: TInput) -> None:
+        if self._current is None or task_input.task_id != self._current.task_id:
+            raise RuntimeError(
+                "Acknowledged an input different from the yielded input."
+            )
+        self._recovery_buffer.popleft()
+        self._current = None
+
+
 class WorkflowExecutor:
     """Executor for asynchronous workflow-based rollout generation.
 
@@ -836,6 +911,8 @@ class WorkflowExecutor:
         ) = None
 
         self._task_id_generator = TaskIdGenerator()
+        self._input_recovery_buffer: deque[dict[str, Any]] = deque()
+        self._recovery_replay: deque[dict[str, Any]] = deque()
 
         # Lazy-loaded tokenizer for trajectory dumping
         self._tokenizer = None
@@ -1491,22 +1568,26 @@ class WorkflowExecutor:
             where batch_size can vary per trajectory depending on the workflow output.
         """
 
-        def task_input_generator():
-            data_iter = dataloader if finite_epoch else cycle_dataloader(dataloader)
-            for data in data_iter:
-                for item in data:
-                    # Workflow is already resolved by RemoteInfEngine
-                    task_id = self._task_id_generator.next()
-                    perf_tracer.register_task(task_id)
-                    yield _RolloutTaskInput(
-                        data=item,
-                        workflow=workflow,
-                        should_accept_fn=should_accept_fn,
-                        task_id=task_id,
-                    )
-
         if not hasattr(self, "data_generator"):
-            self.data_generator = task_input_generator()
+            self._input_recovery_buffer.extend(self._recovery_replay)
+            self._recovery_replay.clear()
+
+            def make_task_input(item: dict[str, Any]) -> _RolloutTaskInput:
+                task_id = self._task_id_generator.next()
+                perf_tracer.register_task(task_id)
+                return _RolloutTaskInput(
+                    data=item,
+                    workflow=workflow,
+                    should_accept_fn=should_accept_fn,
+                    task_id=task_id,
+                )
+
+            self.data_generator = _RecoveryInputGenerator(
+                dataloader,
+                finite_epoch,
+                self._input_recovery_buffer,
+                make_task_input,
+            )
 
         # Delegate to dispatcher
         assert dataloader.batch_size is not None
@@ -1519,6 +1600,24 @@ class WorkflowExecutor:
 
         # Return list of trajectory dicts (filter out None)
         return [r.trajectory for r in results if r is not None]
+
+    def get_input_recovery_state(self) -> dict[str, list[Any]]:
+        """Return raw outstanding rollout inputs and the partial batch buffer."""
+        state = self.dispatcher.get_input_recovery_state()
+        state["buffer"] = list(self._input_recovery_buffer)
+        return state
+
+    def load_input_recovery_state(self, state: dict[str, Any] | None) -> None:
+        """Replay raw rollout inputs before reading the restored dataloader."""
+        if not state:
+            return
+        if hasattr(self, "data_generator"):
+            raise RuntimeError(
+                "Cannot load rollout input recovery after prepare_batch."
+            )
+        outstanding = list(state.get("outstanding", []))
+        buffered = list(state.get("buffer", []))
+        self._recovery_replay = deque(outstanding + buffered)
 
     def pause(self):
         """Pause request submission for async rollout.

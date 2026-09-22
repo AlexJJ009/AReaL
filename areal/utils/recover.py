@@ -50,11 +50,22 @@ class RecoverInfo:
     dataloader_info: dict | list[dict]
     checkpoint_info: dict
     trainer_state: dict = dataclasses.field(default_factory=dict)
+    rollout_input_state: dict | None = None
 
     def dump(self, dump_dir: str):
         # Dumps the recover info to multiple files in `dump_dir`:
         # 1. step_info.json: contains the recover info
         # 2. *_info.json or *_info.pkl: contains other informantion required for recover.
+
+        # The single controller initializes a size-one Gloo group as well.
+        if (
+            dist.is_initialized()
+            and dist.get_world_size() > 1
+            and self.rollout_input_state is not None
+        ):
+            raise NotImplementedError(
+                "Rollout input recovery currently requires controller mode"
+            )
 
         if dist.is_initialized():
             # Since dataloader state is different across distributed ranks,
@@ -68,6 +79,9 @@ class RecoverInfo:
                 return
         else:
             dataloader_info = self.dataloader_info
+
+        # Persist raw prompts, never live RTensors or inference futures.
+        rollout_input_state = self.rollout_input_state
 
         os.makedirs(dump_dir, exist_ok=True)
         step_info_path = os.path.join(dump_dir, "step_info.json")
@@ -92,6 +106,8 @@ class RecoverInfo:
 
         with open(os.path.join(dump_dir, "trainer_state.json"), "w") as f:
             json.dump(self.trainer_state, f, indent=4)
+        with open(os.path.join(dump_dir, "rollout_input_state.pkl"), "wb") as f:
+            pickle.dump(rollout_input_state, f)
 
         dataloader_info_path = os.path.join(dump_dir, "dataloader_info.pkl")
         with open(dataloader_info_path, "wb") as f:
@@ -133,6 +149,12 @@ class RecoverInfo:
                     trainer_state = json.load(f)
             else:
                 trainer_state = {}
+            rollout_input_path = os.path.join(load_dir, "rollout_input_state.pkl")
+            if os.path.exists(rollout_input_path):
+                with open(rollout_input_path, "rb") as f:
+                    rollout_input_state = pickle.load(f)
+            else:
+                rollout_input_state = None
 
             dataloader_info_path = os.path.join(load_dir, "dataloader_info.pkl")
             with open(dataloader_info_path, "rb") as f:
@@ -155,6 +177,7 @@ class RecoverInfo:
                 dataloader_info=dataloader_info,
                 checkpoint_info=checkpoint_info,
                 trainer_state=trainer_state,
+                rollout_input_state=rollout_input_state,
             )
         except Exception as e:
             logger.error(f"Failed to load recover info from {load_dir}: {e}")
@@ -289,6 +312,7 @@ class RecoverHandler:
         processor: AutoProcessor | None = None,
         base_model_path: str | None = None,
         trainer_state: dict | None = None,
+        rollout_input_state: dict | None = None,
     ):
         if self.config.mode in ("disabled", "off"):
             return
@@ -320,6 +344,7 @@ class RecoverHandler:
             dataloader_info=dataloader.state_dict(),
             checkpoint_info=self.freq_ctl.state_dict(),
             trainer_state=trainer_state or {},
+            rollout_input_state=rollout_input_state,
         )
 
         recover_info_path = self.recover_info_path(
