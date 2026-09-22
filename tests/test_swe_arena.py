@@ -2222,3 +2222,61 @@ def test_invalid_gateway_url_is_rejected_without_echoing_credentials(
     with pytest.raises(ValueError, match="Arena LLM base URL") as error:
         ArenaOpenAPIClient(base_url="https://control.example", api_token="test-token")
     assert "secret" not in str(error.value)
+
+
+@pytest.mark.parametrize("via_poll", [False, True])
+@pytest.mark.parametrize(
+    "status",
+    [
+        "ERROR",
+        "CANCELLED",
+        "COLLECT_FAILED",
+        "EVAL_FAILED",
+        "FAILED",
+        "HARNESS_FAILED",
+        "NO_OUTPUT",
+        "SETUP_FAILED",
+        "TIMEOUT",
+    ],
+)
+def test_terminal_failure_with_score_stops_without_repolling(
+    monkeypatch, via_poll, status
+):
+    """Both result paths must preserve failure receipts, including grader ERROR."""
+    monkeypatch.setenv("ARENA_OPENAPI_TOKEN", "arena-token")
+    calls = []
+    payload = {
+        "task_id": "task-1",
+        "status": status,
+        "score": 0,
+        "raw": {"error": "subsection not found", "instance_id": "example-1"},
+    }
+
+    def handler(request):
+        calls.append(request.method)
+        # A regression fails immediately instead of spinning until a test timeout.
+        assert len(calls) <= (2 if via_poll else 1)
+        if via_poll and request.method == "POST":
+            return httpx.Response(202, json={"task_id": "task-1", "status": "PENDING"})
+        return httpx.Response(200, json={"data": payload})
+
+    async def launch():
+        client = ArenaOpenAPIClient(base_url="https://arena.example", poll_interval=0.0)
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler)
+        ) as http_client:
+            await client.launch_one_task(
+                stream_id="stream-1",
+                data_id="data-1",
+                model_name="deployment-1",
+                proxy_base_url="http://rollout-proxy/v1",
+                proxy_api_key="session-key",
+                client=http_client,
+            )
+
+    with pytest.raises(ArenaTaskFailedError) as exc:
+        asyncio.run(launch())
+    assert exc.value.status == status
+    assert exc.value.result.score == 0
+    assert exc.value.result.raw == payload["raw"]
+    assert calls == (["POST", "GET"] if via_poll else ["POST"])
