@@ -308,6 +308,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Install branch-pinned AWEX
+        id: awex-runtime
         env:
           TEST_VARIANT: ${{ matrix.variant }}
         run: |
@@ -317,6 +318,8 @@ jobs:
           import json
           import os
           import subprocess
+          import sys
+          import tempfile
           import tomllib
           from pathlib import Path
 
@@ -336,17 +339,23 @@ jobs:
               revision = requirement.url.rsplit("@", 1)[-1]
               if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
                   raise RuntimeError("AWEX source dependencies must pin a full commit SHA")
+              target = tempfile.mkdtemp(prefix="awex-", dir=os.environ["RUNNER_TEMP"])
               subprocess.run([
                   "uv", "pip", "install", "--python", "/opt/.venv/bin/python",
-                  "--no-deps", "--reinstall", str(requirement),
+                  "--target", target, "--no-deps", str(requirement),
               ], check=True)
+              sys.path.insert(0, target)
               source = json.loads(importlib.metadata.distribution("awex").read_text("direct_url.json"))
               if source.get("vcs_info", {}).get("commit_id") != revision:
                   raise RuntimeError("Installed AWEX commit does not match the branch pin")
+              with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                  output.write(f"pythonpath={target}\n")
               print(f"Verified AWEX commit: {revision}")
           PYTHON
 
       - name: Validate Docker installation
+        env:
+          PYTHONPATH: ${{ steps.awex-runtime.outputs.pythonpath }}:${{ github.workspace }}
         run: |
           export PATH="/opt/.venv/bin:$PATH"
           python areal/tools/validate_docker_installation.py
@@ -355,7 +364,7 @@ jobs:
         env:
           CI: true
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          PYTHONPATH: ${{ github.workspace }}
+          PYTHONPATH: ${{ steps.awex-runtime.outputs.pythonpath }}:${{ github.workspace }}
           TOKENIZERS_PARALLELISM: false
           AREAL_IS_IN_CI: 1
           VIRTUAL_ENV: /opt/.venv
