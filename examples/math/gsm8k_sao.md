@@ -1,10 +1,10 @@
 # Dense GSM8K SAO
 
-`gsm8k_sao.py` uses the production `PPOTrainer` with FSDP and SGLang. The example
-selects Direct DIS, action-length actor lambda with alpha 1.5, critic lambda 1, two
-complete critic updates followed by refreshed values and one actor update. It uses one
-answer per prompt and a logical batch of 128. Online learning rates are actor `1e-6` and
-critic `5e-6`.
+`gsm8k_sao.py` uses the production `PPOTrainer` with FSDP and SGLang. The example uses
+FlashInfer for SGLang inference and FA2/FLA for FSDP training. It selects Direct DIS,
+action-length actor lambda with alpha 1.5, critic lambda 1, two complete critic updates
+followed by refreshed values and one actor update. It uses one answer per prompt and a
+logical batch of 128. Online learning rates are actor `1e-6` and critic `5e-6`.
 
 The approved engineering choices are gamma 1, raw rewards and advantages, plain critic
 MSE, constant learning rates without warmup, and a DIS mean over original action tokens.
