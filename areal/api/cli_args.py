@@ -1751,6 +1751,14 @@ class PPOActorConfig(TrainEngineConfig):
             "Ignored when gae_lambda is a float."
         },
     )
+    critic_gae_lambda: float | None = field(
+        default=None,
+        metadata={
+            "help": "Independent GAE lambda for critic targets, in [0, 1]. "
+            "None preserves targets computed with actor gae_lambda. "
+            "SAO uses 1.0; actor advantage normalization never changes targets."
+        },
+    )
     # NOTE: not annotated as Literal["token", "turn"] because the pinned
     # OmegaConf version rejects Literal annotations in structured configs.
     # Validated in __post_init__ instead.
@@ -1882,6 +1890,15 @@ class PPOActorConfig(TrainEngineConfig):
             )
         if isinstance(self.gae_lambda, str) and not self.gae_lambda:
             raise ValueError("gae_lambda function path must not be empty")
+
+        if self.critic_gae_lambda is not None and (
+            isinstance(self.critic_gae_lambda, bool)
+            or not isinstance(self.critic_gae_lambda, int | float)
+            or not 0 <= self.critic_gae_lambda <= 1
+        ):
+            raise ValueError(
+                "critic_gae_lambda must be None or a finite number in [0, 1]"
+            )
 
         if self.gae_timestep_unit not in {"token", "turn"}:
             raise ValueError(

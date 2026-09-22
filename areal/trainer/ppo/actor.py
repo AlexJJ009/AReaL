@@ -155,6 +155,7 @@ class PPOActor:
             f"  reward_norm: {config.reward_norm if config.reward_norm else 'DISABLED (None)'}"
         )
         logger.info(f"  gae_lambda: {config.gae_lambda}")
+        logger.info(f"  critic_gae_lambda: {config.critic_gae_lambda}")
         logger.info(f"  gae_timestep_unit: {config.gae_timestep_unit}")
         logger.info(f"  eps_clip: {config.eps_clip}")
         logger.info("=" * 70)
@@ -304,7 +305,22 @@ class PPOActor:
                 discount=self.discount,
                 gae_lambda=gae_lambda,
             )
-        data["returns"] = returns
+        # Critic targets have their own trace decay. Never derive them from
+        # normalized policy advantages or a later actor-only transformation.
+        if self.config.critic_gae_lambda is not None:
+            critic_kwargs = dict(
+                rewards=rewards.detach(),
+                values=values.detach(),
+                loss_mask=loss_mask,
+                seq_no_eos_mask=seq_no_eos_mask,
+                discount=self.discount,
+                gae_lambda=self.config.critic_gae_lambda,
+            )
+            if self.gae_timestep_unit == "turn":
+                _, returns = _compute_turn_level_gae(**critic_kwargs, turn_ids=turn_ids)
+            else:
+                _, returns = _compute_token_level_gae(**critic_kwargs)
+        data["returns"] = returns.detach()
 
         # Optionally perform advantage normalization.
         if self.adv_norm is not None:
@@ -313,7 +329,7 @@ class PPOActor:
             advantages = self.adv_norm(advantages, loss_mask, group_sizes=group_sizes)
 
         # Store data in the dict.
-        data["advantages"] = advantages
+        data["advantages"] = advantages.detach()
         data["kl_rewards"] = kl_rewards
         data["tot_rewards"] = gae_kl_rewards + gae_outcome_rewards
         data["loss_mask"] = loss_mask
