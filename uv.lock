@@ -407,6 +407,7 @@ cuda = [
     { name = "flash-linear-attention", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "kernels", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "mbridge", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "mcore-bridge", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "megatron-bridge", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "megatron-core", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "nvidia-cudnn-cu12", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -422,6 +423,7 @@ cuda-train = [
     { name = "flash-linear-attention", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "kernels", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin') or (platform_machine == 'aarch64' and sys_platform == 'linux') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "mbridge", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "mcore-bridge", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "megatron-bridge", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "megatron-core", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "nvidia-modelopt", extra = ["hf"], marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -433,6 +435,7 @@ kernels = [
 ]
 megatron = [
     { name = "mbridge", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "mcore-bridge", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "megatron-bridge", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "megatron-core", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
@@ -479,7 +482,7 @@ requires-dist = [
     { name = "areal", extras = ["megatron"], marker = "extra == 'cuda-train'" },
     { name = "areal", extras = ["sglang"], marker = "extra == 'cuda'" },
     { name = "areal", extras = ["tms"], marker = "extra == 'cuda-train'" },
-    { name = "awex", specifier = "==0.8.1" },
+    { name = "awex", git = "https://github.com/inclusionAI/Awex.git?rev=dc665c44d61c193fd83997bdda43a7dc8e86cd62" },
     { name = "build", specifier = ">=1.2.1" },
     { name = "claude-agent-sdk" },
     { name = "click", marker = "extra == 'cli'", specifier = ">=8.1" },
@@ -508,6 +511,7 @@ requires-dist = [
     { name = "mathruler", specifier = "==0.1.0" },
     { name = "matplotlib" },
     { name = "mbridge", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", git = "https://github.com/ISEEKYAN/mbridge.git?rev=310e8fb" },
+    { name = "mcore-bridge", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", git = "https://github.com/modelscope/mcore-bridge.git?rev=bc58ea9cf9b1dd2314637703973904f359e67c75" },
     { name = "megatron-bridge", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", specifier = "==0.4.0" },
     { name = "megatron-core", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", specifier = "==0.17.0" },
     { name = "mistral-common", specifier = ">=1.11.1" },
@@ -662,11 +666,8 @@ wheels = [
 
 [[package]]
 name = "awex"
-version = "0.8.1"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/13/11/16b4aed68bc2761516c125d9182c5f77ac3674d390dcc57ffeca92d77362/awex-0.8.1-py3-none-any.whl", hash = "sha256:abe5e5c23964e88e1b268274a9d7e64dd52809349e2c87aef703b347ba8c67d7", size = 268145, upload-time = "2026-08-20T07:45:46.522Z" },
-]
+version = "0.2.0"
+source = { git = "https://github.com/inclusionAI/Awex.git?rev=dc665c44d61c193fd83997bdda43a7dc8e86cd62#dc665c44d61c193fd83997bdda43a7dc8e86cd62" }
 
 [[package]]
 name = "azure-core"
@@ -3144,6 +3145,19 @@ wheels = [
 name = "mbridge"
 version = "0.15.1"
 source = { git = "https://github.com/ISEEKYAN/mbridge.git?rev=310e8fb#310e8fb35ccf4fcd4419d32973e563a6d43ee5fb" }
+
+[[package]]
+name = "mcore-bridge"
+version = "1.7.0.dev0"
+source = { git = "https://github.com/modelscope/mcore-bridge.git?rev=bc58ea9cf9b1dd2314637703973904f359e67c75#bc58ea9cf9b1dd2314637703973904f359e67c75" }
+dependencies = [
+    { name = "megatron-core", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "modelscope", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "peft", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "safetensors", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "tqdm", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+    { name = "transformers", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
+]
 
 [[package]]
 name = "mcp"

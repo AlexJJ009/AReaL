@@ -63,7 +63,12 @@ from areal.utils.environ import get_float_env_var  # noqa: E402
 from areal.utils.logging import getLogger  # noqa: E402
 
 logger = getLogger("AwexSGLangPlugin")
-SUPPORTED_SGLANG_VERSIONS = ("0.5.9", "0.5.10.post1", "0.5.18.dev10+g85b539146")
+SUPPORTED_SGLANG_VERSIONS = (
+    "0.5.9",
+    "0.5.10.post1",
+    "0.5.18.dev10+g85b539146",
+    "0.5.19.dev125+g119b5ffe4",
+)
 
 
 @contextmanager
@@ -1034,6 +1039,17 @@ def register_awex_plugin() -> None:
     """
     assert_supported_sglang_version()
     from sglang.srt.managers.scheduler import Scheduler
+
+    if os.environ.get("QWEN_AWEX_FROZEN_CONTRACT"):
+        from sglang.srt.managers.scheduler_components import weight_updater
+
+        from areal.models.mcore.qwen4_exp_awex_memory import install_kv_residency_hooks
+        from areal.models.mcore.qwen4_exp_frozen_state import install_static_state_hooks
+
+        # This executes inside each worker before Scheduler construction, so
+        # preservation is installed before any native weights release.
+        install_static_state_hooks(weight_updater)
+        install_kv_residency_hooks(weight_updater, Scheduler)
 
     # Install before construction: the scheduler dispatcher captures bound
     # handlers during __init__. Metadata aggregation runs in our worker thread.

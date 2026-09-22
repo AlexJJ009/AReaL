@@ -430,3 +430,22 @@ async def test_generation_api_rejects_vllm_multimodal_trajectory(api_type):
         assert engine.requests == []
     finally:
         await client.close()
+
+
+@pytest.mark.parametrize("image_format", ["JPEG", "PNG"])
+def test_inline_image_uri_preserved_for_backend_and_decoded_locally(image_format):
+    with BytesIO() as buffer:
+        Image.new("RGB", (2, 2), color="red").save(buffer, format=image_format)
+        encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    uri = f"data:image/{image_format.lower()};base64,{encoded}"
+    messages = [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": uri}}]}
+    ]
+    image_data, tokenizer_messages, _ = _extract_images_from_messages(messages)
+    assert image_data == [uri]
+    if image_format == "JPEG":
+        assert encoded.startswith("/9j/")
+    prepared = _process_multimodal_prompt(
+        _FakeProcessor(), _FakeTokenizer(), tokenizer_messages, image_data, None, {}
+    )
+    assert prepared is not None

@@ -143,7 +143,9 @@ def _process_multimodal_prompt(
     images = []
     for encoded_image in image_data:
         try:
-            image_bytes = base64.b64decode(encoded_image, validate=True)
+            match = _DATA_URI_RE.match(encoded_image)
+            payload = match.group(1) if match else encoded_image
+            image_bytes = base64.b64decode(payload, validate=True)
             with Image.open(BytesIO(image_bytes)) as image:
                 images.append(load_image(image))
         except (binascii.Error, OSError, ValueError) as exc:
@@ -381,7 +383,7 @@ def _extract_images_from_messages(
     """Extract image data from OpenAI-format messages.
 
     Scans message ``content`` lists for ``image_url`` content parts,
-    extracts base64 data (or raw URLs), and converts messages to a
+    preserves image data URIs (or raw URLs), and converts messages to a
     HuggingFace-compatible format for ``apply_chat_template``.
 
     Args:
@@ -390,8 +392,7 @@ def _extract_images_from_messages(
     Returns:
         A 3-tuple of:
 
-        - **image_data** – list of base64 image strings without data-URI prefixes
-          or raw URL strings for each image found.
+        - **image_data** – list of image data URIs or raw URL strings for each image found.
         - **messages_for_tokenizer** – deep copy of *messages* where every
           ``{"type": "image_url", ...}`` part is replaced by
           ``{"type": "image"}`` so that HuggingFace VLM tokenizers insert
@@ -435,12 +436,9 @@ def _extract_images_from_messages(
                         "Provide a valid data URI or HTTP(S) URL in image_url.url."
                     )
 
-                # Extract base64 payload from data URIs; keep raw URLs as-is.
-                m = _DATA_URI_RE.match(url)
-                if m:
-                    image_data.append(m.group(1))
-                else:
-                    image_data.append(url)
+                # Preserve the URI: bare JPEG base64 starts with "/" and can
+                # otherwise be mistaken for an absolute path by the backend.
+                image_data.append(url)
 
                 tok_parts.append({"type": "image"})
 

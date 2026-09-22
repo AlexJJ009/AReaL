@@ -120,7 +120,7 @@ dependencies = [
     # Distributed computing
     "ray[default]",
     "redis",
-    "awex==0.8.1",
+    "awex @ git+https://github.com/inclusionAI/Awex.git@dc665c44d61c193fd83997bdda43a7dc8e86cd62",
 
     # Web frameworks
     "fastapi>=0.115.12",
@@ -161,6 +161,9 @@ megatron = [
     "megatron-core==0.17.0; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
     "mbridge @ git+https://github.com/ISEEKYAN/mbridge.git@310e8fb; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "megatron-bridge==0.4.0; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
+    # Qwen4Exp/Qwen3.8-Flash-Next backend. Keep this commit aligned with the
+    # adapter's tested ModelScope bridge contract.
+    "mcore-bridge @ git+https://github.com/modelscope/mcore-bridge.git@bc58ea9cf9b1dd2314637703973904f359e67c75; python_version >= '3.12' and sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 # Convenience extra for CUDA training packages (no inference backend)
 cuda-train = [
