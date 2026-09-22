@@ -557,7 +557,7 @@ requires-dist = [
     { name = "mathruler", specifier = "==0.1.0" },
     { name = "matplotlib" },
     { name = "mbridge", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", git = "https://github.com/ISEEKYAN/mbridge.git?rev=310e8fb" },
-    { name = "mcore-bridge", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", git = "https://github.com/dingzhiqiang/mcore-bridge.git?rev=38c675ed356c3ab316da7ba9a88857952591bbc6" },
+    { name = "mcore-bridge", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", git = "https://github.com/modelscope/mcore-bridge.git?rev=bc58ea9cf9b1dd2314637703973904f359e67c75" },
     { name = "megatron-bridge", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", specifier = "==0.4.0" },
     { name = "megatron-core", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", specifier = "==0.17.0" },
     { name = "mistral-common", specifier = ">=1.11.1" },
@@ -3570,7 +3570,7 @@ source = { git = "https://github.com/ISEEKYAN/mbridge.git?rev=310e8fb#310e8fb35c
 [[package]]
 name = "mcore-bridge"
 version = "1.7.0.dev0"
-source = { git = "https://github.com/dingzhiqiang/mcore-bridge.git?rev=38c675ed356c3ab316da7ba9a88857952591bbc6#38c675ed356c3ab316da7ba9a88857952591bbc6" }
+source = { git = "https://github.com/modelscope/mcore-bridge.git?rev=bc58ea9cf9b1dd2314637703973904f359e67c75#bc58ea9cf9b1dd2314637703973904f359e67c75" }
 dependencies = [
     { name = "megatron-core", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "modelscope", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
