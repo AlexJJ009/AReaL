@@ -419,7 +419,14 @@ def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> 
         original_update = engine.ppo_update
 
         def update(*args, _fn=original_update, _role=role, **kwargs):
-            if not preflight and _role == "actor" and state["step"] <= 5:
+            # Profiler RPCs can wait for decode activity; they are diagnostics,
+            # not a prerequisite for a valid optimizer update.
+            if (
+                os.environ.get("SAO_PROFILE_ROLLOUT", "0") == "1"
+                and not preflight
+                and _role == "actor"
+                and state["step"] <= 5
+            ):
                 for index, server in enumerate(trainer.rollout.server_infos):
                     address = format_hostport(server.host, server.port)
                     response = requests.post(
