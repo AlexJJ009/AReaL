@@ -267,12 +267,48 @@ override-dependencies = [
     "flashinfer-python==0.6.7.post3; sys_platform == 'linux' and platform_machine == 'x86_64'",
 ]
 
+[[tool.uv.dependency-metadata]]
+name = "megatron-bridge"
+version = "0.6.0"
+requires-dist = [
+    "accelerate",
+    "comet-ml>=3.50.0",
+    "datasets>=2.20.0",
+    "diffusers>=0.36.0",
+    "einops",
+    "fast-hadamard-transform>=1.1.0",
+    "flash-linear-attention",
+    "flashinfer-cubin==0.6.8.post1",
+    "flashinfer-python==0.6.8.post1",
+    "hydra-core>1.3,<=1.3.2",
+    "megatron-core[dev,mlm]",
+    "mistral-common>=1.10.0",
+    "mlflow>=3.15.1",
+    "nvidia-resiliency-ext",
+    "omegaconf>=2.3.0",
+    "open-clip-torch>=3.2.0",
+    "peft>=0.18.1",
+    "pyyaml>=6.0.2",
+    "qwen-vl-utils",
+    "regex>=2024.11.6",
+    "rich",
+    "six>=1.17.0",
+    "tensorboard>=2.19.0",
+    "timm",
+    "torch>=2.6.0",
+    "tqdm>=4.67.1",
+    "transformers>=5.8,<=5.12.1",
+    "typing-extensions",
+    "wandb==0.27.2",
+]
+
 [[tool.uv.index]]
 name = "pytorch-cu129"
 url = "https://download.pytorch.org/whl/cu129"
 explicit = true
 
 [tool.uv.sources]
+megatron-bridge = { url = "https://github.com/sitabulaixizawaluduo/Megatron-Bridge/releases/download/areal-v0.6.0-exaone45-fix.1/megatron_bridge-0.6.0-py3-none-any.whl" }
 torch = [
     { index = "pytorch-cu129", extra = "sglang" },
     { index = "pytorch-cu129", extra = "cuda" },
