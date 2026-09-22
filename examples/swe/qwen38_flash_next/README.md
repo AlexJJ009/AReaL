@@ -68,10 +68,9 @@ autograd collective: backward sums gradients from all consuming CP ranks. The br
 packed zigzag order and sequence-parallel handling are preserved.
 
 Both dependency declarations and lockfiles pin the official ModelScope bridge to
-`bc58ea9cf9b1dd2314637703973904f359e67c75`, and AWEX to
-`c2360eaa4cd4fa3f96bd5384a3486b9c3d34c01f`
-([AWEX #121](https://github.com/inclusionAI/Awex/pull/121)). Actor and rollout images
-must use these revisions. The released `awex==0.8.1` lacks the required APIs.
+`bc58ea9cf9b1dd2314637703973904f359e67c75` and the released `awex==0.8.2`, which
+includes [AWEX #121](https://github.com/inclusionAI/Awex/pull/121). Actor and rollout
+images must use these versions. AWEX 0.8.1 lacks the required APIs.
 
 The small Python helpers in this directory are runtime support, not additional examples:
 

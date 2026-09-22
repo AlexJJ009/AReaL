@@ -307,7 +307,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install branch-pinned AWEX
+      - name: Install pinned AWEX release
         id: awex-runtime
         env:
           TEST_VARIANT: ${{ matrix.variant }}
@@ -315,7 +315,6 @@ jobs:
           export PATH="/opt/.venv/bin:$PATH"
           python - <<'PYTHON'
           import importlib.metadata
-          import json
           import os
           import subprocess
           import sys
@@ -334,23 +333,21 @@ jobs:
           if len(awex) != 1:
               raise RuntimeError(f"Expected one active AWEX dependency in {path}")
           requirement = awex[0]
-          if requirement.url:
-              # The runtime image can have the same package version at an older commit.
-              revision = requirement.url.rsplit("@", 1)[-1]
-              if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
-                  raise RuntimeError("AWEX source dependencies must pin a full commit SHA")
-              target = tempfile.mkdtemp(prefix="awex-", dir=os.environ["RUNNER_TEMP"])
-              subprocess.run([
-                  "uv", "pip", "install", "--python", "/opt/.venv/bin/python",
-                  "--target", target, "--no-deps", str(requirement),
-              ], check=True)
-              sys.path.insert(0, target)
-              source = json.loads(importlib.metadata.distribution("awex").read_text("direct_url.json"))
-              if source.get("vcs_info", {}).get("commit_id") != revision:
-                  raise RuntimeError("Installed AWEX commit does not match the branch pin")
-              with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-                  output.write(f"pythonpath={target}\n")
-              print(f"Verified AWEX commit: {revision}")
+          pins = list(requirement.specifier)
+          if requirement.url or len(pins) != 1 or pins[0].operator != "==" or "*" in pins[0].version:
+              raise RuntimeError("AWEX must pin one exact release version")
+          target = tempfile.mkdtemp(prefix="awex-", dir=os.environ["RUNNER_TEMP"])
+          subprocess.run([
+              "uv", "pip", "install", "--python", "/opt/.venv/bin/python",
+              "--target", target, "--no-deps", str(requirement),
+          ], check=True)
+          sys.path.insert(0, target)
+          installed = importlib.metadata.version("awex")
+          if installed not in requirement.specifier:
+              raise RuntimeError(f"Installed AWEX {installed} does not match {requirement}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"pythonpath={target}\n")
+          print(f"Verified AWEX release: {installed}")
           PYTHON
 
       - name: Validate Docker installation

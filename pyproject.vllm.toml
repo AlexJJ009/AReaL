@@ -137,7 +137,7 @@ dependencies = [
     # Distributed computing
     "ray[default]",
     "redis",
-    "awex @ git+https://github.com/inclusionAI/Awex.git@c2360eaa4cd4fa3f96bd5384a3486b9c3d34c01f",
+    "awex==0.8.2",
 
     # Web frameworks
     "fastapi>=0.115.12",

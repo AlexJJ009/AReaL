@@ -482,7 +482,7 @@ requires-dist = [
     { name = "areal", extras = ["megatron"], marker = "extra == 'cuda-train'" },
     { name = "areal", extras = ["sglang"], marker = "extra == 'cuda'" },
     { name = "areal", extras = ["tms"], marker = "extra == 'cuda-train'" },
-    { name = "awex", git = "https://github.com/inclusionAI/Awex.git?rev=c2360eaa4cd4fa3f96bd5384a3486b9c3d34c01f" },
+    { name = "awex", specifier = "==0.8.2" },
     { name = "build", specifier = ">=1.2.1" },
     { name = "claude-agent-sdk" },
     { name = "click", marker = "extra == 'cli'", specifier = ">=8.1" },
@@ -666,8 +666,11 @@ wheels = [
 
 [[package]]
 name = "awex"
-version = "0.2.0"
-source = { git = "https://github.com/inclusionAI/Awex.git?rev=c2360eaa4cd4fa3f96bd5384a3486b9c3d34c01f#c2360eaa4cd4fa3f96bd5384a3486b9c3d34c01f" }
+version = "0.8.2"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/59/b5/7dea110beee338d0e920cbdccf6be97409b487013fc6653b2f230e071b05/awex-0.8.2-py3-none-any.whl", hash = "sha256:aae3d469eb6494d5a8f73417eb51b107b270d24bc953a99661d61e472fe3a4c1", size = 292394, upload-time = "2026-09-22T12:55:44.998Z" },
+]
 
 [[package]]
 name = "azure-core"
