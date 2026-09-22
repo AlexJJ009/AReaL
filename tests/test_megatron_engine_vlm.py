@@ -542,9 +542,78 @@ class TestPackedContextParallelForward:
         assert call["packed_seq_params"] is None
         assert output.shape == (5, 4)
 
+    @pytest.mark.parametrize("cp_rank", [0, 1])
+    def test_model_thd_mtp_alignment_matches_bridge_after_padding(
+        self, monkeypatch, cp_rank
+    ):
+        from areal.api.cli_args import MicroBatchSpec
+        from areal.engine.core.model import SequencePackingMode
+        from areal.engine.megatron_utils import packed_context_parallel as packing
+        from areal.utils.data import MicroBatchList
+
+        bridge_utils = pytest.importorskip(
+            "megatron.bridge.models.qwen_vl.modelling_qwen3_vl.utils"
+        )
+        for module in (packing, bridge_utils):
+            monkeypatch.setattr(
+                module.mpu, "get_tensor_model_parallel_world_size", lambda: 2
+            )
+            monkeypatch.setattr(
+                module.mpu, "get_context_parallel_world_size", lambda: 2
+            )
+            monkeypatch.setattr(
+                module.mpu, "get_context_parallel_rank", lambda: cp_rank
+            )
+        ids = torch.arange(1, 21)
+        mask = torch.ones_like(ids)
+        mask[[12, 19]] = 0
+        mb = {
+            "input_ids": ids,
+            "loss_mask": mask,
+            "cu_seqlens": torch.tensor([0, 13, 20], dtype=torch.int32),
+            "max_seqlen": 13,
+        }
+        batches = MicroBatchList(
+            data=mb, mb_spec=MicroBatchSpec(), mbs=[mb], group_lens=[20]
+        )
+        prepared = packing.prepare_microbatches_for_sequence_layout(
+            batches, SequencePackingMode.MODEL_THD, pad_to_maximum=False, seq_align_to=8
+        ).padded_mbs[0]
+        assert prepared["cu_seqlens"].tolist() == [0, 16, 24]
+        assert prepared["loss_mask"].sum() == 18
+        padded_ids, validity, _, _ = packing._reconstruct_padded_2d(
+            prepared["input_ids"], prepared["cu_seqlens"], prepared["max_seqlen"]
+        )
+        bridge_ids, bridge_packed = bridge_utils.preprocess_packed_seqs(
+            padded_ids, validity
+        )
+        padded_mask = torch.zeros_like(padded_ids)
+        padded_mask[validity] = prepared["loss_mask"]
+        expected_mask, _ = bridge_utils.preprocess_packed_seqs(padded_mask, validity)
+        actual_mask = packing._prepare_mtp_loss_mask(
+            prepared["loss_mask"],
+            padded_ids,
+            validity,
+            cu_seqlens=prepared["cu_seqlens"],
+            packed_num_tokens=24,
+            uses_padded_form=True,
+            uses_model_packed_seq=True,
+        )
+        torch.testing.assert_close(
+            bridge_packed.cu_seqlens_q, prepared["cu_seqlens"], rtol=0, atol=0
+        )
+        torch.testing.assert_close(
+            expected_mask.bool(),
+            bridge_ids.ne(0) & bridge_ids.ne(13) & bridge_ids.ne(20),
+        )
+        torch.testing.assert_close(
+            actual_mask.bool(), expected_mask.bool(), rtol=0, atol=0
+        )
+
     @pytest.mark.parametrize("cp_size", [2, 4])
+    @pytest.mark.parametrize("model_packed", [False, True])
     def test_packed_mtp_mask_uses_input_ids_cp_zigzag_layout(
-        self, monkeypatch, cp_size
+        self, monkeypatch, cp_size, model_packed
     ):
         """Packed MTP masks must follow input_ids on every CP rank."""
         from areal.engine.megatron_utils import packed_context_parallel
@@ -607,12 +676,22 @@ class TestPackedContextParallelForward:
                     "mtp_loss_mask": loss_mask,
                 },
                 gather_cp_output=False,
+                is_vision_model=model_packed,
+                use_model_packed_seq=model_packed,
             )
 
             call = model.call_args.kwargs
-            torch.testing.assert_close(
-                call["input_ids"].squeeze(0), expected_ids, rtol=0, atol=0
-            )
+            if model_packed:
+                torch.testing.assert_close(
+                    call["input_ids"][call["attention_mask"]],
+                    input_ids,
+                    rtol=0,
+                    atol=0,
+                )
+            else:
+                torch.testing.assert_close(
+                    call["input_ids"].squeeze(0), expected_ids, rtol=0, atol=0
+                )
             torch.testing.assert_close(
                 call["loss_mask"].squeeze(0),
                 expected_ids.remainder(3).ne(0),
@@ -622,8 +701,8 @@ class TestPackedContextParallelForward:
             assert "mtp_kwargs" not in call
             assert output.shape == (expected_ids.numel(), 4)
 
-    def test_qwen35_multimodal_mtp_uses_padded_labels_and_mask(self, monkeypatch):
-        """MTP supervision must follow Qwen3.5's padded execution layout."""
+    def test_padded_vlm_mtp_uses_padded_labels_and_mask(self, monkeypatch):
+        """MTP supervision must follow the ordinary VLM padded layout."""
         from areal.engine.megatron_utils import packed_context_parallel
 
         model = MagicMock(return_value=torch.ones(2, 3, 4))
@@ -644,7 +723,6 @@ class TestPackedContextParallelForward:
                 "mtp_loss_mask": torch.tensor([False, True, True, False, True]),
             },
             is_vision_model=True,
-            use_padded_seq=True,
         )
 
         call = model.call_args.kwargs
@@ -694,6 +772,43 @@ class TestPackedContextParallelForward:
         assert call["packed_seq_params"].qkv_format == "thd"
         assert call["packed_seq_params"].cu_seqlens_q.tolist() == [0, 3, 5]
         assert output.shape == (5, 3)
+
+    def test_model_thd_cp_delegates_partitioning_to_bridge(self, monkeypatch):
+        from areal.engine.megatron_utils import packed_context_parallel
+
+        model = MagicMock(return_value=torch.ones(1, 4, 3))
+        monkeypatch.setattr(
+            packed_context_parallel.mpu,
+            "is_pipeline_last_stage",
+            lambda **_kwargs: True,
+        )
+        monkeypatch.setattr(
+            packed_context_parallel.mpu,
+            "get_context_parallel_world_size",
+            lambda: 2,
+        )
+
+        output = packed_context_parallel.packed_context_parallel_forward(
+            model,
+            {
+                "input_ids": torch.tensor([10, 11, 12, 13, 20, 21, 22, 23]),
+                "cu_seqlens": torch.tensor([0, 4, 8], dtype=torch.int32),
+                "max_seqlen": 4,
+            },
+            gather_cp_output=False,
+            is_vision_model=True,
+            use_model_packed_seq=True,
+        )
+
+        call = model.call_args.kwargs
+        assert call["input_ids"].tolist() == [
+            [10, 11, 12, 13],
+            [20, 21, 22, 23],
+        ]
+        assert call["attention_mask"].all()
+        assert call["packed_seq_params"].qkv_format == "thd"
+        assert call["packed_seq_params"].cu_seqlens_q.tolist() == [0, 4, 8]
+        assert output.shape == (4, 3)
 
     def test_hidden_state_mode_bypasses_post_process_and_restores_model(self):
         from areal.engine.megatron_utils import packed_context_parallel

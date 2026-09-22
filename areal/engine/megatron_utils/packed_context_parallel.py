@@ -421,18 +421,13 @@ def _prepare_mtp_loss_mask(
             f"1-D tensor, got {loss_mask.shape=}."
         )
 
-    if uses_model_packed_seq:
-        raise NotImplementedError(
-            "MTP training with model-owned THD packing is not supported yet."
-        )
-
     if loss_mask.numel() != packed_num_tokens:
         raise ValueError(
             "MTP loss mask must match the packed sequence length, got "
             f"{loss_mask.numel()} values for {packed_num_tokens} tokens."
         )
 
-    if uses_padded_form:
+    if uses_padded_form and not uses_model_packed_seq:
         if attention_mask is None:
             raise ValueError("Padded MTP training requires a 2-D validity mask.")
         padded_loss_mask = torch.zeros(
@@ -500,10 +495,9 @@ def packed_context_parallel_forward(
                     "Attention mask and tree attention are not supported with "
                     "the model-packed THD forward."
                 )
-            if mpu.get_context_parallel_world_size() > 1:
-                raise NotImplementedError(
-                    "The model-packed THD forward does not support CP > 1 yet."
-                )
+            # Keep the full BSHD inputs on every CP rank. The bridge first fuses
+            # vision embeddings and computes multimodal RoPE, then partitions
+            # the resulting THD sequence with its model-owned CP layout.
             input_ids, attention_mask, _, max_seqlen = _reconstruct_padded_2d(
                 input_ids, cu_seqlens, input_.get("max_seqlen")
             )
