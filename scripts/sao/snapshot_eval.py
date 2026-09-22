@@ -319,10 +319,17 @@ def _verify_existing(
     return {**summary, "status": "exists"}
 
 
-def snapshot_eval(evidence_dir: Path, dataset: Path, version: int) -> dict[str, Any]:
-    if version not in ALLOWED_EVAL_VERSIONS:
+def snapshot_eval(
+    evidence_dir: Path,
+    dataset: Path,
+    version: int,
+    *,
+    allowed_versions: tuple[int, ...] = ALLOWED_EVAL_VERSIONS,
+) -> dict[str, Any]:
+    """Preserve an evaluated version from the caller's explicit run schedule."""
+    if version not in allowed_versions or version < 0:
         raise SnapshotError(
-            f"version must be one of {list(ALLOWED_EVAL_VERSIONS)}; baseline version0 is not mutated by this tool"
+            f"version must be one of {list(allowed_versions)} and non-negative"
         )
     evidence_dir = evidence_dir.expanduser().resolve()
     dataset = dataset.expanduser().resolve()

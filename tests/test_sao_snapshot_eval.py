@@ -216,3 +216,19 @@ def test_snapshot_eval_direct_cli(tmp_path):
     payload = json.loads(result.stdout)
     assert payload["passed"] is True
     assert payload["response_count"] == 2800
+
+
+@pytest.mark.parametrize("version", [0, 134, 536])
+def test_grpo_schedule_snapshots_baseline_and_last_update(tmp_path, version):
+    evidence, dataset = _fixture(tmp_path, _records(version=version))
+    with pytest.raises(SnapshotError, match="version must"):
+        snapshot_eval.snapshot_eval(evidence, dataset, version)
+    result = snapshot_eval.snapshot_eval(
+        evidence,
+        dataset,
+        version,
+        allowed_versions=(0, 20, 40, 60, 80, 100, 120, 134, 536),
+    )
+    assert result["passed"] is True
+    assert result["response_count"] == 2800
+    assert result["eval"][str(version)]["macro_mean@4"] == 0.25
