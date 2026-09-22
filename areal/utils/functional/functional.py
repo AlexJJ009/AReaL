@@ -2,7 +2,7 @@
 
 import functools
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import torch
@@ -10,6 +10,8 @@ import torch.distributed as dist
 
 from areal.api.cli_args import RejectionSamplingConfig
 from areal.utils.data import KLEstimator
+
+LossReduction = Literal["token_mean", "sequence_mean"]
 
 
 @torch.no_grad()
@@ -449,6 +451,115 @@ def compute_binary_kl_divergence(
     return p * torch.log(p / q) + (1 - p) * torch.log((1 - p) / (1 - q))
 
 
+def loss_reduction_weight(
+    loss_mask: torch.Tensor,
+    loss_reduction: LossReduction,
+    cu_seqlens: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Return the engine aggregation weight for the configured loss reduction."""
+    if loss_reduction == "token_mean":
+        return loss_mask.count_nonzero()
+    if loss_reduction != "sequence_mean":
+        raise ValueError(
+            "loss_reduction must be 'token_mean' or 'sequence_mean', got "
+            f"{loss_reduction!r}"
+        )
+    if loss_mask.ndim == 1:
+        if cu_seqlens is None:
+            raise ValueError("cu_seqlens is required for 1D sequence_mean losses")
+        return torch.as_tensor(
+            max(int(cu_seqlens.numel()) - 1, 0),
+            device=loss_mask.device,
+            dtype=torch.long,
+        )
+    if loss_mask.ndim == 2:
+        return torch.as_tensor(
+            loss_mask.shape[0], device=loss_mask.device, dtype=torch.long
+        )
+    raise ValueError(
+        "sequence_mean only supports 1D packed or 2D padded loss masks, got "
+        f"ndim={loss_mask.ndim}"
+    )
+
+
+def reduce_masked_loss(
+    per_token_loss: torch.Tensor,
+    loss_mask: torch.Tensor,
+    loss_reduction: LossReduction = "token_mean",
+    cu_seqlens: torch.Tensor | None = None,
+    denominator_mask: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Reduce token losses by valid-token mean or equal sequence mean.
+
+    For ``sequence_mean``, each sequence contributes the mean over its valid
+    answer tokens. Sequences with zero valid tokens contribute zero and still
+    count in the sequence denominator.
+    """
+    if denominator_mask is None:
+        denominator_mask = loss_mask
+    if denominator_mask.shape != loss_mask.shape:
+        raise ValueError(
+            f"denominator_mask shape {denominator_mask.shape} != loss_mask shape {loss_mask.shape}"
+        )
+
+    if loss_reduction == "token_mean":
+        return torch.where(loss_mask, per_token_loss, 0).sum() / (
+            denominator_mask.count_nonzero() or 1
+        )
+    if loss_reduction != "sequence_mean":
+        raise ValueError(
+            "loss_reduction must be 'token_mean' or 'sequence_mean', got "
+            f"{loss_reduction!r}"
+        )
+    if per_token_loss.shape != loss_mask.shape:
+        raise ValueError(
+            f"per_token_loss shape {per_token_loss.shape} != loss_mask shape {loss_mask.shape}"
+        )
+
+    masked_loss = torch.where(loss_mask, per_token_loss, 0)
+    if loss_mask.ndim == 2:
+        token_counts = (
+            denominator_mask.sum(dim=-1).clamp(min=1).to(per_token_loss.dtype)
+        )
+        sequence_loss = masked_loss.sum(dim=-1) / token_counts
+        return sequence_loss.mean()
+
+    if loss_mask.ndim != 1:
+        raise ValueError(
+            "sequence_mean only supports 1D packed or 2D padded losses, got "
+            f"ndim={loss_mask.ndim}"
+        )
+    if cu_seqlens is None:
+        raise ValueError("cu_seqlens is required for 1D sequence_mean losses")
+    n_sequences = int(cu_seqlens.numel()) - 1
+    if n_sequences <= 0:
+        return masked_loss.sum() * 0.0
+    if n_sequences == 1:
+        denom = denominator_mask.count_nonzero().clamp(min=1).to(per_token_loss.dtype)
+        return masked_loss.sum() / denom
+    lengths = cu_seqlens[1:] - cu_seqlens[:-1]
+    sequence_idx = torch.repeat_interleave(
+        torch.arange(n_sequences, device=loss_mask.device),
+        lengths.to(torch.long),
+        output_size=loss_mask.numel(),
+    )
+    if sequence_idx.numel() != loss_mask.numel():
+        raise ValueError(
+            "cu_seqlens does not describe the packed loss length: "
+            f"{sequence_idx.numel()} != {loss_mask.numel()}"
+        )
+    sequence_loss_sum = torch.zeros(
+        n_sequences, device=per_token_loss.device, dtype=per_token_loss.dtype
+    ).scatter_add_(0, sequence_idx, masked_loss)
+    sequence_token_count = (
+        torch.zeros(n_sequences, device=loss_mask.device, dtype=torch.long)
+        .scatter_add_(0, sequence_idx, denominator_mask.to(torch.long))
+        .clamp(min=1)
+        .to(per_token_loss.dtype)
+    )
+    return (sequence_loss_sum / sequence_token_count).mean()
+
+
 def ppo_actor_loss_fn(
     logprobs: torch.Tensor,
     proximal_logprobs: torch.Tensor,
@@ -461,6 +572,7 @@ def ppo_actor_loss_fn(
     rejection_sampling: RejectionSamplingConfig | None = None,
     importance_sampling_level: str = "token",
     cu_seqlens: torch.Tensor | None = None,
+    loss_reduction: LossReduction = "token_mean",
 ) -> tuple[torch.Tensor, dict]:
     """PPO actor loss function with optional rejection sampling.
 
@@ -499,11 +611,6 @@ def ppo_actor_loss_fn(
             Shape: [batch_size + 1], where cu_seqlens[i] marks the start of sequence i.
             Not needed for 2D padded inputs (sequences identified by batch dimension).
     """
-    # Save original count BEFORE rejection sampling may modify loss_mask.
-    # This keeps the denominator consistent with loss_weight_fn in actor.py,
-    # which always uses the original loss_mask from input_data. Without this,
-    # mask mode would inflate per-token gradients by N_original / N_kept.
-    loss_mask_count = loss_mask.count_nonzero() or 1
     # Pre-filter mask kept for ratio/clip statistics: rejection sampling below
     # narrows loss_mask for the loss, but stats stay on the original mask so
     # importance_weight/avg reads 1.0 under proximal reuse instead of
@@ -568,7 +675,13 @@ def ppo_actor_loss_fn(
         pg_loss = pg_loss * behave_imp_weight
 
     logging_loss = pg_loss.detach()
-    pg_loss = torch.where(loss_mask, pg_loss, 0).sum() / loss_mask_count
+    pg_loss = reduce_masked_loss(
+        pg_loss,
+        loss_mask,
+        loss_reduction=loss_reduction,
+        cu_seqlens=cu_seqlens,
+        denominator_mask=stat_loss_mask,
+    )
     clip_mask.logical_and_(stat_loss_mask)
     dual_clip_mask.logical_and_(stat_loss_mask)
     # One host sync per microbatch: the count feeds three derived stats.
@@ -873,6 +986,8 @@ def ppo_critic_loss_fn(
     value_eps_clip: float,
     loss_mask: torch.Tensor | None = None,
     loss_fn_type: str = "mse",
+    loss_reduction: LossReduction = "token_mean",
+    cu_seqlens: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict]:
     """Compute PPO critic loss function given padded batch inputs.
 
@@ -924,10 +1039,15 @@ def ppo_critic_loss_fn(
         stat = dict(clip_mask=clip_mask, loss=value_loss.detach())
 
     if loss_mask is not None:
-        value_loss = (
-            torch.where(loss_mask, value_loss, 0).sum() / loss_mask.count_nonzero()
+        value_loss = reduce_masked_loss(
+            value_loss,
+            loss_mask,
+            loss_reduction=loss_reduction,
+            cu_seqlens=cu_seqlens,
         )
     else:
+        if loss_reduction != "token_mean":
+            raise ValueError("loss_mask is required for sequence_mean critic loss")
         value_loss = value_loss.mean()
 
     return value_loss, stat

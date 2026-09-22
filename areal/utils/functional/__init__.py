@@ -6,9 +6,11 @@ from areal.utils.functional.functional import (
     cispo_loss_fn,
     dpo_pair_logratios,
     dpo_preference_loss,
+    loss_reduction_weight,
     masked_normalization,
     ppo_actor_loss_fn,
     ppo_critic_loss_fn,
+    reduce_masked_loss,
     reward_overlong_penalty,
     sapo_loss_fn,
 )
@@ -24,9 +26,11 @@ __all__ = [
     "cispo_loss_fn",
     "dpo_pair_logratios",
     "dpo_preference_loss",
+    "loss_reduction_weight",
     "masked_normalization",
     "ppo_actor_loss_fn",
     "ppo_critic_loss_fn",
+    "reduce_masked_loss",
     "reward_overlong_penalty",
     "sapo_loss_fn",
     # vocab_parallel.py

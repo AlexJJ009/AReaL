@@ -7,6 +7,7 @@ trial_name: ${oc.env:SAO_TRIAL_NAME}
 seed: 42
 total_train_epochs: 1
 total_train_steps: null
+num_critic_only_steps: 0
 enable_offload: false
 tokenizer_path: ${actor.path}
 dynamic_bs: false
@@ -33,7 +34,7 @@ rollout:
   scheduling_spec: ${actor.scheduling_spec}
 
 gconfig:
-  n_samples: 4
+  n_samples: 8
   max_new_tokens: 8192
   max_tokens: 9216
   temperature: 1.0
@@ -44,7 +45,7 @@ gconfig:
   seed: null
 
 eval_gconfig:
-  n_samples: 4
+  n_samples: 2
   max_new_tokens: 8192
   max_tokens: 9216
   temperature: 1.0
@@ -65,24 +66,48 @@ actor:
   mb_spec:
     max_tokens_per_mb: 9216
     granularity: 1
-  # Optimizer, clipping, reward transform, and async PPO correction are inherited
-  # from gsm8k_ppo. Keep one source of truth for the official recipe.
+  # Scalars follow the miles-values 4B PPO example (aa2071f8).
+  # Keep AReaL's asynchronous correction and disabled LR warmup explicit.
   optimizer:
-    # Explicit user-approved exception: five actual optimizer updates of warmup.
-    warmup_steps: 5
+    type: adam
+    lr: 1.0e-6
+    weight_decay: 0.01
+    beta1: 0.9
+    beta2: 0.98
+    eps: 1.0e-8
+    lr_scheduler_type: constant
+    gradient_clipping: 1.0
+    warmup_steps: 0
+    warmup_steps_proportion: 0.0
   ppo_n_minibatches: 1
-  eps_clip_higher: null
+  loss_reduction: sequence_mean
+  eps_clip: 0.2
+  eps_clip_higher: 0.28
   c_clip: null
   discount: 1.0
-  gae_lambda: 1.0
+  gae_lambda: 0.95
+  critic_gae_lambda: 1.0
   gae_timestep_unit: token
+  reward_scaling: 1.0
+  reward_bias: 0.0
   reward_norm: null
+  adv_norm: null
+  recompute_logprob: true
+  prox_logp_method: recompute
+  use_decoupled_loss: true
+  rejection_sampling:
+    level: token
+    action: mask
+    metric: ratio
+    upper: 5.0
+    lower: null
   kl_ctl: 0.0
   importance_sampling_level: token
   use_sapo_loss: false
   use_cispo_loss: false
   m2_threshold: null
   overlong_reward_penalty: false
+  # AuditedMathWorkflow supplies bootstrap_mask=false for EOS and budget cutoffs.
   mask_no_eos_with_zero: false
   max_new_tokens: ${gconfig.max_new_tokens}
   scheduling_spec:
@@ -96,19 +121,31 @@ actor:
 critic:
   backend: ${actor.backend}
   is_critic: true
-  path: ${actor.path}
+  # Load pretrained value weights (including score.weight), not recovery state.
+  path: ${oc.env:SAO_CRITIC_PATH}
   init_from_scratch: false
   dtype: ${actor.dtype}
   optimizer_dtype: float32
   gradient_checkpointing: true
   attn_impl: flash_attention_2
   mask_no_eos_with_zero: false
-  eps_clip: 0.5
+  eps_clip: 0.2
   ppo_n_minibatches: 1
+  loss_reduction: sequence_mean
   mb_spec:
     max_tokens_per_mb: 9216
     granularity: 1
-  optimizer: ${actor.optimizer}
+  optimizer:
+    type: adam
+    lr: 5.0e-6
+    weight_decay: 0.01
+    beta1: 0.9
+    beta2: 0.98
+    eps: 1.0e-8
+    lr_scheduler_type: constant
+    gradient_clipping: 1.0
+    warmup_steps: 0
+    warmup_steps_proportion: 0.0
   scheduling_strategy:
     type: colocation
     target: actor
@@ -136,7 +173,7 @@ train_dataset:
   path: ${oc.env:SAO_DATA_PATH}
   split: train
   type: rl
-  batch_size: 128
+  batch_size: 16
   max_length: 1024
   shuffle: true
   drop_last: false
@@ -155,25 +192,29 @@ valid_dataset:
 
 saver:
   mode: sync
-  freq_steps: 20
+  freq_steps: 50
   freq_epochs: 1
   freq_secs: null
 
 recover:
   mode: auto
-  freq_steps: 20
+  freq_steps: 50
   freq_epochs: 1
   freq_secs: null
 
 evaluator:
-  freq_steps: 20
+  freq_steps: 50
   freq_epochs: 1
   freq_secs: null
   eval_before_train: true
 
 stats_logger:
   wandb:
-    mode: disabled
+    mode: online
+    entity: ${oc.env:SAO_WANDB_ENTITY,null}
+    project: ${oc.env:SAO_WANDB_PROJECT,areal-math-ppo}
+    tags: [async-ppo, dapo, qwen35-4b-base, pretrained-critic, sequence-mean]
+    notes: Base actor and pretrained Step50 critic; raw binary rewards; zero terminal bootstrap.
   swanlab:
     mode: disabled
   trackio:

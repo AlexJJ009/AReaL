@@ -1681,6 +1681,15 @@ class PPOActorConfig(TrainEngineConfig):
             "AdamW delta transfer currently requires 1."
         },
     )
+    loss_reduction: str = field(
+        default="token_mean",
+        metadata={
+            "help": "PPO actor loss reduction. 'token_mean' preserves the legacy "
+            "valid-token mean. 'sequence_mean' averages valid tokens within each "
+            "answer, then averages answers equally.",
+            "choices": ["token_mean", "sequence_mean"],
+        },
+    )
     eps_clip: float = field(
         default=0.2, metadata={"help": "Clipping factor for policy ratio"}
     )
@@ -1913,6 +1922,11 @@ class PPOActorConfig(TrainEngineConfig):
                 "gae_timestep_unit must be 'token' or 'turn', got "
                 f"{self.gae_timestep_unit!r}"
             )
+        if self.loss_reduction not in {"token_mean", "sequence_mean"}:
+            raise ValueError(
+                "loss_reduction must be 'token_mean' or 'sequence_mean', got "
+                f"{self.loss_reduction!r}"
+            )
 
         reward_norm = self.reward_norm
         if isinstance(reward_norm, (dict, DictConfig)):
@@ -2018,6 +2032,15 @@ class PPOCriticConfig(TrainEngineConfig):
     ppo_n_minibatches: int = field(
         default=4, metadata={"help": "Number of minibatches for each PPO update"}
     )
+    loss_reduction: str = field(
+        default="token_mean",
+        metadata={
+            "help": "PPO critic loss reduction. 'token_mean' preserves the legacy "
+            "valid-token mean. 'sequence_mean' averages valid tokens within each "
+            "answer, then averages answers equally.",
+            "choices": ["token_mean", "sequence_mean"],
+        },
+    )
     eps_clip: float = field(
         default=0.5, metadata={"help": "Clipping factor for value loss"}
     )
@@ -2027,6 +2050,14 @@ class PPOCriticConfig(TrainEngineConfig):
             "help": "Mask truncated generations (no EOS token) and exclude from training"
         },
     )
+
+    def __post_init__(self):
+        if self.loss_reduction not in {"token_mean", "sequence_mean"}:
+            raise ValueError(
+                "loss_reduction must be 'token_mean' or 'sequence_mean', got "
+                f"{self.loss_reduction!r}"
+            )
+        super().__post_init__()
 
 
 def get_py_cmd(module: str, args: dict[str, Any]):

@@ -15,7 +15,7 @@ from areal.utils.data import (
     batched_call,
     split_padded_tensor_dict_into_mb_list,
 )
-from areal.utils.functional import ppo_critic_loss_fn
+from areal.utils.functional import loss_reduction_weight, ppo_critic_loss_fn
 from areal.utils.perf_tracer import trace_perf
 from areal.utils.stats_tracker import ReduceType
 from areal.v2.training_service.controller.controller import (
@@ -69,8 +69,11 @@ class PPOCritic:
                 loss_fn=functools.partial(
                     ppo_loss_fn,
                     eps_clip=self.config.eps_clip,
+                    loss_reduction=self.config.loss_reduction,
                 ),
-                loss_weight_fn=lambda x: x["loss_mask"].count_nonzero(),
+                loss_weight_fn=lambda x: loss_reduction_weight(
+                    x["loss_mask"], self.config.loss_reduction, x.get("cu_seqlens")
+                ),
             )
             stats_tracker.scalar(**train_stat)
 
@@ -107,6 +110,7 @@ def ppo_loss_fn(
     value: torch.Tensor,
     input_data: dict,
     eps_clip: float,
+    loss_reduction: str = "token_mean",
 ):
     """Loss function for critic step, all inputs should be splitted into
     pipeline micro batches, returns loss and logging stats."""
@@ -121,6 +125,8 @@ def ppo_loss_fn(
         target_value=target_value,
         value_eps_clip=eps_clip,
         loss_mask=loss_mask,
+        loss_reduction=loss_reduction,
+        cu_seqlens=input_data.get("cu_seqlens"),
     )
 
     # Log training statistics

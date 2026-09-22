@@ -16,9 +16,15 @@ from pathlib import Path
 import requests
 import torch
 from datasets import load_from_disk
+from omegaconf import OmegaConf
 
 from areal import PPOTrainer
-from areal.api.cli_args import PPOConfig, load_expr_config
+from areal.api.cli_args import (
+    PPOConfig,
+    load_expr_config,
+    parse_cli_args,
+    to_structured_cfg,
+)
 from areal.infra.rpc.rtensor import RTensor
 from areal.trainer.ppo.validation import verify_gamma_one_episodic_returns
 from areal.utils import logging
@@ -27,18 +33,98 @@ from areal.utils.network import format_hostport
 logger = logging.getLogger("SaoPpo")
 
 
+def _safetensors_weight_keys(path: Path, role: str) -> set[str]:
+    from safetensors import safe_open
+
+    index_path = path / "model.safetensors.index.json"
+    if index_path.exists():
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        weight_map = payload.get("weight_map")
+        if not isinstance(weight_map, dict) or not weight_map:
+            raise ValueError(
+                f"{role} safetensors index has no weight_map: {index_path}"
+            )
+        missing = sorted(
+            name
+            for name in set(weight_map.values())
+            if not (path / str(name)).is_file()
+        )
+        if missing:
+            raise ValueError(
+                f"{role} safetensors index references missing shards: {missing}"
+            )
+        keys = set()
+        for shard_name in sorted(set(weight_map.values())):
+            with safe_open(
+                path / str(shard_name), framework="pt", device="cpu"
+            ) as handle:
+                keys.update(handle.keys())
+        return keys
+
+    shards = sorted(path.glob("*.safetensors"))
+    if not shards:
+        return set()
+
+    keys = set()
+    for shard in shards:
+        with safe_open(shard, framework="pt", device="cpu") as handle:
+            keys.update(handle.keys())
+    return keys
+
+
+def validate_hf_checkpoint_paths(config: PPOConfig) -> None:
+    """Lightweight CPU-only validation for the selected actor and critic HF dirs."""
+    if config.critic is None:
+        raise ValueError("A critic config is required before checkpoint validation")
+
+    actor_path = Path(config.actor.path).expanduser()
+    critic_path = Path(config.critic.path).expanduser()
+    for role, path in (("actor", actor_path), ("critic", critic_path)):
+        if not path.is_dir():
+            raise ValueError(
+                f"{role} checkpoint path must be a local directory: {path}"
+            )
+        if not (path / "config.json").is_file():
+            raise ValueError(f"{role} checkpoint is missing config.json: {path}")
+        has_model_file = any(
+            (path / name).is_file()
+            for name in (
+                "model.safetensors",
+                "model.safetensors.index.json",
+                "pytorch_model.bin",
+                "pytorch_model.bin.index.json",
+            )
+        ) or any(path.glob("*.safetensors"))
+        if not has_model_file:
+            raise ValueError(f"{role} checkpoint has no HF model shard: {path}")
+
+    if actor_path.resolve() == critic_path.resolve():
+        raise ValueError("Actor Base and pretrained critic checkpoints must differ")
+
+    critic_keys = _safetensors_weight_keys(critic_path, "critic")
+    if "score.weight" not in critic_keys:
+        raise ValueError(
+            "Pretrained critic checkpoint must expose score.weight in safetensors headers"
+        )
+
+
 def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
     expected = {
         "actor.discount": (config.actor.discount, 1.0),
-        "actor.gae_lambda": (config.actor.gae_lambda, 1.0),
+        "actor.loss_reduction": (config.actor.loss_reduction, "sequence_mean"),
+        "actor.gae_lambda": (config.actor.gae_lambda, 0.95),
+        "actor.critic_gae_lambda": (config.actor.critic_gae_lambda, 1.0),
         "actor.gae_timestep_unit": (config.actor.gae_timestep_unit, "token"),
-        "actor.reward_scaling": (config.actor.reward_scaling, 10.0),
-        "actor.reward_bias": (config.actor.reward_bias, -0.5),
+        "actor.reward_scaling": (config.actor.reward_scaling, 1.0),
+        "actor.reward_bias": (config.actor.reward_bias, 0.0),
         "actor.use_decoupled_loss": (config.actor.use_decoupled_loss, True),
         "actor.recompute_logprob": (config.actor.recompute_logprob, True),
+        "actor.prox_logp_method": (config.actor.prox_logp_method, "recompute"),
+        "actor.ppo_n_minibatches": (config.actor.ppo_n_minibatches, 1),
         "actor.reward_norm": (config.actor.reward_norm, None),
-        "actor.eps_clip": (config.actor.eps_clip, 0.4),
-        "actor.eps_clip_higher": (config.actor.eps_clip_higher, None),
+        "actor.adv_norm": (config.actor.adv_norm, None),
+        "actor.eps_clip": (config.actor.eps_clip, 0.2),
+        "actor.eps_clip_higher": (config.actor.eps_clip_higher, 0.28),
         "actor.kl_ctl": (config.actor.kl_ctl, 0.0),
         "actor.use_sapo_loss": (config.actor.use_sapo_loss, False),
         "actor.use_cispo_loss": (config.actor.use_cispo_loss, False),
@@ -48,8 +134,10 @@ def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
             "token",
         ),
         "dynamic_bs": (config.dynamic_bs, False),
+        "num_critic_only_steps": (config.num_critic_only_steps, 0),
         "gconfig.reward_normalization": (config.gconfig.reward_normalization, False),
         "train_dataset.drop_last": (config.train_dataset.drop_last, False),
+        "actor.init_from_scratch": (config.actor.init_from_scratch, False),
     }
     if not preflight:
         expected.update(
@@ -57,10 +145,16 @@ def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
                 "total_train_epochs": (config.total_train_epochs, 1),
                 "total_train_steps": (config.total_train_steps, None),
                 "gconfig.max_new_tokens": (config.gconfig.max_new_tokens, 8192),
-                "gconfig.n_samples": (config.gconfig.n_samples, 4),
-                "eval_gconfig.n_samples": (config.eval_gconfig.n_samples, 4),
-                "saver.freq_steps": (config.saver.freq_steps, 20),
-                "evaluator.freq_steps": (config.evaluator.freq_steps, 20),
+                "gconfig.n_samples": (config.gconfig.n_samples, 8),
+                "eval_gconfig.n_samples": (config.eval_gconfig.n_samples, 2),
+                "train_dataset.batch_size": (config.train_dataset.batch_size, 16),
+                "saver.freq_steps": (config.saver.freq_steps, 50),
+                "recover.freq_steps": (config.recover.freq_steps, 50),
+                "evaluator.eval_before_train": (
+                    config.evaluator.eval_before_train,
+                    True,
+                ),
+                "evaluator.freq_steps": (config.evaluator.freq_steps, 50),
             }
         )
     mismatches = {
@@ -70,8 +164,16 @@ def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
         raise ValueError(f"PPO contract mismatch (observed, expected): {mismatches}")
     if config.critic is None or not config.critic.is_critic:
         raise ValueError("A trainable scalar critic is required")
-    if config.critic.path != config.actor.path:
-        raise ValueError("Actor and critic must share the pinned Base checkpoint")
+    if config.critic.loss_reduction != "sequence_mean":
+        raise ValueError("critic.loss_reduction must be sequence_mean")
+    if config.critic.path == config.actor.path:
+        raise ValueError("Actor Base and pretrained critic checkpoints must differ")
+    if config.critic.init_from_scratch:
+        raise ValueError("Pretrained critic must load from SAO_CRITIC_PATH")
+    if config.critic.eps_clip != 0.2:
+        raise ValueError("critic.eps_clip must be 0.2")
+    if config.critic.ppo_n_minibatches != 1:
+        raise ValueError("critic.ppo_n_minibatches must be 1")
     rejection = config.actor.rejection_sampling
     if rejection is None or (
         rejection.level,
@@ -81,16 +183,24 @@ def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
         rejection.lower,
     ) != ("token", "mask", "ratio", 5.0, None):
         raise ValueError("Expected official GSM8K token ratio rejection above 5")
-    for role in ("actor", "critic"):
-        optimizer = getattr(config, role).optimizer
+    optimizers = {
+        "actor": (config.actor.optimizer, 1.0e-6),
+        "critic": (config.critic.optimizer, 5.0e-6),
+    }
+    for role, (optimizer, lr) in optimizers.items():
         if optimizer is None or (
+            optimizer.type,
             optimizer.lr,
             optimizer.weight_decay,
+            optimizer.beta1,
+            optimizer.beta2,
+            optimizer.eps,
             optimizer.warmup_steps_proportion,
             optimizer.lr_scheduler_type,
             optimizer.warmup_steps,
-        ) != (1.7e-5, 0.017, 0.001, "constant", 5):
-            raise ValueError(f"{role} optimizer must match the official GSM8K recipe")
+            optimizer.gradient_clipping,
+        ) != ("adam", lr, 0.01, 0.9, 0.98, 1.0e-8, 0.0, "constant", 0, 1.0):
+            raise ValueError(f"{role} optimizer must match the SAO PPO recipe")
     if config.ref is not None or config.teacher is not None:
         raise ValueError("No reference/privileged teacher belongs in this PPO baseline")
     if config.sglang.attention_backend == "fa3":
@@ -288,6 +398,10 @@ def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> 
                 reward_bias=trainer.config.actor.reward_bias,
                 reward_clip=trainer.config.actor.reward_clip,
             )
+            if report["bootstrapped"] != 0:
+                raise RuntimeError(
+                    "SAO PPO critic-return audit unexpectedly bootstrapped"
+                )
             report["step"] = state["step"]
             report["consumed_sha256"] = hashlib.sha256(
                 (consumed_dir / f"{state['step']}.json").read_bytes()
@@ -412,9 +526,16 @@ def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> 
 def main(args: list[str]) -> None:
     config_only = "--check-config" in args
     args = [x for x in args if x != "--check-config"]
-    config, _ = load_expr_config(args, PPOConfig)
+    if config_only:
+        cfg, _ = parse_cli_args(args)
+        cfg = to_structured_cfg(cfg, PPOConfig)
+        config = OmegaConf.to_object(cfg)
+        assert isinstance(config, PPOConfig)
+    else:
+        config, _ = load_expr_config(args, PPOConfig)
     preflight = os.environ.get("SAO_PREFLIGHT", "0") == "1"
     validate_contract(config, preflight=preflight)
+    validate_hf_checkpoint_paths(config)
     if config_only:
         sys.stdout.write(
             json.dumps(dataclasses.asdict(config), indent=2, default=str) + "\n"
@@ -474,7 +595,7 @@ def main(args: list[str]) -> None:
         if preflight and trainer.recover_info is None:
             verify_published_policy(trainer, evidence, 0)
         if config.evaluator.eval_before_train and trainer.recover_info is None:
-            # Consume only the initial trigger; do not advance step20 cadence.
+            # Consume only the initial trigger; do not advance the periodic evaluation cadence.
             trainer.evaluator.freq_ctl.check(epochs=0, steps=0)
             trainer._evaluate_fn(workflow, eval_kwargs)
         trainer.train(
