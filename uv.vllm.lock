@@ -605,7 +605,7 @@ requires-dist = [
     { name = "mathruler", specifier = "==0.1.0" },
     { name = "matplotlib" },
     { name = "mbridge", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", git = "https://github.com/ISEEKYAN/mbridge.git?rev=310e8fb" },
-    { name = "megatron-bridge", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", url = "https://github.com/sitabulaixizawaluduo/Megatron-Bridge/releases/download/areal-v0.6.0-exaone45-fix.1/megatron_bridge-0.6.0-py3-none-any.whl" },
+    { name = "megatron-bridge", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", url = "https://github.com/sitabulaixizawaluduo/Megatron-Bridge/releases/download/areal-v0.6.0-exaone45-fix.2/megatron_bridge-0.6.0-py3-none-any.whl" },
     { name = "megatron-core", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", specifier = "==0.19.0" },
     { name = "mistral-common", specifier = ">=1.11.1" },
     { name = "msgspec" },
@@ -4064,7 +4064,7 @@ wheels = [
 [[package]]
 name = "megatron-bridge"
 version = "0.6.0"
-source = { url = "https://github.com/sitabulaixizawaluduo/Megatron-Bridge/releases/download/areal-v0.6.0-exaone45-fix.1/megatron_bridge-0.6.0-py3-none-any.whl" }
+source = { url = "https://github.com/sitabulaixizawaluduo/Megatron-Bridge/releases/download/areal-v0.6.0-exaone45-fix.2/megatron_bridge-0.6.0-py3-none-any.whl" }
 dependencies = [
     { name = "accelerate", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "comet-ml", marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
@@ -4095,7 +4095,7 @@ dependencies = [
     { name = "wandb", version = "0.27.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'linux'" },
 ]
 wheels = [
-    { url = "https://github.com/sitabulaixizawaluduo/Megatron-Bridge/releases/download/areal-v0.6.0-exaone45-fix.1/megatron_bridge-0.6.0-py3-none-any.whl", hash = "sha256:129867d662fe83ce86bf9f47f3ce16bb42bf623bd21602db39ddc8b3d7bac4a5" },
+    { url = "https://github.com/sitabulaixizawaluduo/Megatron-Bridge/releases/download/areal-v0.6.0-exaone45-fix.2/megatron_bridge-0.6.0-py3-none-any.whl", hash = "sha256:d50f79060836d39958ef80ca9e7e8b6766b3da24d1d96b42e22e3ac91be2251c" },
 ]
 
 [package.metadata]

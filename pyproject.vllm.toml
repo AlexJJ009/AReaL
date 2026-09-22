@@ -307,7 +307,7 @@ url = "https://download.pytorch.org/whl/cu129"
 explicit = true
 
 [tool.uv.sources]
-megatron-bridge = { url = "https://github.com/sitabulaixizawaluduo/Megatron-Bridge/releases/download/areal-v0.6.0-exaone45-fix.1/megatron_bridge-0.6.0-py3-none-any.whl" }
+megatron-bridge = { url = "https://github.com/sitabulaixizawaluduo/Megatron-Bridge/releases/download/areal-v0.6.0-exaone45-fix.2/megatron_bridge-0.6.0-py3-none-any.whl" }
 torch = [
     { index = "pytorch-cu129", extra = "vllm" },
     { index = "pytorch-cu129", extra = "cuda" },
