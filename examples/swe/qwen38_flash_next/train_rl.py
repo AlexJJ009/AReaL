@@ -114,6 +114,13 @@ def configure_training_rpc(scheduler):
     return scheduler
 
 
+def select_arena_dataset(dataset, selected: list[str]):
+    """Use explicit Env versions for both training and evaluation selections."""
+    from datasets import Dataset
+
+    return Dataset.from_list(select_evaluation_rows(list(dataset), selected))
+
+
 def validate_evaluation_only(config, dataset):
     """Reject settings that can train, recover weights, or omit evaluation tasks."""
     if config.total_train_steps != 0 or not config.evaluator.eval_before_train:
@@ -159,16 +166,7 @@ def main(profile, args):
             if len(streams) != 1:
                 raise ValueError("Task selection requires exactly one Arena stream")
             selected = json.loads(Path(selection_file).read_text())
-            if evaluation_only:
-                from datasets import Dataset
-
-                dataset = Dataset.from_list(
-                    select_evaluation_rows(list(dataset), selected)
-                )
-            else:
-                dataset = dataset.select(
-                    select_task_indices(list(dataset["data_id"]), selected)
-                )
+            dataset = select_arena_dataset(dataset, selected)
             if len(dataset) < config.train_dataset.batch_size:
                 raise ValueError(
                     "Task selection must contain at least one training batch"

@@ -44,7 +44,9 @@ update; it does not repair the underlying gradient instability.
 
 The default acceptance run is ten steps, batch16 groups with eight samples each,
 seed1234 and a 262144-token context limit. `QWEN_ARENA_TASK_IDS_FILE` selects an ordered
-task subset for comparison; use the same model, tasks and sampling settings as the
+task subset using explicit `env:key@version` references for both RL and evaluation. Pin
+the benchmark versions: the stream's latest versions can include diagnostic tasks under
+the same environment keys. Use the same model, tasks and sampling settings as the
 reference. The generation budget remains 65536 tokens with natural EOS.
 
 Validation on 2026-09-21 completed one synthetic optimizer update with 256 sequences of

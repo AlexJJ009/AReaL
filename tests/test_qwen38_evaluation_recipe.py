@@ -5,9 +5,27 @@ from types import SimpleNamespace
 import pytest
 
 from examples.swe.qwen38_flash_next.train_rl import (
+    select_arena_dataset,
     select_evaluation_rows,
     validate_evaluation_only,
 )
+
+
+def test_arena_training_selection_replaces_latest_diagnostic_version():
+    from datasets import Dataset
+
+    dataset = Dataset.from_list(
+        [
+            {"data_id": "env:issue@cancel-repro", "stream_id": "rl"},
+            {"data_id": "env:other@v1", "stream_id": "rl"},
+        ]
+    )
+
+    selected = select_arena_dataset(dataset, ["env:other@v1", "env:issue@benchmark"])
+
+    assert list(selected["data_id"]) == ["env:other@v1", "env:issue@benchmark"]
+    assert list(selected["stream_id"]) == ["rl", "rl"]
+    assert dataset[0]["data_id"] == "env:issue@cancel-repro"
 
 
 def evaluation_config():
