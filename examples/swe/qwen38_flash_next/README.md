@@ -26,6 +26,17 @@ optimizer update must not be retried on the same live worker: its original reque
 still finish. Resource readiness allows 24 hours. These settings use existing scheduler
 arguments and are scoped to this recipe.
 
+For native DSH tasks, the RL recipe sets `DSH_LLM_REQUEST_TIMEOUT_SECONDS=7200`:
+colocated inference pauses during training, and a cold 256K update can exceed the usual
+900-second stream idle timeout. Stream-specific `task_envs` can override this budget.
+Evaluation should retain its reference harness timeout. The task's overall deadline
+still applies.
+
+The actor rejects nonfinite optimizer gradient norms before clipping or updating
+weights. On failure it reports rank-local element finiteness and a chunked FP64 norm to
+distinguish nonfinite gradients from FP32 norm overflow. This guard prevents an invalid
+update; it does not repair the underlying gradient instability.
+
 The default acceptance run is ten steps, batch16 groups with eight samples each,
 seed1234 and a 262144-token context limit. `QWEN_ARENA_TASK_IDS_FILE` selects an ordered
 task subset for comparison; use the same model, tasks and sampling settings as the
