@@ -89,6 +89,7 @@ actor:
   optimizer_dtype: float32
 ref: null
 sglang:
+  attention_backend: flashinfer
   model_path: ${actor.path}
   random_seed: ${seed}
   skip_tokenizer_init: true
