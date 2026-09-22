@@ -139,15 +139,18 @@ def validate_diagnostic_replay(config) -> None:
 
 @contextmanager
 def replay_training_batch(actor, path: Path, expected_metadata: dict[str, Any]):
-    """Supply the first captured rollout once, without invoking live generation.
+    """Supply one captured rollout once, without invoking live generation.
 
     This diagnoses training from the configured initial weights, not exact RNG or
     optimizer recovery. A second request fails rather than recollecting rollout.
     """
     payload = load_batch_snapshot(path)
     metadata = payload["metadata"]
-    if metadata.get("method") != "prepare_batch" or metadata.get("call_index") != 0:
-        raise ValueError("Replay requires the first prepare_batch output snapshot")
+    index = metadata.get("call_index")
+    if metadata.get("method") != "prepare_batch" or type(index) is not int or index < 0:
+        raise ValueError(
+            "Replay requires a prepare_batch snapshot with a valid call index"
+        )
     for key, value in expected_metadata.items():
         if metadata.get(key) != value:
             raise ValueError(f"Replay metadata mismatch: {key}")

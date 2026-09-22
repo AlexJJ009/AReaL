@@ -150,7 +150,8 @@ def test_snapshot_unknown_metadata_and_reserved_keys_are_rejected(tmp_path):
         load_batch_snapshot(path)
 
 
-def test_replay_supplies_visual_batch_once_without_live_rollout(tmp_path):
+@pytest.mark.parametrize("call_index", [0, 1, 7])
+def test_replay_supplies_visual_batch_once_without_live_rollout(tmp_path, call_index):
     from examples.swe.qwen38_flash_next.batch_snapshot import replay_training_batch
 
     def live(*args, **kwargs):
@@ -162,7 +163,7 @@ def test_replay_supplies_visual_batch_once_without_live_rollout(tmp_path):
     save_batch_snapshot(
         path,
         [{"rollout_group": group, "pixel_values": torch.ones(3, 4)}],
-        {"method": "prepare_batch", "call_index": 0, "n_samples": 2},
+        {"method": "prepare_batch", "call_index": call_index, "n_samples": 2},
     )
     with replay_training_batch(actor, path, {"n_samples": 2}):
         with capture_training_batches(actor, tmp_path / "captured", {}):
@@ -200,3 +201,21 @@ def test_replay_rejects_training_resume_and_evaluation(changes):
     config.update(changes)
     with pytest.raises(ValueError, match="Batch replay requires"):
         validate_diagnostic_replay(SimpleNamespace(**config))
+
+
+@pytest.mark.parametrize("call_index", [-1, None, True, "1"])
+def test_replay_rejects_invalid_source_call_index(tmp_path, call_index):
+    from examples.swe.qwen38_flash_next.batch_snapshot import replay_training_batch
+
+    actor = SimpleNamespace(prepare_batch=lambda: pytest.fail("Live rollout invoked"))
+    original = actor.prepare_batch
+    path = tmp_path / "invalid-index.pt"
+    save_batch_snapshot(
+        path,
+        [{"input_ids": torch.tensor([[1, 2]])}],
+        {"method": "prepare_batch", "call_index": call_index},
+    )
+    with pytest.raises(ValueError, match="valid call index"):
+        with replay_training_batch(actor, path, {}):
+            pytest.fail("Invalid source index accepted")
+    assert actor.prepare_batch is original
