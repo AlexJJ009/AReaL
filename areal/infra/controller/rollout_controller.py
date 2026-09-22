@@ -1206,6 +1206,20 @@ class RolloutController:
     async def continue_generation(self):
         await self._collective_rpc_async("continue_generation")
 
+    def on_batch_consumed_without_update(self) -> None:
+        """Credit both dispatcher layers while retaining the frozen policy version.
+
+        Each worker receives a batch credit. The controller remains the strict
+        global prompt budget; worker limits are deliberately no tighter than
+        that budget, regardless of round-robin assignment or replica count.
+        """
+        self._collective_rpc("on_batch_consumed_without_update", http_timeout=60.0)
+        if self._proxy_started:
+            self._proxy_collective_rpc(
+                "on_batch_consumed_without_update", http_timeout=60.0
+            )
+        self.staleness_manager.on_batch_consumed_without_update()
+
     def set_version(self, version: int) -> None:
         with self._version_lock:
             self._version = version

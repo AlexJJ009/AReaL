@@ -117,6 +117,9 @@ class _StalenessManager:
 
 
 class _Rollout:
+    def on_batch_consumed_without_update(self):
+        self.staleness_manager.on_batch_consumed_without_update()
+
     def __init__(self):
         self.pause_calls = 0
         self.resume_calls = 0
