@@ -431,9 +431,9 @@ class AwexColocateReader:
     def _bind_qwen4_frozen_contract(self, timeout_s: float) -> None:
         from pathlib import Path
 
+        from awex.models.qwen4_exp import register_qwen4_exp_awex
         from sglang.srt.managers.scheduler_components import weight_updater
 
-        from areal.models.mcore.qwen4_exp_awex import register_qwen4_exp_awex
         from areal.models.mcore.qwen4_exp_awex_binding import SglangFrozenBinder
         from areal.models.mcore.qwen4_exp_awex_contract import load_frozen_contract
 

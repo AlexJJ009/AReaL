@@ -13,6 +13,42 @@ _VISION_KEYS = (
 )
 
 
+def install_qwen4_exp_visual_token_mask(model: torch.nn.Module) -> None:
+    """Scope the pinned bridge's ID-only visual scatter to actual visual tokens.
+
+    The bridge calls this after token embedding lookup and CP ID reconstruction.
+    A private ID copy masks text occurrences only for visual scatter; the model's
+    original IDs, labels, PLE inputs and text embeddings are never replaced.
+    """
+    visual = getattr(model, "visual", None)
+    if visual is None or getattr(visual, "_areal_visual_token_mask", False):
+        return
+    original = visual.get_inputs_embeds
+
+    def get_inputs_embeds(self, inputs_embeds, **kwargs):
+        token_types = kwargs.get("mm_token_type_ids")
+        if token_types is None:
+            if any(
+                kwargs.get(key) is not None
+                for key in ("pixel_values", "pixel_values_videos")
+            ):
+                raise ValueError("Qwen4Exp visual scatter requires mm_token_type_ids")
+            return original(inputs_embeds, **kwargs)
+        input_ids = kwargs["input_ids"]
+        if token_types.shape != input_ids.shape:
+            raise ValueError("Visual token types must match reconstructed input_ids")
+        token_types = token_types.to(device=input_ids.device)
+        special = (input_ids == self.hf_config.image_token_id) | (
+            input_ids == self.hf_config.video_token_id
+        )
+        # -1 is only consumed by the bridge's equality masks, never an embedding lookup.
+        scatter_ids = input_ids.masked_fill(special & (token_types == 0), -1)
+        return original(inputs_embeds, **{**kwargs, "input_ids": scatter_ids})
+
+    visual.get_inputs_embeds = MethodType(get_inputs_embeds, visual)
+    visual._areal_visual_token_mask = True
+
+
 def prepare_qwen4_exp_mrope_inputs(
     data: dict[str, Any],
     hf_config: Any,
@@ -108,6 +144,10 @@ def prepare_qwen4_exp_mrope_inputs(
             "mm_token_type_ids must have the same [B, S] shape as input_ids."
         )
     token_types = token_types.to(device=input_ids.device, dtype=torch.long)
+    generated = torch.zeros_like(attention_mask)
+    if loss_mask is not None:
+        generated = loss_mask.to(device=input_ids.device, dtype=torch.bool)
+        token_types = token_types.masked_fill(generated, 0)
     if ((token_types < 0) | (token_types > 2))[attention_mask].any():
         raise ValueError(
             "Qwen4Exp supports text, image, and video modality token types."
@@ -119,7 +159,8 @@ def prepare_qwen4_exp_mrope_inputs(
         (2, hf_config.video_token_id, "pixel_values_videos", "video_grid_thw"),
     ):
         if (
-            ((token_types == modality) != (input_ids == token_id)) & attention_mask
+            ((token_types == modality) != ((input_ids == token_id) & ~generated))
+            & attention_mask
         ).any():
             raise ValueError(
                 f"mm_token_type_ids disagree with Qwen4Exp {grid_key} token ids."

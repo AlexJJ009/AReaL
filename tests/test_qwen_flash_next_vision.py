@@ -27,7 +27,10 @@ from examples.swe.qwen38_flash_next.train_rl import (
 )
 from tests import test_qwen_flash_next_training
 
-from areal.engine.megatron_utils.qwen4_exp_mrope import prepare_qwen4_exp_mrope_inputs
+from areal.engine.megatron_utils.qwen4_exp_mrope import (
+    install_qwen4_exp_visual_token_mask,
+    prepare_qwen4_exp_mrope_inputs,
+)
 from areal.utils.data import (
     MicroBatchSpec,
     RolloutGroup,
@@ -165,7 +168,12 @@ def test_mrope_survives_microbatch_reorder_padding_and_cp_partition(
             assert inputs["position_ids"].shape == (3, 1, inputs["input_ids"].shape[-1])
             for key, value in expected_payload.items():
                 torch.testing.assert_close(inputs[key], value, atol=0, rtol=0)
-            assert "mm_token_type_ids" in padded_mb
+            torch.testing.assert_close(
+                inputs["mm_token_type_ids"],
+                padded_mb["mm_token_type_ids"].reshape(1, -1),
+                atol=0,
+                rtol=0,
+            )
         indices = module._build_cp_reassemble_indices(padded_mb["cu_seqlens"], cp_size)
         reassembled = torch.cat(cp_outputs)[indices]
         outputs.append(
@@ -181,6 +189,63 @@ def test_mrope_survives_microbatch_reorder_padding_and_cp_partition(
         [reference[:, i, vision_batch["attention_mask"][i]].T for i in order]
     )
     torch.testing.assert_close(torch.cat(outputs), expected, atol=0, rtol=0)
+
+
+@pytest.mark.parametrize("token_kind", ["image_token_id", "video_token_id"])
+def test_generated_visual_special_tokens_remain_text(
+    hf_qwen4_exp, vision_batch, qwen_config, token_kind
+):
+    original = prepare_qwen4_exp_mrope_inputs(vision_batch, qwen_config)
+    inputs = dict(vision_batch)
+    inputs["input_ids"] = inputs["input_ids"].clone()
+    inputs["loss_mask"] = torch.zeros_like(inputs["attention_mask"])
+    for row in range(inputs["input_ids"].shape[0]):
+        last = int(inputs["attention_mask"][row].sum()) - 1
+        inputs["input_ids"][row, last] = getattr(qwen_config, token_kind)
+        inputs["loss_mask"][row, last] = True
+    prepared = prepare_qwen4_exp_mrope_inputs(inputs, qwen_config)
+    torch.testing.assert_close(prepared["position_ids"], original["position_ids"])
+    torch.testing.assert_close(
+        prepared["mm_token_type_ids"], original["mm_token_type_ids"]
+    )
+    torch.testing.assert_close(prepared["input_ids"], inputs["input_ids"].long())
+
+
+def test_visual_scatter_preserves_generated_token_embeddings_and_gradients():
+    class Visual(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.hf_config = SimpleNamespace(image_token_id=2, video_token_id=3)
+
+        def get_inputs_embeds(self, inputs_embeds, **kwargs):
+            ids = kwargs["input_ids"]
+            mask = (ids == 2) | (ids == 3)
+            return inputs_embeds.masked_scatter(
+                mask.unsqueeze(-1), kwargs["pixel_values"]
+            )
+
+    model = SimpleNamespace(visual=Visual())
+    install_qwen4_exp_visual_token_mask(model)
+    installed = model.visual.get_inputs_embeds
+    install_qwen4_exp_visual_token_mask(model)
+    assert model.visual.get_inputs_embeds is installed
+    ids = torch.tensor([[1, 2, 2, 3]])
+    types = torch.tensor([[0, 1, 0, 0]])
+    embeddings = torch.arange(8.0).reshape(1, 4, 2).requires_grad_()
+    pixels = torch.tensor([[[10.0, 11.0]]], requires_grad=True)
+    output = model.visual.get_inputs_embeds(
+        embeddings, input_ids=ids, mm_token_type_ids=types, pixel_values=pixels
+    )
+    expected = embeddings.detach().clone()
+    expected[:, 1] = pixels.detach()
+    torch.testing.assert_close(output, expected, atol=0, rtol=0)
+    output.sum().backward()
+    expected_grad = torch.ones_like(embeddings)
+    expected_grad[:, 1] = 0
+    torch.testing.assert_close(embeddings.grad, expected_grad, atol=0, rtol=0)
+    torch.testing.assert_close(pixels.grad, torch.ones_like(pixels), atol=0, rtol=0)
+    torch.testing.assert_close(ids, torch.tensor([[1, 2, 2, 3]]), atol=0, rtol=0)
+    assert not hasattr(Visual(), "_areal_visual_token_mask")
 
 
 def test_mrope_missing_token_types_uses_upstream_processor_method(

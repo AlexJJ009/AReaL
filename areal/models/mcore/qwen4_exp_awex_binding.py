@@ -10,12 +10,11 @@ from types import ModuleType
 from typing import Any
 
 import torch
-from torch import nn
-
-from areal.models.mcore.qwen4_exp_awex_contract import (
+from awex.models.qwen4_exp_contract import (
     Qwen4ExpFrozenContract,
     mcore_visual_parameter_name,
 )
+from torch import nn
 
 
 class McoreFrozenBinder:

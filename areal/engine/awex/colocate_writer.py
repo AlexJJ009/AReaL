@@ -226,7 +226,8 @@ class AwexWeightPublisher:
             infer_conf["hf_config"] = SimpleNamespace(**infer_conf["hf_config"])
 
         if self._engine.hf_config.architectures == ["Qwen4ExpForConditionalGeneration"]:
-            from areal.models.mcore.qwen4_exp_awex import register_qwen4_exp_awex
+            from awex.models.qwen4_exp import register_qwen4_exp_awex
+
             from areal.models.mcore.qwen4_exp_awex_binding import (
                 McoreFrozenBinder,
                 load_actor_frozen_contract,

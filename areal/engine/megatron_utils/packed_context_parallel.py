@@ -646,6 +646,11 @@ def packed_context_parallel_forward(
             if key in input_:
                 vlm_kwargs[key] = input_[key]
 
+    if use_wrapper_packed_seq and is_vision_model and "mm_token_type_ids" in input_:
+        # ModelScope reconstructs full IDs before visual scatter, then partitions
+        # embeddings. Keep modality provenance in that same full packed layout.
+        vlm_kwargs["mm_token_type_ids"] = input_["mm_token_type_ids"].reshape(1, -1)
+
     # MTP training: convert the independent label and mask channels to the
     # exact layout used by this forward. MCore rolls both once per MTP layer;
     # keeping them aligned prevents cross-sequence targets and masks padding

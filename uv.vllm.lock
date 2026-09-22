@@ -528,7 +528,7 @@ requires-dist = [
     { name = "areal", extras = ["megatron"], marker = "extra == 'cuda-train'" },
     { name = "areal", extras = ["tms"], marker = "extra == 'cuda-train'" },
     { name = "areal", extras = ["vllm"], marker = "extra == 'cuda'" },
-    { name = "awex", git = "https://github.com/inclusionAI/Awex.git?rev=dc665c44d61c193fd83997bdda43a7dc8e86cd62" },
+    { name = "awex", git = "https://github.com/inclusionAI/Awex.git?rev=c2360eaa4cd4fa3f96bd5384a3486b9c3d34c01f" },
     { name = "build", specifier = ">=1.2.1" },
     { name = "claude-agent-sdk" },
     { name = "click", marker = "extra == 'cli'", specifier = ">=8.1" },
@@ -710,7 +710,7 @@ wheels = [
 [[package]]
 name = "awex"
 version = "0.2.0"
-source = { git = "https://github.com/inclusionAI/Awex.git?rev=dc665c44d61c193fd83997bdda43a7dc8e86cd62#dc665c44d61c193fd83997bdda43a7dc8e86cd62" }
+source = { git = "https://github.com/inclusionAI/Awex.git?rev=c2360eaa4cd4fa3f96bd5384a3486b9c3d34c01f#c2360eaa4cd4fa3f96bd5384a3486b9c3d34c01f" }
 
 [[package]]
 name = "azure-core"

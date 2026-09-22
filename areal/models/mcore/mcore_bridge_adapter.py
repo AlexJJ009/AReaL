@@ -198,6 +198,12 @@ class MCoreBridgeAdapter:
 
         models = list(get_mcore_model(self.config))
         if self.config.hf_model_type == "qwen4_exp":
+            from areal.engine.megatron_utils.qwen4_exp_mrope import (
+                install_qwen4_exp_visual_token_mask,
+            )
+
+            for model in models:
+                install_qwen4_exp_visual_token_mask(model)
             self.frozen_parameter_names = [
                 _configure_qwen4_exp_parameters(
                     model, freeze_ple_table=self.freeze_ple_table
