@@ -669,6 +669,8 @@ class FSDPEngine(TrainEngine):
 
             if meta.with_optim and meta.weight_format == "hf":
                 self._save_optimizer_state(meta.path)
+            if meta.with_optim:
+                self._save_training_state(meta.path)
 
     def load(self, meta: SaveLoadMeta):
         with self._offload_aware_context():
@@ -686,6 +688,8 @@ class FSDPEngine(TrainEngine):
             # pinning and normalization established by PerLayerOptimWrapper.__init__.
             if meta.with_optim and self._per_layer_optim_wrapper is not None:
                 self._per_layer_optim_wrapper.refresh_states()
+            if meta.with_optim:
+                self._load_training_state(meta.path)
 
     @contextmanager
     def _offload_aware_context(self):
@@ -748,8 +752,7 @@ class FSDPEngine(TrainEngine):
         current_lr = self.lr_scheduler.get_last_lr()[0]
         return dict(
             update_successful=float(update_successful),
-            # Per-process relative counter. Checkpoint recovery restores optimizer
-            # state, but not FSDPEngine object-local counters.
+            # Per-process relative counter; the FSDP sidecar restores it on resume.
             optimizer_steps_since_init=self.optimizer_steps_since_init,
             grad_norm=float(grad_norm) if grad_norm is not None else float("nan"),
             lr=current_lr,
@@ -1915,6 +1918,35 @@ class FSDPEngine(TrainEngine):
             state_dict=state_dict,
             checkpoint_id=path,
         )
+
+    def _save_training_state(self, path: str):
+        """Save FSDP engine state that is outside the DCP model/optimizer state."""
+        if self.lr_scheduler is None:
+            return
+        state = {
+            "lr_scheduler": self.lr_scheduler.state_dict(),
+            "optimizer_steps_since_init": self.optimizer_steps_since_init,
+        }
+        if dist.get_rank() == 0:
+            torch.save(state, os.path.join(path, "fsdp_engine_state.pt"))
+        dist.barrier(group=self.cpu_group)
+
+    def _load_training_state(self, path: str):
+        """Restore scheduler and engine counters when a sidecar is available."""
+        state_path = os.path.join(path, "fsdp_engine_state.pt")
+        if not os.path.exists(state_path):
+            self.logger.warning(
+                "FSDP checkpoint %s has no engine-state sidecar; keeping the "
+                "new scheduler and optimizer-step counter for legacy compatibility.",
+                path,
+            )
+            return
+        state = torch.load(state_path, map_location="cpu", weights_only=True)
+        if self.lr_scheduler is not None and "lr_scheduler" in state:
+            self.lr_scheduler.load_state_dict(state["lr_scheduler"])
+        if "optimizer_steps_since_init" in state:
+            self.optimizer_steps_since_init = int(state["optimizer_steps_since_init"])
+        dist.barrier(group=self.cpu_group)
 
     def _save_optimizer_state(self, path: str):
         assert self.optimizer is not None

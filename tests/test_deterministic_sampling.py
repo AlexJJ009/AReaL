@@ -428,6 +428,7 @@ def test_wait_results_selects_completed_tasks_when_deterministic():
     dispatcher.deterministic_order = True
     dispatcher._result_cv = threading.Condition()
     dispatcher._active_task_ids = {0, 1, 2}
+    dispatcher._active_task_inputs = dict.fromkeys(range(3))
     dispatcher._pending_results = {
         1: _FakeTimedResult(task_id=1, create_time=1.0, data="one"),
         2: _FakeTimedResult(task_id=2, create_time=2.0, data="two"),
@@ -446,6 +447,7 @@ def test_wait_for_task_removes_result_before_deterministic_batch_selection():
     dispatcher.deterministic_order = True
     dispatcher._result_cv = threading.Condition()
     dispatcher._active_task_ids = {0, 1, 2}
+    dispatcher._active_task_inputs = dict.fromkeys(range(3))
     dispatcher._pending_results = {
         task_id: _FakeTimedResult(task_id, float(task_id), str(task_id))
         for task_id in range(3)

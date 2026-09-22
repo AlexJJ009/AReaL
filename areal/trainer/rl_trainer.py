@@ -462,8 +462,11 @@ class PPOTrainer:
         self.stats_logger = StatsLogger(config, ft_spec)
 
         # Set up checkpointing for recover
+        recover_engines = {"default": self.actor}
+        if self.critic is not None:
+            recover_engines["critic"] = self.critic
         self.recover_info = self.recover_handler.load(
-            self.actor,
+            recover_engines,
             self.saver,
             self.evaluator,
             self.stats_logger,
@@ -473,18 +476,26 @@ class PPOTrainer:
             # Recompute placement instead of reusing _should_offload_rollout:
             # AWEX clears that flag because it drives the handover itself.
             colocated_rollout=self._is_actor_rollout_colocated(config),
+            expected_trainer_state={
+                "num_critic_only_steps": config.num_critic_only_steps
+            },
         )
 
         # After recovery, sync the staleness manager so its capacity formula
         # stays bounded despite the version jumping from 0 to recovery_version.
         if self.recover_info is not None:
-            recovery_version = self.recover_info.last_step_info.global_step + 1
+            recovery_version = self.recover_info.trainer_state.get(
+                "policy_version", self.recover_info.last_step_info.global_step + 1
+            )
             if is_single_controller():
                 sm = self.rollout.staleness_manager
             else:
                 sm = self.rollout.workflow_executor.staleness_manager
             if sm is not None:
                 sm.on_version_recovered(recovery_version)
+            input_state = self.recover_info.rollout_input_state
+            if input_state is not None:
+                self.rollout.load_input_recovery_state(input_state)
 
         self._config_perf_tracer()
         self._apply_initial_offload_policy()
@@ -682,6 +693,7 @@ class PPOTrainer:
                 break
             epoch = global_step // steps_per_epoch
             step = global_step % steps_per_epoch
+            critic_only = global_step < config.num_critic_only_steps
 
             if self._should_offload_rollout:
                 self._onload_rollout()
@@ -823,9 +835,10 @@ class PPOTrainer:
                     args={"global_step": global_step},
                 ),
             ):
-                self.actor.ppo_update(adv_batch)
-                self.actor.step_lr_scheduler()
-                self.actor.get_device_stats().log("ppo update")
+                if not critic_only:
+                    self.actor.ppo_update(adv_batch)
+                    self.actor.step_lr_scheduler()
+                    self.actor.get_device_stats().log("ppo update")
 
             if (
                 config.memory_profiler is not None
@@ -885,16 +898,24 @@ class PPOTrainer:
                 ),
             ):
                 # Use versioned path for weight updates
-                new_version = global_step + 1
-                versioned_meta = self.weight_update_meta.with_version(new_version)
-                self.actor.update_weights(versioned_meta)
+                new_version = max(0, global_step + 1 - config.num_critic_only_steps)
+                if not critic_only:
+                    versioned_meta = self.weight_update_meta.with_version(new_version)
+                    self.actor.update_weights(versioned_meta)
 
-                self.actor.set_version(new_version)
-                if self.critic is not None:
-                    self.critic.set_version(new_version)
-                self.rollout.set_version(new_version)
-                if self.eval_rollout is not None:
-                    self.eval_rollout.set_version(new_version)
+                    self.actor.set_version(new_version)
+                    if self.critic is not None:
+                        self.critic.set_version(new_version)
+                    self.rollout.set_version(new_version)
+                    if self.eval_rollout is not None:
+                        self.eval_rollout.set_version(new_version)
+                else:
+                    if is_single_controller():
+                        sm = self.rollout.staleness_manager
+                    else:
+                        sm = self.rollout.workflow_executor.staleness_manager
+                    if sm is not None:
+                        sm.on_batch_consumed_without_update()
 
             if not self._is_v1_awex_colocate(config):
                 self._save_training_state(
@@ -917,13 +938,14 @@ class PPOTrainer:
                     args={"global_step": global_step},
                 ),
             ):
-                self._evaluate(
-                    eval_workflow=eval_workflow,
-                    eval_workflow_kwargs=eval_workflow_kwargs,
-                    epoch=epoch,
-                    epoch_step=step,
-                    global_step=global_step,
-                )
+                if not critic_only:
+                    self._evaluate(
+                        eval_workflow=eval_workflow,
+                        eval_workflow_kwargs=eval_workflow_kwargs,
+                        epoch=epoch,
+                        epoch_step=step,
+                        global_step=global_step,
+                    )
             if self._should_offload_rollout:
                 self._offload_rollout(is_eval=True)
 
@@ -1393,6 +1415,19 @@ class PPOTrainer:
             self.train_dataloader,
             tokenizer=self.tokenizer,
             processor=self.processor,
+            trainer_state={
+                "num_critic_only_steps": self.config.num_critic_only_steps,
+                "policy_version": max(
+                    0, global_step + 1 - self.config.num_critic_only_steps
+                ),
+            },
+            rollout_input_state=(
+                self.rollout.get_input_recovery_state()
+                if self.config.num_critic_only_steps
+                and is_single_controller()
+                and hasattr(self.rollout, "get_input_recovery_state")
+                else None
+            ),
         )
 
         if not is_single_controller():
@@ -1467,6 +1502,13 @@ class PPOTrainer:
         stats.update(self.rollout.export_stats())
         if self.eval_rollout is not None:
             stats.update(self.eval_rollout.export_stats())
+        if self.config.num_critic_only_steps:
+            stats["ppo/critic_only"] = int(
+                global_step < self.config.num_critic_only_steps
+            )
+            stats["ppo/policy_version"] = max(
+                0, global_step + 1 - self.config.num_critic_only_steps
+            )
         self.stats_logger.commit(epoch, epoch_step, global_step, stats)
 
         if not is_single_controller():
@@ -1474,7 +1516,21 @@ class PPOTrainer:
             current_platform.synchronize()
 
     def _validate_cfg(self):
-        """validate config for incompatible settings before weight initialization, to avoid wasted resources on spawning workers and loading models."""
+        """Reject incompatible settings before spawning workers/loading weights."""
+        if self.config.num_critic_only_steps and self.config.dynamic_bs:
+            raise ValueError(
+                "Critic-only warmup currently requires dynamic_bs=False so "
+                "rollout capacity is credited in full prompt batches."
+            )
+        if self.config.num_critic_only_steps and (
+            self._is_v1_awex_colocate(self.config)
+            or self._is_actor_rollout_colocated(self.config)
+        ):
+            raise ValueError(
+                "Critic-only warmup currently requires separate actor and rollout "
+                "GPUs; actor-rollout colocation needs a no-update weight restore "
+                "protocol. Critic colocation with actor is supported."
+            )
         rollout_backend = self.rollout_alloc.backend
         actor_backend = self.actor_alloc.backend
         requires_train_engine_offload = any(

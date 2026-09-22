@@ -32,6 +32,37 @@ def enqueue_and_submit(manager: StalenessManager, count: int = 1) -> None:
         manager.on_rollout_submitted()
 
 
+def test_critic_only_rounds_release_capacity_without_faking_policy_versions():
+    provider = MockVersionProvider(0)
+    manager = StalenessManager(provider, 4, 4, 0)
+    for step in range(12):
+        assert manager.get_capacity() == 4
+        enqueue_and_submit(manager, 4)
+        for _ in range(4):
+            manager.on_rollout_accepted()
+        assert manager.get_capacity() == 0
+        manager.on_batch_consumed_without_update()
+        assert provider.get_version() == 0
+        assert manager.get_stats().accepted == (step + 1) * 4
+    # A subsequent real PPO update grants only its normal one-batch capacity.
+    enqueue_and_submit(manager, 4)
+    for _ in range(4):
+        manager.on_rollout_accepted()
+    provider.set_version(1)
+    assert manager.get_capacity() == 4
+
+
+@pytest.mark.parametrize("version", [0, 1, 7])
+def test_warmup_capacity_credit_is_reset_on_recovery(version):
+    provider = MockVersionProvider(version)
+    manager = StalenessManager(provider, 100, 4, 2)
+    for _ in range(10):
+        manager.on_batch_consumed_without_update()
+    manager.on_version_recovered(version)
+    assert manager.get_stats().accepted == version * 4
+    assert manager.get_capacity() == 12
+
+
 class TestStalenessManagerBasics:
     """Test basic functionality of StalenessManager."""
 

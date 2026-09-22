@@ -65,7 +65,7 @@ class AuditedMathWorkflow(RLVRWorkflow):
         result["audit_source_key"] = torch.tensor([source_key], dtype=torch.int64)
         result["audit_task_id"] = torch.tensor([context.task_id], dtype=torch.int64)
         result["audit_sample_idx"] = torch.tensor(
-            [context.sample_idx], dtype=torch.int64
+            [0 if context.sample_idx is None else context.sample_idx], dtype=torch.int64
         )
         return result
 
