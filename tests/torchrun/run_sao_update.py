@@ -66,6 +66,7 @@ def main():
     parser.add_argument("--dtype", choices=["float32", "bfloat16"], default="bfloat16")
     parser.add_argument("--attention", default="flash_attention_2")
     parser.add_argument("--independent-value", action="store_true")
+    parser.add_argument("--direct-dis", action="store_true")
     args = parser.parse_args()
     rank, world = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
@@ -116,6 +117,7 @@ def main():
                 critic_gae_lambda=1.0,
                 recompute_logprob=False,
                 use_decoupled_loss=False,
+                use_direct_dis_loss=args.direct_dis,
             )
         )
         critic = FSDPPPOCritic(
@@ -128,7 +130,7 @@ def main():
                 },
                 optimizer=optimizer(5e-6),
                 is_critic=True,
-                eps_clip=1000,
+                eps_clip=None if args.direct_dis else 1000,
             )
         )
         ft = FinetuneSpec(
@@ -226,6 +228,22 @@ def main():
             for actual, expected in zip(critic.compute_values(raw), saved_values):
                 torch.testing.assert_close(actual, expected, rtol=0.01, atol=0.002)
             reload_checked = True
+        all_masked_checked = False
+        if args.direct_dis:
+            # Adam already has moments: an all-DIS-masked update must not apply
+            # momentum or weight decay, even though backward produces zeros.
+            before_masked = snapshot(actor)
+            masked = copy.deepcopy(raw)
+            for row in masked:
+                row["logprobs"].fill_(-10.0)
+            masked_batch = actor.compute_advantages(masked)
+            old_event_count = len(events)
+            masked_report = actor.ppo_update(masked_batch)
+            assert masked_report["all_masked"] == 1 and masked_report["effective"] == 0
+            assert len(events) == old_event_count
+            for name, value in snapshot(actor).items():
+                torch.testing.assert_close(value, before_masked[name], rtol=0, atol=0)
+            all_masked_checked = True
         if rank == 0:
             torch.save({"before": before, "after": after}, args.output / "weights.pt")
             (args.output / "result.json").write_text(
@@ -242,6 +260,8 @@ def main():
                         "attention": args.attention,
                         "independent_value": args.independent_value,
                         "value_reload_checked": reload_checked,
+                        "direct_dis": args.direct_dis,
+                        "all_masked_optimizer_skip_checked": all_masked_checked,
                         "scope": "M4 synthetic real FSDP; not SAO end-to-end or value qualification",
                     },
                     indent=2,

@@ -36,6 +36,7 @@ def summarize_updates(stats: list[dict[str, float]]) -> dict[str, float]:
         "nonfinite": float(
             sum(not math.isfinite(s.get("grad_norm", float("nan"))) for s in stats)
         ),
+        "all_masked": float(sum(s.get("dis_all_masked", 0) for s in stats)),
     }
 
 
@@ -57,6 +58,20 @@ def require_single_update(report: Any, role: str) -> None:
 def _effective_updates(report: Any) -> float:
     reports = report if isinstance(report, list) else [report]
     return min(item["effective"] for item in reports)
+
+
+def actor_update_completed(report: Any) -> bool:
+    reports = report if isinstance(report, list) else [report]
+    if reports and all(
+        isinstance(item, dict)
+        and item.get("all_masked", 0) == 1
+        and item.get("successful") == 0
+        and item.get("effective") == 0
+        for item in reports
+    ):
+        return False
+    require_single_update(report, "actor")
+    return True
 
 
 def update_critic_before_actor(
@@ -104,15 +119,20 @@ def update_critic_before_actor(
     for row, target in zip(actor_batch, fixed):
         row["returns"] = target["returns"]
     actor_report = actor.ppo_update(actor_batch)
-    require_single_update(actor_report, "actor")
-    actor.step_lr_scheduler()
+    all_masked = not actor_update_completed(actor_report)
+    if not all_masked:
+        actor.step_lr_scheduler()
     with stats_tracker.scope("sao_updates"):
         stats_tracker.scalar(
             critic_attempted=float(updates),
             critic_successful=float(updates),
             critic_effective=sum(_effective_updates(r) for r in critic_reports),
             actor_attempted=1.0,
-            actor_successful=1.0,
+            actor_successful=0.0 if all_masked else 1.0,
             actor_effective=_effective_updates(actor_report),
         )
-    return {"critic": critic_reports, "actor": actor_report}
+    return {
+        "critic": critic_reports,
+        "actor": actor_report,
+        "actor_updated": not all_masked,
+    }

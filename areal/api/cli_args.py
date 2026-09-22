@@ -1731,6 +1731,24 @@ class PPOActorConfig(TrainEngineConfig):
     )
 
     # Advantage Estimation
+    use_direct_dis_loss: bool = field(
+        default=False,
+        metadata={
+            "help": "Use Direct DIS score-function loss instead of PPO; requires rollout logprobs and no extra KL/correction."
+        },
+    )
+    dis_epsilon_low: float = field(
+        default=0.3,
+        metadata={
+            "help": "DIS lower epsilon; retained ratio is strictly above 1-epsilon. Paper math: 0.3."
+        },
+    )
+    dis_epsilon_high: float = field(
+        default=5.0,
+        metadata={
+            "help": "DIS upper epsilon; retained ratio is strictly below 1+epsilon. Paper math: 5.0."
+        },
+    )
     discount: float = field(
         default=1.0, metadata={"help": "Discount factor for future rewards"}
     )
@@ -1872,6 +1890,8 @@ class PPOActorConfig(TrainEngineConfig):
         Returns:
             True if compute_logp() should be called, False to skip.
         """
+        if self.use_direct_dis_loss:
+            return False
         from areal.utils.constants import ProxLogpMethod
 
         method = ProxLogpMethod(self.prox_logp_method)
@@ -1881,6 +1901,32 @@ class PPOActorConfig(TrainEngineConfig):
 
     def __post_init__(self):
         """Validate PPO actor configuration."""
+        if self.use_direct_dis_loss:
+            import math
+
+            if not self.backend.startswith("fsdp:"):
+                raise ValueError("Direct DIS currently supports FSDP only")
+            if (
+                not math.isfinite(self.dis_epsilon_low)
+                or not 0 <= self.dis_epsilon_low < 1
+                or not math.isfinite(self.dis_epsilon_high)
+                or self.dis_epsilon_high < 0
+            ):
+                raise ValueError("Invalid Direct DIS epsilon bounds")
+            if (
+                self.use_decoupled_loss
+                or self.recompute_logprob
+                or self.use_sapo_loss
+                or self.use_cispo_loss
+                or self.kl_ctl != 0
+                or self.rejection_sampling is not None
+                or self.m2_threshold is not None
+                or self.importance_sampling_level != "token"
+                or self.c_clip is not None
+            ):
+                raise ValueError(
+                    "Direct DIS requires rollout logprobs, token ratios, no PPO corrections/SAPO/CISPO/KL"
+                )
         if isinstance(self.gae_lambda, bool) or not isinstance(
             self.gae_lambda, int | float | str
         ):
@@ -2018,8 +2064,9 @@ class PPOCriticConfig(TrainEngineConfig):
     ppo_n_minibatches: int = field(
         default=4, metadata={"help": "Number of minibatches for each PPO update"}
     )
-    eps_clip: float = field(
-        default=0.5, metadata={"help": "Clipping factor for value loss"}
+    eps_clip: float | None = field(
+        default=0.5,
+        metadata={"help": "Clipping factor for value loss; None selects plain MSE"},
     )
     mask_no_eos_with_zero: bool = field(
         default=False,

@@ -841,6 +841,11 @@ class FSDPEngine(TrainEngine):
     ) -> dict[str, float]:
         self._ensure_ready()
         self.optimizer_zero_grad()
+        from areal.trainer.ppo.dis import DirectDISLoss
+
+        direct_dis = isinstance(loss_fn, DirectDISLoss)
+        if direct_dis:
+            loss_fn.reset()
 
         input_batched, _ = self._normalize_batch_input(input_)
 
@@ -851,6 +856,8 @@ class FSDPEngine(TrainEngine):
         total_loss_weight = compute_total_loss_weight(
             mb_list, loss_weight_fn, self.dp_group
         )
+        if direct_dis and total_loss_weight.item() == 0:
+            raise ValueError("Direct DIS batch has no valid action tokens")
 
         # Step 3: Forward-backward using process_output_fn callback
         def process_output(
@@ -869,6 +876,20 @@ class FSDPEngine(TrainEngine):
         self.forward_backward_batch(mb_list, process_output, forward_only=False)
 
         # Step 4: Optimizer step
+        if direct_dis:
+            kept = loss_fn.kept_tokens
+            if kept is None:
+                kept = torch.zeros((), dtype=torch.long, device=self.device)
+            dist.all_reduce(kept, group=self.dp_group)
+            if kept.item() == 0:
+                self.optimizer_zero_grad()
+                return {
+                    "update_successful": 0.0,
+                    "grad_norm": 0.0,
+                    "lr": self.optimizer.param_groups[0]["lr"],
+                    "num_micro_batches": len(mb_list.mbs),
+                    "dis_all_masked": 1.0,
+                }
         stats = self.optimizer_step()
         stats["num_micro_batches"] = len(mb_list.mbs)
         return stats

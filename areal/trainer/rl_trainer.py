@@ -845,8 +845,14 @@ class PPOTrainer:
                         critic_updates_before_actor=float(len(update_report["critic"]))
                     )
                 else:
-                    self.actor.ppo_update(adv_batch)
-                    self.actor.step_lr_scheduler()
+                    actor_report = self.actor.ppo_update(adv_batch)
+                    if config.actor.use_direct_dis_loss:
+                        from areal.trainer.ppo.update import actor_update_completed
+
+                        if actor_update_completed(actor_report):
+                            self.actor.step_lr_scheduler()
+                    else:
+                        self.actor.step_lr_scheduler()
                 self.actor.get_device_stats().log("ppo update")
 
             if (

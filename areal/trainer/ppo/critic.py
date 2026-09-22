@@ -49,8 +49,10 @@ class PPOCritic:
         ########## Logging code starts ##########
         scalars = dict(
             mask_no_eos_with_zero=self.config.mask_no_eos_with_zero,
-            eps_clip=self.config.eps_clip,
+            value_clipping=self.config.eps_clip is not None,
         )
+        if self.config.eps_clip is not None:
+            scalars["eps_clip"] = self.config.eps_clip
         stats_tracker.scalar(**scalars)
         ########## Logging code ends ##########
 
@@ -109,7 +111,7 @@ class PPOCriticControllerV2(GatewayTrainController):
 def ppo_loss_fn(
     value: torch.Tensor,
     input_data: dict,
-    eps_clip: float,
+    eps_clip: float | None,
 ):
     """Loss function for critic step, all inputs should be splitted into
     pipeline micro batches, returns loss and logging stats."""
@@ -118,13 +120,18 @@ def ppo_loss_fn(
     target_value = input_data["returns"].float()
     loss_mask = input_data["loss_mask"].bool()
 
-    loss, stat = ppo_critic_loss_fn(
-        value=value,
-        old_value=old_value,
-        target_value=target_value,
-        value_eps_clip=eps_clip,
-        loss_mask=loss_mask,
-    )
+    if eps_clip is None:
+        errors = (value - target_value.detach()).square()
+        loss = torch.where(loss_mask, errors, 0.0).sum() / loss_mask.count_nonzero()
+        stat = {"loss": errors.detach(), "clip_mask": torch.zeros_like(loss_mask)}
+    else:
+        loss, stat = ppo_critic_loss_fn(
+            value=value,
+            old_value=old_value,
+            target_value=target_value,
+            value_eps_clip=eps_clip,
+            loss_mask=loss_mask,
+        )
 
     # Log training statistics
     stats_tracker.denominator(

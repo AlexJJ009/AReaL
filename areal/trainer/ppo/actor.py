@@ -10,6 +10,7 @@ from areal.api import TrainEngine
 from areal.api.cli_args import MicroBatchSpec, PPOActorConfig, RejectionSamplingConfig
 from areal.infra import TrainController
 from areal.infra.rpc.serialization import serialize_value
+from areal.trainer.ppo.dis import DirectDISLoss
 from areal.trainer.ppo.gae import (
     _build_gae_lambda_context,
     _compute_token_level_gae,
@@ -158,6 +159,9 @@ class PPOActor:
         )
         logger.info(
             f"  reward_norm: {config.reward_norm if config.reward_norm else 'DISABLED (None)'}"
+        )
+        logger.info(
+            f"  loss: {'direct_dis' if config.use_direct_dis_loss else 'ppo_family'}"
         )
         logger.info(f"  gae_lambda: {config.gae_lambda}")
         logger.info(f"  critic_gae_lambda: {config.critic_gae_lambda}")
@@ -503,9 +507,12 @@ class PPOActor:
             current_version = self.engine.get_version()
 
             for mb in mb_inputs.mbs:
-                train_stat = self.engine.train_batch(
-                    mb,
-                    loss_fn=functools.partial(
+                loss_fn = (
+                    DirectDISLoss(
+                        self.config.dis_epsilon_low, self.config.dis_epsilon_high
+                    )
+                    if self.config.use_direct_dis_loss
+                    else functools.partial(
                         grpo_loss_fn,
                         eps_clip=self.config.eps_clip,
                         eps_clip_higher=self.config.eps_clip_higher,
@@ -520,7 +527,11 @@ class PPOActor:
                         sapo_tau_neg=self.config.sapo_tau_neg,
                         use_cispo_loss=self.config.use_cispo_loss,
                         use_decoupled_loss=self.config.use_decoupled_loss,
-                    ),
+                    )
+                )
+                train_stat = self.engine.train_batch(
+                    mb,
+                    loss_fn=loss_fn,
                     loss_weight_fn=lambda x: x["loss_mask"].count_nonzero(),
                 )
                 stats_tracker.scalar(**train_stat)
