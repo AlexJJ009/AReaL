@@ -162,6 +162,7 @@ def _build_ppo_trainer(events: list[tuple], *, recovered: bool = False):
         gconfig=SimpleNamespace(
             n_samples=1,
             reward_normalization=False,
+            reward_normalization_use_std=True,
             drop_incomplete_group=False,
         ),
         dynamic_bs=False,

@@ -1237,3 +1237,141 @@ def test_failed_task_retains_raw_in_typed_error(monkeypatch):
 
     assert exc_info.value.result is not None
     assert exc_info.value.result.raw == {"error": "grader failed", "arca": {}}
+
+
+def test_swe_identity_reward_preserves_partial_scores_and_rejects_invalid_values():
+    from examples.swe.reward_transforms import identity_reward
+
+    assert identity_reward(0.4, {}, reward_threshold=0.98) == 0.4
+    for value in (float("nan"), float("inf"), -0.1, 1.1):
+        with pytest.raises(ValueError, match="within"):
+            identity_reward(value, {})
+
+
+@pytest.fixture
+def native_model_failure_receipt():
+    return {
+        "nativeRlReceiptVersion": 1,
+        "nativeExecutionHealthy": True,
+        "nativeExportHealthy": True,
+        "status": "ERROR",
+        "trajectoryHealth": "healthy",
+        "nativeStopReason": "completed",
+        "nativeFailure": None,
+        "exportedRunCount": 2,
+        "runTerminals": {"main": "run.failed", "child": "run.completed"},
+        "runFailures": [
+            {
+                "runId": "main",
+                "error": {
+                    "code": "RUNTIME_EXECUTION_FAILED",
+                    "details": {
+                        "runtimeFailure": {
+                            "code": "DSH_PUBLIC_ANSWER_MISSING",
+                            "reason": "public_answer_missing",
+                        }
+                    },
+                },
+            }
+        ],
+    }
+
+
+def _native_failure_disposition(raw, *, status="HARNESS_FAILED", interactions=1):
+    error = ArenaTaskFailedError(
+        task_id="native-task",
+        status=status,
+        result=ArenaTaskResult(
+            task_id="native-task", status=status, score=0.0, raw=raw
+        ),
+    )
+    return ArenaStreamAgentWorkflow.classify_proxy_failure(
+        error,
+        context_overflow=False,
+        interaction_count=interactions,
+    )
+
+
+def test_native_model_failure_healthy_receipt_keeps_zero(native_model_failure_receipt):
+    assert (
+        _native_failure_disposition(native_model_failure_receipt)
+        == "model_failure_zero"
+    )
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("nativeRlReceiptVersion", None),
+        ("nativeExecutionHealthy", False),
+        ("nativeExecutionHealthy", 1),
+        ("nativeExportHealthy", False),
+        ("status", "OK"),
+        ("trajectoryHealth", "degraded"),
+        ("nativeStopReason", "cancelled"),
+        ("nativeFailure", {"code": "PROVIDER_FAILED"}),
+        ("exportedRunCount", 3),
+        ("runTerminals", {"main": "run.failed", "child": "run.cancelled"}),
+        ("runTerminals", {"main": "run.failed", "child": "run.failed"}),
+        ("runFailures", []),
+        ("runFailures", [None]),
+    ],
+)
+def test_native_failure_incomplete_or_system_receipt_rejected(
+    native_model_failure_receipt,
+    field,
+    value,
+):
+    native_model_failure_receipt[field] = value
+    assert (
+        _native_failure_disposition(native_model_failure_receipt)
+        == "unknown_failure_reject"
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "duplicate",
+        "unknown_run",
+        "outer_code",
+        "native_code",
+        "reason",
+        "missing_details",
+        "log_only",
+    ],
+)
+def test_native_failure_malformed_attribution_rejected(
+    native_model_failure_receipt, mutation
+):
+    raw = native_model_failure_receipt
+    failure = raw["runFailures"][0]
+    if mutation == "duplicate":
+        raw["runFailures"].append(failure)
+    elif mutation == "unknown_run":
+        failure["runId"] = "unknown"
+    elif mutation == "outer_code":
+        failure["error"]["code"] = "SYSTEM_FAILURE"
+    elif mutation == "native_code":
+        failure["error"]["details"]["runtimeFailure"]["code"] = "PROVIDER_FAILED"
+    elif mutation == "reason":
+        failure["error"]["details"]["runtimeFailure"]["reason"] = "timeout"
+    elif mutation == "missing_details":
+        failure["error"].pop("details")
+    else:
+        raw = {"error": "DSH_PUBLIC_ANSWER_MISSING public_answer_missing"}
+    assert _native_failure_disposition(raw) == "unknown_failure_reject"
+
+
+def test_native_failure_without_interactions_rejected(native_model_failure_receipt):
+    assert (
+        _native_failure_disposition(native_model_failure_receipt, interactions=0)
+        == "unknown_failure_reject"
+    )
+
+
+def test_native_failure_system_status_takes_precedence(native_model_failure_receipt):
+    assert (
+        _native_failure_disposition(native_model_failure_receipt, status="SETUP_FAILED")
+        == "system_failure_reject"
+    )
