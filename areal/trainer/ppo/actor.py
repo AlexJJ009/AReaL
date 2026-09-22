@@ -10,6 +10,7 @@ from areal.api import TrainEngine
 from areal.api.cli_args import MicroBatchSpec, PPOActorConfig, RejectionSamplingConfig
 from areal.infra import TrainController
 from areal.infra.rpc.serialization import serialize_value
+from areal.trainer.ppo.dis import DirectDISLoss
 from areal.trainer.ppo.gae import (
     _build_gae_lambda_context,
     _compute_token_level_gae,
@@ -17,6 +18,11 @@ from areal.trainer.ppo.gae import (
 )
 from areal.trainer.ppo.lambda_fn import resolve_gae_lambda_fn
 from areal.trainer.ppo.stats import infer_token_denominator
+from areal.trainer.ppo.trajectory import (
+    action_token_rewards,
+    action_trajectory_metadata,
+)
+from areal.trainer.ppo.update import summarize_updates
 from areal.utils import logging, stats_tracker
 from areal.utils.constants import (
     PROX_APPROX_METHOD_LINEAR,
@@ -155,6 +161,9 @@ class PPOActor:
         logger.info(
             f"  reward_norm: {config.reward_norm if config.reward_norm else 'DISABLED (None)'}"
         )
+        logger.info(
+            f"  loss: {'direct_dis' if config.use_direct_dis_loss else 'ppo_family'}"
+        )
         logger.info(f"  gae_lambda: {config.gae_lambda}")
         logger.info(f"  critic_gae_lambda: {config.critic_gae_lambda}")
         logger.info(f"  gae_timestep_unit: {config.gae_timestep_unit}")
@@ -215,6 +224,11 @@ class PPOActor:
 
         loss_mask = data["loss_mask"].float()
         loss_mask = torch.roll(loss_mask, shifts=-1, dims=-1)
+        explicit_episode = "terminated" in data or "truncated" in data
+        if explicit_episode:
+            terminated, episode_lengths, last_action = action_trajectory_metadata(
+                data, loss_mask
+            )
 
         # Align structural turn IDs to the same next-token prediction
         # convention used by loss_mask and log probabilities.
@@ -252,31 +266,16 @@ class PPOActor:
         attn_mask = data["attention_mask"]
         seqlens = attn_mask.sum(-1).long()
         seq_no_eos_mask = seqlens == attn_mask.shape[1]
-        explicit_termination = "terminated" in data or "truncated" in data
-        if explicit_termination:
-            for name in ("terminated", "truncated"):
-                flag = data.get(name)
-                if (
-                    not isinstance(flag, torch.Tensor)
-                    or flag.dtype != torch.bool
-                    or flag.shape != (bs,)
-                ):
-                    raise ValueError(
-                        f"{name} must be an explicit bool tensor of shape ({bs},)"
-                    )
-                if flag.device != attn_mask.device:
-                    raise ValueError(f"{name} must be on the attention mask device")
-            torch._assert_async(
-                torch.all(data["terminated"] ^ data["truncated"]),
-                "Each episode must be exactly one of terminated or truncated",
-            )
-            seq_no_eos_mask = data["truncated"]
+        if explicit_episode:
+            seq_no_eos_mask = ~terminated
         rewards = -self.kl_ctl * self.kl_estimator(old_logp, ref_logp)
         kl_rewards = rewards.clone()
         # KL rewards at the next token after eos is zero.
         rewards[batch_indices, seqlens - 1] = 0
         gae_kl_rewards = rewards.clone()
         indices = torch.clip(seqlens - 2, min=0)
+        if explicit_episode:
+            indices = last_action
         gae_outcome_rewards = torch.zeros_like(rewards)
         if self.mask_no_eos_with_zero:
             gae_outcome_rewards[batch_indices, indices] = torch.where(
@@ -284,6 +283,8 @@ class PPOActor:
             )
         else:
             gae_outcome_rewards[batch_indices, indices] = reward_score
+        if explicit_episode:
+            gae_outcome_rewards += action_token_rewards(data, loss_mask)
 
         # Turn-level GAE treats each generated turn as a macro timestep. Keep
         # token KL as a local actor penalty rather than broadcasting a turn's
@@ -298,11 +299,12 @@ class PPOActor:
             values = torch.zeros_like(rewards)
         else:
             values = data["values"]
-        # A real length cutoff bootstraps from its own final state. EOS is
-        # terminal regardless of padding or the lengths of other trajectories.
         bootstrap_values = None
-        if explicit_termination:
-            bootstrap_mask = data.get("bootstrap_mask", seq_no_eos_mask)
+        if explicit_episode:
+            final_values = values.gather(1, (episode_lengths - 1).unsqueeze(1)).squeeze(
+                1
+            )
+            bootstrap_mask = data.get("bootstrap_mask", ~terminated)
             if (
                 not isinstance(bootstrap_mask, torch.Tensor)
                 or bootstrap_mask.dtype != torch.bool
@@ -313,11 +315,10 @@ class PPOActor:
                     "bootstrap_mask must be a bool tensor of shape (batch_size,) on the values device"
                 )
             torch._assert_async(
-                torch.all(~bootstrap_mask | seq_no_eos_mask),
+                torch.all(~bootstrap_mask | ~terminated),
                 "bootstrap_mask may only enable continuation for truncated episodes",
             )
-            bootstrap_values = values.gather(1, (seqlens - 1).unsqueeze(1)).squeeze(1)
-            bootstrap_values = bootstrap_values * bootstrap_mask.to(values.dtype)
+            bootstrap_values = torch.where(bootstrap_mask, final_values, 0.0).detach()
         if self._gae_lambda_is_custom:
             gae_lambda = self._compute_gae_lambda(loss_mask, turn_ids)
         else:
@@ -347,30 +348,23 @@ class PPOActor:
                 gae_lambda=gae_lambda,
                 bootstrap_values=bootstrap_values,
             )
-        critic_gae_lambda = getattr(self, "critic_gae_lambda", None)
-        if critic_gae_lambda is not None:
+        # Critic targets have their own trace decay. Never derive them from
+        # normalized policy advantages or a later actor-only transformation.
+        if self.config.critic_gae_lambda is not None:
+            critic_kwargs = dict(
+                rewards=rewards.detach(),
+                values=values.detach(),
+                loss_mask=loss_mask,
+                seq_no_eos_mask=seq_no_eos_mask,
+                discount=self.discount,
+                gae_lambda=self.config.critic_gae_lambda,
+                bootstrap_values=bootstrap_values,
+            )
             if self.gae_timestep_unit == "turn":
-                assert turn_ids is not None
-                _, returns = _compute_turn_level_gae(
-                    rewards=rewards,
-                    values=values,
-                    loss_mask=loss_mask,
-                    turn_ids=turn_ids,
-                    seq_no_eos_mask=seq_no_eos_mask,
-                    discount=self.discount,
-                    gae_lambda=float(critic_gae_lambda),
-                    bootstrap_values=bootstrap_values,
-                )
+                _, returns = _compute_turn_level_gae(**critic_kwargs, turn_ids=turn_ids)
             else:
-                _, returns = _compute_token_level_gae(
-                    rewards=rewards,
-                    values=values,
-                    loss_mask=loss_mask,
-                    seq_no_eos_mask=seq_no_eos_mask,
-                    discount=self.discount,
-                    gae_lambda=float(critic_gae_lambda),
-                    bootstrap_values=bootstrap_values,
-                )
+                _, returns = _compute_token_level_gae(**critic_kwargs)
+        data["returns"] = returns.detach()
 
         # Optionally perform advantage normalization.
         if self.adv_norm is not None:
@@ -379,8 +373,7 @@ class PPOActor:
             advantages = self.adv_norm(advantages, loss_mask, group_sizes=group_sizes)
 
         # Store data in the dict.
-        data["returns"] = returns
-        data["advantages"] = advantages
+        data["advantages"] = advantages.detach()
         data["kl_rewards"] = kl_rewards
         data["tot_rewards"] = gae_kl_rewards + gae_outcome_rewards
         data["loss_mask"] = loss_mask
@@ -430,10 +423,10 @@ class PPOActor:
 
     @trace_perf("ppo_actor.ppo_update", category="compute")
     @stats_tracker.scope_func_wrapper("ppo_actor")
-    def ppo_update(self, data: list[dict[str, Any]]) -> None:
-        batched_call(self._ppo_update, data, unpack=False)
+    def ppo_update(self, data: list[dict[str, Any]]) -> dict[str, float]:
+        return batched_call(self._ppo_update, data, unpack=False)
 
-    def _ppo_update(self, data: dict[str, Any]) -> None:
+    def _ppo_update(self, data: dict[str, Any]) -> dict[str, float]:
         attn_mask = data["attention_mask"]
         loss_mask = data["loss_mask"]
         reward_score = data["rewards"]
@@ -533,14 +526,18 @@ class PPOActor:
             mb_spec=MicroBatchSpec(n_mbs=self.config.ppo_n_minibatches),
         )
 
+        update_stats = []
         with stats_tracker.scope("update"):
             # Get current version for proximal approximation metrics
             current_version = self.engine.get_version()
 
             for mb in mb_inputs.mbs:
-                train_stat = self.engine.train_batch(
-                    mb,
-                    loss_fn=functools.partial(
+                loss_fn = (
+                    DirectDISLoss(
+                        self.config.dis_epsilon_low, self.config.dis_epsilon_high
+                    )
+                    if self.config.use_direct_dis_loss
+                    else functools.partial(
                         grpo_loss_fn,
                         eps_clip=self.config.eps_clip,
                         eps_clip_higher=self.config.eps_clip_higher,
@@ -555,10 +552,16 @@ class PPOActor:
                         sapo_tau_neg=self.config.sapo_tau_neg,
                         use_cispo_loss=self.config.use_cispo_loss,
                         use_decoupled_loss=self.config.use_decoupled_loss,
-                    ),
+                    )
+                )
+                train_stat = self.engine.train_batch(
+                    mb,
+                    loss_fn=loss_fn,
                     loss_weight_fn=lambda x: x["loss_mask"].count_nonzero(),
                 )
                 stats_tracker.scalar(**train_stat)
+                update_stats.append(train_stat)
+        return summarize_updates(update_stats)
 
 
 class PPOActorController(TrainController):
@@ -572,8 +575,8 @@ class PPOActorController(TrainController):
             "compute_advantages", *args, rpc_meta={"broadcast": True}, **kwargs
         )
 
-    def ppo_update(self, *args, **kwargs) -> None:
-        self._custom_function_call(
+    def ppo_update(self, *args, **kwargs):
+        return self._custom_function_call(
             "ppo_update", *args, rpc_meta={"broadcast": True}, **kwargs
         )
 
@@ -593,12 +596,12 @@ class PPOActorControllerV2(GatewayTrainController):
         }
         return self._gateway_post_result("/ppo/actor/compute_advantages", payload)
 
-    def ppo_update(self, *args, **kwargs) -> None:
+    def ppo_update(self, *args, **kwargs):
         payload = {
             "args": serialize_value(list(args)),
             "kwargs": serialize_value(kwargs),
         }
-        self._gateway_post("/ppo/actor/update", payload)
+        return self._gateway_post_result("/ppo/actor/update", payload)
 
 
 def grpo_loss_fn(

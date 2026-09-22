@@ -20,6 +20,9 @@ from areal.api.cli_args import GenerationHyperparameters, PPOActorConfig
 from areal.trainer.ppo.actor import PPOActor
 from areal.trainer.ppo.gae import _compute_token_level_gae
 from areal.trainer.ppo.lambda_fn import resolve_gae_lambda_fn
+from areal.trainer.ppo.validation import (
+    verify_gamma_one_episodic_returns as verify_episodic_returns,
+)
 from areal.utils.data import KLEstimator
 from areal.workflow.rlvr import RLVRWorkflow
 
@@ -30,7 +33,6 @@ SAO_PPO_SPEC = importlib.util.spec_from_file_location(
 assert SAO_PPO_SPEC is not None and SAO_PPO_SPEC.loader is not None
 sao_ppo = importlib.util.module_from_spec(SAO_PPO_SPEC)
 SAO_PPO_SPEC.loader.exec_module(sao_ppo)
-verify_episodic_returns = sao_ppo.verify_episodic_returns
 
 
 def _active_returns_equal(

@@ -42,6 +42,7 @@ class _StatefulListDataLoader:
 
 
 class _ActorConfig:
+    use_direct_dis_loss = False
     _version = "v1"
     weight_update_mode = "disk"
 
@@ -217,6 +218,7 @@ class _TrainEngine:
 def _make_trainer(*, total_steps: int, num_critic_only_steps: int) -> PPOTrainer:
     trainer = PPOTrainer.__new__(PPOTrainer)
     trainer.config = SimpleNamespace(
+        critic_updates_before_actor=0,
         total_train_epochs=1,
         total_train_steps=total_steps,
         num_critic_only_steps=num_critic_only_steps,
@@ -301,6 +303,7 @@ def test_ppo_config_defaults_to_no_critic_only_warmup():
 def test_validate_cfg_rejects_dynamic_batching_with_critic_only_warmup():
     trainer = PPOTrainer.__new__(PPOTrainer)
     trainer.config = SimpleNamespace(
+        critic_updates_before_actor=0,
         num_critic_only_steps=2,
         dynamic_bs=True,
         actor=SimpleNamespace(_version="v1", weight_update_mode="disk"),
@@ -317,6 +320,7 @@ def test_validate_cfg_rejects_dynamic_batching_with_critic_only_warmup():
 def test_validate_cfg_rejects_actor_rollout_colocation_with_critic_only_warmup():
     trainer = PPOTrainer.__new__(PPOTrainer)
     trainer.config = SimpleNamespace(
+        critic_updates_before_actor=0,
         num_critic_only_steps=2,
         dynamic_bs=False,
         actor=SimpleNamespace(

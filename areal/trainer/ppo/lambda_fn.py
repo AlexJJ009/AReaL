@@ -19,6 +19,7 @@ __all__ = [
     "constant_gae_lambda",
     "relative_position_gae_lambda",
     "resolve_gae_lambda_fn",
+    "sao_length_adaptive_gae",
     "vapo_length_adaptive_gae",
 ]
 
@@ -32,6 +33,31 @@ class GAELambdaContext(TypedDict):
 
 
 GAELambdaFn = Callable[..., torch.Tensor]
+
+
+def sao_length_adaptive_gae(
+    context: GAELambdaContext,
+    *,
+    alpha: float = 1.5,
+) -> torch.Tensor:
+    r"""SAO actor lambda: ``1 - 1 / (alpha * action_tokens)``.
+
+    Use generated action tokens, including EOS, excluding prompt, observations
+    and padding. Unlike short-sequence variants, L=1 follows the same formula.
+    Empty trajectories are invalid. SAO's math recipe uses alpha=1.5.
+    """
+    if (
+        isinstance(alpha, bool)
+        or not isinstance(alpha, int | float)
+        or not math.isfinite(alpha)
+        or alpha < 1
+    ):
+        raise ValueError("SAO alpha must be finite and >= 1 (paper math recipe: 1.5)")
+    lengths = context["effective_token_lengths"]
+    torch._assert_async(
+        torch.all(lengths > 0), "SAO requires nonempty action trajectories"
+    )
+    return 1.0 - 1.0 / (float(alpha) * lengths.float())
 
 
 def constant_gae_lambda(

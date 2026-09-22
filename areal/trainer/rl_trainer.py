@@ -313,7 +313,15 @@ class PPOTrainer:
         engine_init_kwargs = {"addr": None, "ft_spec": ft_spec}
         self.actor.initialize(**engine_init_kwargs, role="actor")
         if self.critic is not None:
-            self.critic.initialize(**engine_init_kwargs, role="critic")
+            from areal.trainer.ppo.update import critic_optimizer_spec
+
+            self.critic.initialize(
+                addr=None,
+                ft_spec=critic_optimizer_spec(
+                    ft_spec, config.critic_updates_before_actor
+                ),
+                role="critic",
+            )
         if self.ref is not None:
             self.ref.initialize(**engine_init_kwargs, role="ref")
 
@@ -835,9 +843,29 @@ class PPOTrainer:
                     args={"global_step": global_step},
                 ),
             ):
+                if config.critic_updates_before_actor:
+                    from areal.trainer.ppo.update import update_critic_before_actor
+
+                    update_report = update_critic_before_actor(
+                        self.actor,
+                        self.critic,
+                        rollout_batch,
+                        adv_batch,
+                        config.critic_updates_before_actor,
+                    )
+                    stats_tracker.scalar(
+                        critic_updates_before_actor=float(len(update_report["critic"]))
+                    )
+                elif not critic_only:
+                    actor_report = self.actor.ppo_update(adv_batch)
+                    if config.actor.use_direct_dis_loss:
+                        from areal.trainer.ppo.update import actor_update_completed
+
+                        if actor_update_completed(actor_report):
+                            self.actor.step_lr_scheduler()
+                    else:
+                        self.actor.step_lr_scheduler()
                 if not critic_only:
-                    self.actor.ppo_update(adv_batch)
-                    self.actor.step_lr_scheduler()
                     self.actor.get_device_stats().log("ppo update")
 
             if (
@@ -852,7 +880,7 @@ class PPOTrainer:
                 self.actor.stop_memory_profile(snapshot_dir)
                 logger.info(f"Memory snapshots saved to {snapshot_dir}")
 
-            if self.critic is not None:
+            if self.critic is not None and not config.critic_updates_before_actor:
                 with (
                     stats_tracker.record_timing("critic_train_step"),
                     perf_tracer.trace_scope(
@@ -866,6 +894,9 @@ class PPOTrainer:
                     self.critic.get_device_stats().log("ppo critic update")
                 if self._should_offload_critic:
                     self._offload_model(self.critic, role="critic")
+
+            if config.critic_updates_before_actor and self._should_offload_critic:
+                self._offload_model(self.critic, role="critic")
 
             # Save BEFORE update_weights. In AWEX colocate mode the
             # transfer ends with actor weights offloaded, so saving afterwards
@@ -1516,6 +1547,13 @@ class PPOTrainer:
             current_platform.synchronize()
 
     def _validate_cfg(self):
+        if (
+            self.config.num_critic_only_steps
+            and self.config.critic_updates_before_actor
+        ):
+            raise ValueError(
+                "Critic-only warmup and critic-first SAO updates cannot be combined"
+            )
         """Reject incompatible settings before spawning workers/loading weights."""
         if self.config.num_critic_only_steps and self.config.dynamic_bs:
             raise ValueError(

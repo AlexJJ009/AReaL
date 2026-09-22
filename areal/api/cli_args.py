@@ -1732,6 +1732,24 @@ class PPOActorConfig(TrainEngineConfig):
     )
 
     # Advantage Estimation
+    use_direct_dis_loss: bool = field(
+        default=False,
+        metadata={
+            "help": "Use Direct DIS score-function loss instead of PPO; requires rollout logprobs and no extra KL/correction."
+        },
+    )
+    dis_epsilon_low: float = field(
+        default=0.3,
+        metadata={
+            "help": "DIS lower epsilon; retained ratio is strictly above 1-epsilon. Paper math: 0.3."
+        },
+    )
+    dis_epsilon_high: float = field(
+        default=5.0,
+        metadata={
+            "help": "DIS upper epsilon; retained ratio is strictly below 1+epsilon. Paper math: 5.0."
+        },
+    )
     discount: float = field(
         default=1.0, metadata={"help": "Discount factor for future rewards"}
     )
@@ -1745,18 +1763,19 @@ class PPOActorConfig(TrainEngineConfig):
             "per local trajectory."
         },
     )
-    critic_gae_lambda: float | None = field(
-        default=None,
-        metadata={
-            "help": "Optional static GAE lambda used only for critic returns. "
-            "None reuses gae_lambda-derived returns for backward compatibility."
-        },
-    )
     gae_lambda_kwargs: dict[str, Any] = field(
         default_factory=dict,
         metadata={
             "help": "Keyword arguments passed to a custom gae_lambda function. "
             "Ignored when gae_lambda is a float."
+        },
+    )
+    critic_gae_lambda: float | None = field(
+        default=None,
+        metadata={
+            "help": "Independent GAE lambda for critic targets, in [0, 1]. "
+            "None preserves targets computed with actor gae_lambda. "
+            "SAO uses 1.0; actor advantage normalization never changes targets."
         },
     )
     # NOTE: not annotated as Literal["token", "turn"] because the pinned
@@ -1872,6 +1891,8 @@ class PPOActorConfig(TrainEngineConfig):
         Returns:
             True if compute_logp() should be called, False to skip.
         """
+        if self.use_direct_dis_loss:
+            return False
         from areal.utils.constants import ProxLogpMethod
 
         method = ProxLogpMethod(self.prox_logp_method)
@@ -1881,6 +1902,30 @@ class PPOActorConfig(TrainEngineConfig):
 
     def __post_init__(self):
         """Validate PPO actor configuration."""
+        if self.use_direct_dis_loss:
+            if not self.backend.startswith("fsdp:"):
+                raise ValueError("Direct DIS currently supports FSDP only")
+            if (
+                not math.isfinite(self.dis_epsilon_low)
+                or not 0 <= self.dis_epsilon_low < 1
+                or not math.isfinite(self.dis_epsilon_high)
+                or self.dis_epsilon_high < 0
+            ):
+                raise ValueError("Invalid Direct DIS epsilon bounds")
+            if (
+                self.use_decoupled_loss
+                or self.recompute_logprob
+                or self.use_sapo_loss
+                or self.use_cispo_loss
+                or self.kl_ctl != 0
+                or self.rejection_sampling is not None
+                or self.m2_threshold is not None
+                or self.importance_sampling_level != "token"
+                or self.c_clip is not None
+            ):
+                raise ValueError(
+                    "Direct DIS requires rollout logprobs, token ratios, no PPO corrections/SAPO/CISPO/KL"
+                )
         if isinstance(self.gae_lambda, bool) or not isinstance(
             self.gae_lambda, int | float | str
         ):
@@ -2015,11 +2060,20 @@ class PPOActorConfig(TrainEngineConfig):
 class PPOCriticConfig(TrainEngineConfig):
     """Configuration for PPO critic model, a subclass of a TrainEngine."""
 
+    value_contract: dict[str, Any] | None = field(
+        default=None,
+        metadata={
+            "help": "Optional strict scalar checkpoint contract: expected identity, "
+            "protocol and require_pretrained. None preserves legacy PPO loading. "
+            "SAO must supply a complete consuming-run contract."
+        },
+    )
     ppo_n_minibatches: int = field(
         default=4, metadata={"help": "Number of minibatches for each PPO update"}
     )
-    eps_clip: float = field(
-        default=0.5, metadata={"help": "Clipping factor for value loss"}
+    eps_clip: float | None = field(
+        default=0.5,
+        metadata={"help": "Clipping factor for value loss; None selects plain MSE"},
     )
     mask_no_eos_with_zero: bool = field(
         default=False,
@@ -3435,6 +3489,14 @@ class PPOConfig(BaseExperimentConfig):
     actor: PPOActorConfig = field(default_factory=PPOActorConfig)
     ref: PPOActorConfig | None = field(default=None)
     critic: PPOCriticConfig | None = field(default=None)
+    critic_updates_before_actor: int = field(
+        default=0,
+        metadata={
+            "help": "Full critic updates on fixed targets before refreshing values "
+            "and updating actor once. 0 preserves the legacy actor-first order. "
+            "SAO uses 2; requires actor and critic ppo_n_minibatches=1."
+        },
+    )
     teacher: TeacherConfig | None = field(
         default=None,
         metadata={
@@ -3464,6 +3526,27 @@ class PPOConfig(BaseExperimentConfig):
 
     def __post_init__(self):
         """Validate the eval generation config."""
+        if (
+            isinstance(self.critic_updates_before_actor, bool)
+            or not isinstance(self.critic_updates_before_actor, int)
+            or self.critic_updates_before_actor < 0
+        ):
+            raise ValueError(
+                "critic_updates_before_actor must be a nonnegative integer"
+            )
+        if self.critic_updates_before_actor:
+            if self.critic is None:
+                raise ValueError("critic_updates_before_actor requires a critic")
+            if not self.actor.backend.startswith(
+                "fsdp:"
+            ) or not self.critic.backend.startswith("fsdp:"):
+                raise ValueError(
+                    "critic_updates_before_actor currently supports FSDP only"
+                )
+            if self.actor.ppo_n_minibatches != 1 or self.critic.ppo_n_minibatches != 1:
+                raise ValueError(
+                    "Critic-first updates require ppo_n_minibatches=1 for both roles"
+                )
         if self.eval_gconfig is None:
             self.eval_gconfig = self.gconfig.new()
         if isinstance(self.num_critic_only_steps, bool) or not isinstance(
