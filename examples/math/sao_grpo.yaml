@@ -2,7 +2,10 @@ defaults:
   - gsm8k_grpo
   - _self_
 
-experiment_name: sao-math-official-grpo
+# Hyperparameters: radixark/miles@366f614b8ba3904984d431291dd396be48ae1aed
+# examples/infra_features/fully_async/run_qwen3_5_4b_fully_async_eval.py
+# AReaL correction/backend and the existing Base/nonthinking evaluation stay local.
+experiment_name: sao-math-miles-grpo
 trial_name: ${oc.env:SAO_TRIAL_NAME}
 seed: 42
 total_train_epochs: 1
@@ -23,7 +26,7 @@ scheduler:
   type: local
 
 rollout:
-  backend: sglang:d4p1t1
+  backend: sglang:d3p1t1
   consumer_batch_size: ${train_dataset.batch_size}
   max_concurrent_rollouts: 128
   queue_size: 256
@@ -32,8 +35,25 @@ rollout:
   dump_to_file: true
   scheduling_spec: ${actor.scheduling_spec}
 
+# Separate scheduler role: owns the eighth GPU and evaluates pinned HF snapshots.
+evaluation_rollout:
+  backend: sglang:d1p1t1
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  tokenizer_path: ${tokenizer_path}
+  consumer_batch_size: ${valid_dataset.batch_size}
+  max_concurrent_rollouts: 32
+  queue_size: 64
+  max_head_offpolicyness: 1000000000000
+  enable_rollout_tracing: true
+  dump_to_file: true
+  scheduling_strategy:
+    type: separation
+  scheduling_spec: ${actor.scheduling_spec}
+
 gconfig:
-  n_samples: 4
+  n_samples: 8
   max_new_tokens: 8192
   max_tokens: 9216
   temperature: 1.0
@@ -58,14 +78,55 @@ actor:
   backend: fsdp:d4p1t1
   path: ${oc.env:SAO_MODEL_PATH}
   optimizer:
-    warmup_steps: 5  # User-approved fixed learning-rate warmup.
+    type: adam
+    lr: 1.0e-6
+    weight_decay: 0.1
+    beta1: 0.9
+    beta2: 0.98
+    eps: 1.0e-8
+    lr_scheduler_type: constant
+    gradient_clipping: 1.0
+    warmup_steps: 0
+    warmup_steps_proportion: 0.0
   init_from_scratch: false
   dtype: bfloat16
+  optimizer_dtype: float32
+  grad_reduce_dtype: float32
+  disable_dropout: true
   gradient_checkpointing: true
   attn_impl: flash_attention_2
   mb_spec:
     max_tokens_per_mb: 9216
     packing_algorithm: ffd
+  # Miles sampling/optimizer/group normalization; native AReaL loss reduction.
+  eps_clip: 0.2
+  eps_clip_higher: 0.28
+  c_clip: null
+  reward_scaling: 1.0
+  reward_bias: 0.0
+  kl_ctl: 0.0
+  discount: 1.0
+  gae_lambda: 1.0
+  ppo_n_minibatches: 1
+  importance_sampling_level: token
+  use_sapo_loss: false
+  use_cispo_loss: false
+  overlong_reward_penalty: false
+  mask_no_eos_with_zero: false
+  recompute_logprob: true
+  use_decoupled_loss: true
+  # Keep AReaL masking, not an additional Miles TIS factor.
+  rejection_sampling:
+    level: token
+    action: mask
+    metric: ratio
+    upper: 5.0
+    lower: null
+  reward_norm:
+    mean_level: group
+    std_level: group
+    group_size: ${gconfig.n_samples}
+  adv_norm: null  # Miles does not enable --normalize-advantages.
   temperature: ${gconfig.temperature}
   max_new_tokens: ${gconfig.max_new_tokens}
   scheduling_spec:
@@ -100,8 +161,9 @@ train_dataset:
   path: ${oc.env:SAO_DATA_PATH}
   split: train
   type: rl
-  batch_size: 128
+  batch_size: 32
   max_length: 1024
+  drop_last: true
   shuffle: true
   num_workers: 0
   scheduling_spec: null

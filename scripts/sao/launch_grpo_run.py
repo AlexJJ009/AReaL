@@ -86,11 +86,17 @@ def interrupted(signum, frame):
     raise SystemExit(128 + signum)
 
 
-def verify_steps(run, count, prompts):
+def verify_steps(run):
     evidence = run / "evidence"
     counts = read(evidence / "step-counts.json")
-    if counts["expected_optimizer_steps"] != count:
-        raise RuntimeError("Wrong epoch update count")
+    config = read(evidence / "resolved-config.json")
+    count = counts["expected_optimizer_steps"]
+    prompts = counts["train_prompts_per_step"]
+    n_samples = config["gconfig"]["n_samples"]
+    if counts["samples_per_prompt"] != n_samples:
+        raise RuntimeError("Sample count disagrees with resolved configuration")
+    optimizer = config["actor"]["optimizer"]
+    warmup = counts["resolved_warmup_steps"]
     if not (evidence / "epoch-finished.json").exists():
         raise RuntimeError("Missing epoch completion record")
     for n in range(1, count + 1):
@@ -100,9 +106,9 @@ def verify_steps(run, count, prompts):
         for row in rows:
             groups[row["audit_source_key"]].append(row["audit_sample_idx"])
         if len(groups) != prompts or any(
-            sorted(x) != [0, 1, 2, 3] for x in groups.values()
+            sorted(x) != list(range(n_samples)) for x in groups.values()
         ):
-            raise RuntimeError(f"Broken N4 prompt group at update {n}")
+            raise RuntimeError(f"Broken N{n_samples} prompt group at update {n}")
         if step["published_version"] != n:
             raise RuntimeError("Wrong published policy version")
         metrics = step["metrics"]
@@ -113,9 +119,8 @@ def verify_steps(run, count, prompts):
             raise RuntimeError("Non-finite training metric")
         if metrics["ppo_actor/update/update_successful"] != 1:
             raise RuntimeError("Actor update skipped")
-        if not math.isclose(
-            metrics["ppo_actor/update/lr"], 6e-6 * min((n - 1) / 5, 1), rel_tol=1e-5
-        ):
+        expected_lr = optimizer["lr"] * (min((n - 1) / warmup, 1) if warmup else 1)
+        if not math.isclose(metrics["ppo_actor/update/lr"], expected_lr, rel_tol=1e-5):
             raise RuntimeError("Warmup learning-rate mismatch")
         if (
             metrics.get("timeperf/recompute_logp", 0) <= 0
@@ -128,8 +133,22 @@ def verify_steps(run, count, prompts):
         "passed": True,
         "updates": count,
         "prompts_per_update": prompts,
-        "n_samples": 4,
+        "n_samples": n_samples,
     }
+
+
+def evaluation_versions(run):
+    """Read this run's evaluation schedule instead of the historical N4 schedule."""
+    evidence = run / "evidence"
+    config = read(evidence / "resolved-config.json")
+    count = read(evidence / "step-counts.json")["expected_optimizer_steps"]
+    interval = config["evaluator"]["freq_steps"]
+    versions = list(range(interval, count + 1, interval)) if interval else []
+    if config["evaluator"]["eval_before_train"]:
+        versions.insert(0, 0)
+    if config["evaluator"]["freq_epochs"]:
+        versions.append(count)
+    return tuple(sorted(set(versions)))
 
 
 def run_stage(name, dataset, preflight, expected_config_hash=None):
@@ -166,7 +185,6 @@ def run_stage(name, dataset, preflight, expected_config_hash=None):
             "saver.freq_steps=999999",
             "recover.freq_steps=999999",
         ]
-    snapshots = set()
     with (run / "controller.log").open("ab") as log:
         process = subprocess.Popen(
             command, cwd=REPO, env=environment, stdout=log, stderr=subprocess.STDOUT
@@ -192,33 +210,15 @@ def run_stage(name, dataset, preflight, expected_config_hash=None):
                 raise RuntimeError(
                     "Actual formal configuration differs from approved configuration"
                 )
-            if not preflight:
-                sys.path.insert(0, str(REPO))
-                from scripts.sao.snapshot_eval import snapshot_eval
-
-                evidence = run / "evidence"
-                # A completed training step follows baseline evaluation; evaluation
-                # at each save interval completes before its step record is written.
-                for version in [0, 20, 40, 60, 80, 100, 120, 134]:
-                    trigger = max(version, 1)
-                    if (
-                        version not in snapshots
-                        and (evidence / "steps" / f"{trigger}.json").exists()
-                    ):
-                        snapshot_eval(
-                            evidence,
-                            dataset,
-                            version,
-                            allowed_versions=(0, 20, 40, 60, 80, 100, 120, 134),
-                        )
-                        snapshots.add(version)
+            # The async evaluator publishes/finalizes its own snapshots.
+            # Do not re-read mutable eval JSONL while its next version is running.
             time.sleep(10)
         if process.returncode != 0:
             raise RuntimeError(
                 f"{name} trainer exited {process.returncode}; see {run}/controller.log"
             )
     cleanup()
-    report = verify_steps(run, 2 if preflight else 134, 4 if preflight else 128)
+    report = verify_steps(run)
     if preflight:
         records = [
             json.loads(line)
@@ -235,14 +235,19 @@ def run_stage(name, dataset, preflight, expected_config_hash=None):
     else:
         from scripts.sao.snapshot_eval import snapshot_eval
 
-        for version in [0, 20, 40, 60, 80, 100, 120, 134]:
-            if version not in snapshots:
-                snapshot_eval(
-                    run / "evidence",
-                    dataset,
-                    version,
-                    allowed_versions=(0, 20, 40, 60, 80, 100, 120, 134),
+        versions = evaluation_versions(run)
+        for version in versions:
+            completion = run / "evidence" / "async-eval" / f"{version}.json"
+            if not completion.exists() or read(completion).get("status") != "completed":
+                raise RuntimeError(
+                    f"Missing successful async evaluation for version {version}"
                 )
+            snapshot_eval(
+                run / "evidence",
+                dataset,
+                version,
+                allowed_versions=versions,
+            )
     (run / "acceptance.json").write_text(json.dumps(report, indent=2))
     return run
 
@@ -260,7 +265,9 @@ def main():
     with (ROOT / "started.json").open("x") as stream:
         json.dump({"pid": os.getpid(), "started_ns": time.time_ns()}, stream)
     probe = run_stage(
-        "grpo-native-preflight-20260921-v1", Path(manifest["preflight_dataset"]), True
+        f"{os.environ['SAO_TRIAL_NAME']}-preflight",
+        Path(manifest["preflight_dataset"]),
+        True,
     )
     (ROOT / "native-preflight-passed.json").write_text(
         json.dumps(

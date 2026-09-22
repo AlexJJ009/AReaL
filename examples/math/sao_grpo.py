@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Run the SAO math dataset through AReaL's native official GRPO recipe."""
+"""Run the SAO math dataset through Miles hyperparameters with AReaL's native async correction."""
 
 from __future__ import annotations
 
@@ -16,9 +16,9 @@ from pathlib import Path
 from datasets import load_from_disk
 from omegaconf import OmegaConf
 
-from areal import PPOTrainer
+from scripts.sao.async_eval import AsyncEvalGRPOTrainer, SaoGRPOConfig
+
 from areal.api.cli_args import (
-    GRPOConfig,
     load_expr_config,
     parse_cli_args,
     to_structured_cfg,
@@ -30,22 +30,54 @@ from areal.utils.lr_scheduler import get_num_warmup_steps
 logger = logging.getLogger("SaoGrpo")
 
 
-def validate_contract(config: GRPOConfig, *, preflight: bool = False) -> None:
+def validate_contract(config: SaoGRPOConfig, *, preflight: bool = False) -> None:
+    AsyncEvalGRPOTrainer._validate_save_eval_sync(config)
     expected = {
-        "actor.optimizer.lr": (config.actor.optimizer.lr, 6.0e-6),
-        "actor.optimizer.weight_decay": (config.actor.optimizer.weight_decay, 0.017),
-        "actor.optimizer.warmup_steps": (config.actor.optimizer.warmup_steps, 5),
+        "actor.backend": (config.actor.backend, "fsdp:d4p1t1"),
+        "rollout.backend": (config.rollout.backend, "sglang:d3p1t1"),
+        "evaluation_rollout.backend": (
+            config.evaluation_rollout.backend,
+            "sglang:d1p1t1",
+        ),
+        "scheduler.type": (config.scheduler.type, "local"),
+        "saver.mode": (config.saver.mode, "sync"),
+        "cluster.n_nodes": (config.cluster.n_nodes, 1),
+        "cluster.n_gpus_per_node": (config.cluster.n_gpus_per_node, 8),
+        "actor.optimizer.type": (config.actor.optimizer.type, "adam"),
+        "actor.optimizer.beta1": (config.actor.optimizer.beta1, 0.9),
+        "actor.optimizer.beta2": (config.actor.optimizer.beta2, 0.98),
+        "actor.optimizer.eps": (config.actor.optimizer.eps, 1e-8),
+        "actor.optimizer.gradient_clipping": (
+            config.actor.optimizer.gradient_clipping,
+            1.0,
+        ),
+        "actor.eps_clip_higher": (config.actor.eps_clip_higher, 0.28),
+        "actor.c_clip": (config.actor.c_clip, None),
+        "actor.dtype": (config.actor.dtype, "bfloat16"),
+        "actor.optimizer_dtype": (config.actor.optimizer_dtype, "float32"),
+        "actor.discount": (config.actor.discount, 1.0),
+        "actor.gae_lambda": (config.actor.gae_lambda, 1.0),
+        "actor.importance_sampling_level": (
+            config.actor.importance_sampling_level,
+            "token",
+        ),
+        "rollout.max_head_offpolicyness": (config.rollout.max_head_offpolicyness, 2),
+        "gconfig.temperature": (config.gconfig.temperature, 1.0),
+        "gconfig.top_p": (config.gconfig.top_p, 1.0),
+        "actor.optimizer.lr": (config.actor.optimizer.lr, 1.0e-6),
+        "actor.optimizer.weight_decay": (config.actor.optimizer.weight_decay, 0.1),
+        "actor.optimizer.warmup_steps": (config.actor.optimizer.warmup_steps, 0),
         "actor.optimizer.warmup_steps_proportion": (
             config.actor.optimizer.warmup_steps_proportion,
-            0.001,
+            0.0,
         ),
         "actor.optimizer.lr_scheduler_type": (
             config.actor.optimizer.lr_scheduler_type,
             "constant",
         ),
-        "actor.eps_clip": (config.actor.eps_clip, 0.4),
-        "actor.reward_scaling": (config.actor.reward_scaling, 10.0),
-        "actor.reward_bias": (config.actor.reward_bias, -0.5),
+        "actor.eps_clip": (config.actor.eps_clip, 0.2),
+        "actor.reward_scaling": (config.actor.reward_scaling, 1.0),
+        "actor.reward_bias": (config.actor.reward_bias, 0.0),
         "actor.use_decoupled_loss": (config.actor.use_decoupled_loss, True),
         "actor.recompute_logprob": (config.actor.recompute_logprob, True),
         "actor.kl_ctl": (config.actor.kl_ctl, 0.0),
@@ -64,11 +96,12 @@ def validate_contract(config: GRPOConfig, *, preflight: bool = False) -> None:
     if not preflight:
         expected.update(
             {
+                "train_dataset.batch_size": (config.train_dataset.batch_size, 32),
                 "total_train_epochs": (config.total_train_epochs, 1),
                 "total_train_steps": (config.total_train_steps, None),
                 "gconfig.max_new_tokens": (config.gconfig.max_new_tokens, 8192),
                 "gconfig.max_tokens": (config.gconfig.max_tokens, 9216),
-                "gconfig.n_samples": (config.gconfig.n_samples, 4),
+                "gconfig.n_samples": (config.gconfig.n_samples, 8),
                 "eval_gconfig.n_samples": (config.eval_gconfig.n_samples, 4),
                 "saver.freq_steps": (config.saver.freq_steps, 20),
                 "evaluator.freq_steps": (config.evaluator.freq_steps, 20),
@@ -93,6 +126,13 @@ def validate_contract(config: GRPOConfig, *, preflight: bool = False) -> None:
         raise ValueError("actor.path must resolve from SAO_MODEL_PATH")
     if config.train_dataset.path != os.environ.get("SAO_DATA_PATH"):
         raise ValueError("train_dataset.path must resolve from SAO_DATA_PATH")
+    for role in ("actor", "rollout"):
+        if getattr(config, role).scheduling_strategy.type != "separation":
+            raise ValueError(f"{role} must use separate GPU workers")
+    if config.evaluation_rollout.scheduling_strategy.type != "separation":
+        raise ValueError("evaluation_rollout must use separate GPU workers")
+    if config.evaluation_rollout.scheduling_spec[0].gpu != 1:
+        raise ValueError("evaluation_rollout must reserve one GPU")
     rejection = config.actor.rejection_sampling
     if rejection is None or (
         rejection.level,
@@ -109,12 +149,8 @@ def validate_contract(config: GRPOConfig, *, preflight: bool = False) -> None:
         reward_norm.group_size,
     ) != ("group", "group", config.gconfig.n_samples):
         raise ValueError("Expected group reward_norm with group_size == n_samples")
-    adv_norm = config.actor.adv_norm
-    if adv_norm is None or (adv_norm.mean_level, adv_norm.std_level) != (
-        "batch",
-        "batch",
-    ):
-        raise ValueError("Expected batch-level advantage normalization")
+    if config.actor.adv_norm is not None:
+        raise ValueError("Miles recipe disables extra batch-level adv_norm")
 
 
 def _check_actor_step_metrics(
@@ -155,7 +191,7 @@ def _check_actor_step_metrics(
 
 
 def write_step_count_evidence(
-    config: GRPOConfig,
+    config: SaoGRPOConfig,
     train_dataset,
     valid_dataset,
     evidence: Path,
@@ -194,8 +230,7 @@ def write_step_count_evidence(
         ),
         "resolved_warmup_steps": actual_warmup_steps,
         "warmup_note": (
-            "Official GSM8K GRPO keeps warmup_steps_proportion=0.001. "
-            "User-approved warmup_steps=5 takes precedence over that proportion."
+            "Miles constant-LR recipe: no warmup; the first update uses the full LR."
         ),
     }
     (evidence / "step-counts.json").write_text(
@@ -205,8 +240,8 @@ def write_step_count_evidence(
         raise ValueError(
             f"Expected all 700 evaluation problems, got {len(valid_dataset)}"
         )
-    if actual_warmup_steps != 5:
-        raise ValueError("Expected fixed warmup to resolve to 5 optimizer updates")
+    if actual_warmup_steps != 0:
+        raise ValueError("Expected Miles recipe with zero warmup")
     return payload
 
 
@@ -262,6 +297,7 @@ def install_audit_hooks(trainer, evidence: Path) -> None:
     original_commit = trainer.stats_logger.commit
 
     def commit(epoch, step, global_step, data):
+        trainer.check_evaluation()
         completed_step = global_step + 1
         actor_update = _check_actor_step_metrics(
             data, completed_step, completed_step - start_step
@@ -301,11 +337,11 @@ def main(args: list[str]) -> None:
     args = [x for x in args if x != "--check-config"]
     if config_only:
         cfg, _ = parse_cli_args(args)
-        cfg = to_structured_cfg(cfg, GRPOConfig)
+        cfg = to_structured_cfg(cfg, SaoGRPOConfig)
         config = OmegaConf.to_object(cfg)
-        assert isinstance(config, GRPOConfig)
+        assert isinstance(config, SaoGRPOConfig)
     else:
-        config, _ = load_expr_config(args, GRPOConfig)
+        config, _ = load_expr_config(args, SaoGRPOConfig)
     preflight = os.environ.get("SAO_PREFLIGHT", "0") == "1"
     validate_contract(config, preflight=preflight)
     if config_only:
@@ -337,7 +373,7 @@ def main(args: list[str]) -> None:
     }
     eval_kwargs = {**workflow_kwargs, "gconfig": config.eval_gconfig}
 
-    with PPOTrainer(
+    with AsyncEvalGRPOTrainer(
         config, train_dataset=train_dataset, valid_dataset=valid_dataset
     ) as trainer:
         trainer.rollout.prepare_batch = functools.partial(
