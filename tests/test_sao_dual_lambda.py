@@ -76,7 +76,9 @@ def rollout(device="cpu"):
     }
 
 
-def make_actor(lam, *, critic_lam=1.0, normalize=False, device="cpu"):
+def make_actor(
+    lam, *, critic_lam=1.0, normalize=False, device="cpu", lambda_kwargs=None
+):
     # Exercise structured config -> override -> dataclass -> production consumer.
     cfg = OmegaConf.structured(PPOActorConfig())
     cfg = OmegaConf.merge(
@@ -86,6 +88,7 @@ def make_actor(lam, *, critic_lam=1.0, normalize=False, device="cpu"):
             "trial_name": "dual-lambda",
             "backend": "fsdp:d1",
             "gae_lambda": lam,
+            "gae_lambda_kwargs": lambda_kwargs or {},
             "critic_gae_lambda": critic_lam,
             "discount": 1.0,
             "kl_ctl": 0.0,
@@ -152,8 +155,8 @@ def test_dual_lambda_production_updates_consume_detached_target(device):
         critic = PPOCritic(PPOCriticConfig(ppo_n_minibatches=1), critic_engine)
         actor_before = actor.engine.model.weight.detach().clone()
         critic_before = critic_engine.model.weight.detach().clone()
-        actor._ppo_update(copy.deepcopy(data))
-        critic._ppo_update(copy.deepcopy(data))
+        actor.ppo_update([copy.deepcopy(data)])
+        critic.ppo_update([copy.deepcopy(data)])
         assert not torch.equal(actor.engine.model.weight, actor_before)
         assert not torch.equal(critic_engine.model.weight, critic_before)
         torch.testing.assert_close(
