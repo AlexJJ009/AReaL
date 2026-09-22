@@ -1194,9 +1194,11 @@ async def responses(
     )
 
 
-def _anthropic_tool_error_ids(anthropic_request: dict[str, Any]) -> set[str]:
-    """Return IDs of Anthropic tool results explicitly marked as errors."""
-    failed_ids: set[str] = set()
+def _anthropic_tool_result_statuses(
+    anthropic_request: dict[str, Any],
+) -> dict[str, bool]:
+    """Preserve explicit success and error states without inferring missing flags."""
+    statuses: dict[str, bool] = {}
     for message in anthropic_request.get("messages") or []:
         content = message.get("content") if isinstance(message, Mapping) else None
         if not isinstance(content, list):
@@ -1205,11 +1207,11 @@ def _anthropic_tool_error_ids(anthropic_request: dict[str, Any]) -> set[str]:
             if (
                 isinstance(block, Mapping)
                 and block.get("type") == "tool_result"
-                and block.get("is_error")
+                and isinstance(block.get("is_error"), bool)
                 and block.get("tool_use_id")
             ):
-                failed_ids.add(str(block["tool_use_id"]))
-    return failed_ids
+                statuses[str(block["tool_use_id"])] = block["is_error"]
+    return statuses
 
 
 def _translate_anthropic_to_openai_request(anthropic_request: dict[str, Any]) -> dict:
@@ -1220,15 +1222,15 @@ def _translate_anthropic_to_openai_request(anthropic_request: dict[str, Any]) ->
         raise ValueError("Failed to translate request")
     openai_request = dict(openai_request)
 
-    failed_ids = _anthropic_tool_error_ids(anthropic_request)
-    if failed_ids:
+    statuses = _anthropic_tool_result_statuses(anthropic_request)
+    if statuses:
         for message in openai_request.get("messages") or []:
             if (
                 isinstance(message, dict)
                 and message.get("role") == "tool"
-                and message.get("tool_call_id") in failed_ids
+                and message.get("tool_call_id") in statuses
             ):
-                message["is_error"] = True
+                message["is_error"] = statuses[message["tool_call_id"]]
 
     return openai_request
 
@@ -1476,10 +1478,26 @@ async def export_trajectories(
                 is_eval=request.is_eval,
             )
         except Exception:
-            logger.exception(
-                "PRM runner failed for session %s; rejecting trajectory", session_id
+            if _prm_runner.config.error_policy == "keep_original":
+                logger.exception(
+                    "PRM runner failed for session %s; keeping pre-scoring rewards",
+                    session_id,
+                )
+                stats_tracker.get(
+                    "eval-rollout" if request.is_eval else "rollout"
+                ).scalar(prm_fallback=1.0)
+            else:
+                logger.exception(
+                    "PRM runner failed for session %s; rejecting trajectory", session_id
+                )
+                interactions = {}
+                stats_tracker.get(
+                    "eval-rollout" if request.is_eval else "rollout"
+                ).scalar(prm_fallback=0.0)
+        else:
+            stats_tracker.get("eval-rollout" if request.is_eval else "rollout").scalar(
+                prm_fallback=0.0
             )
-            interactions = {}
 
     # Remove session from cache and clean up API key mapping
     with _lock:

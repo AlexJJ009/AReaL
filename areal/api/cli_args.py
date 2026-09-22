@@ -2590,6 +2590,18 @@ class PRMConfig:
         metadata={"help": "Process-reward scorers whose weighted outputs are summed."},
     )
 
+    error_policy: str = field(
+        default="reject",
+        metadata={
+            "help": "On v1 proxy PRM errors: reject the trajectory or keep pre-scoring rewards.",
+            "choices": ["reject", "keep_original"],
+        },
+    )
+
+    def __post_init__(self) -> None:
+        if self.error_policy not in {"reject", "keep_original"}:
+            raise ValueError("PRM error_policy must be reject or keep_original")
+
 
 @dataclass
 class AgentConfig:

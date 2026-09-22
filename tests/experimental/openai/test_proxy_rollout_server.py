@@ -1216,3 +1216,77 @@ class TestExportTrajectories:
             )
             assert resp_export.status_code == 200
             assert "interactions" in resp_export.json()
+
+
+@pytest.mark.parametrize("status", [True, False, None, "false", 0])
+def test_anthropic_translation_preserves_only_explicit_boolean_status(
+    monkeypatch, status
+):
+    request = {
+        "messages": [
+            {
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "is_error": status}
+                ]
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        srv,
+        "translate_anthropic_request",
+        lambda _: {
+            "messages": [{"role": "tool", "tool_call_id": "t1", "content": "result"}]
+        },
+    )
+    translated = srv._translate_anthropic_to_openai_request(request)["messages"][0]
+    assert translated["content"] == "result"
+    if isinstance(status, bool):
+        assert translated["is_error"] is status
+    else:
+        assert "is_error" not in translated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy", ["reject", "keep_original"])
+async def test_prm_export_failure_respects_policy_and_cleans_session(
+    monkeypatch, policy
+):
+    from unittest.mock import AsyncMock
+
+    interaction = _prm_interaction(
+        "root", [1], [2], [{"role": "user", "content": "task"}]
+    )
+    interaction.reward = 1.0
+    interaction.rollout_reward = 1.0
+    original = {"root": interaction}
+    session = SimpleNamespace(
+        wait_for_finish=AsyncMock(), export_interactions=lambda **_: original
+    )
+    srv._session_cache["fallback-test"] = session
+    srv._api_key_to_session["fallback-key"] = "fallback-test"
+    srv._session_to_api_key["fallback-test"] = "fallback-key"
+    monkeypatch.setattr(
+        srv, "_prm_runner", SimpleNamespace(config=PRMConfig(error_policy=policy))
+    )
+    monkeypatch.setattr(
+        srv,
+        "_score_prm_branches",
+        AsyncMock(side_effect=RuntimeError("scorer unavailable")),
+    )
+    result = await srv.export_trajectories(
+        srv.ExportTrajectoriesRequest(session_id="fallback-test")
+    )
+    exported = deserialize_interactions(result.interactions)
+    if policy == "keep_original":
+        assert exported["root"].reward == 1.0
+        assert exported["root"].rollout_reward == 1.0
+    else:
+        assert exported == {}
+    assert interaction.reward == 1.0
+    assert "fallback-test" not in srv._session_cache
+    assert "fallback-key" not in srv._api_key_to_session
+
+
+def test_prm_invalid_error_policy_rejected():
+    with pytest.raises(ValueError, match="error_policy"):
+        PRMConfig(error_policy="silently_zero")
