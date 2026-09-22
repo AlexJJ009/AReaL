@@ -3427,6 +3427,14 @@ class PPOConfig(BaseExperimentConfig):
     actor: PPOActorConfig = field(default_factory=PPOActorConfig)
     ref: PPOActorConfig | None = field(default=None)
     critic: PPOCriticConfig | None = field(default=None)
+    critic_updates_before_actor: int = field(
+        default=0,
+        metadata={
+            "help": "Full critic updates on fixed targets before refreshing values "
+            "and updating actor once. 0 preserves the legacy actor-first order. "
+            "SAO uses 2; requires actor and critic ppo_n_minibatches=1."
+        },
+    )
     teacher: TeacherConfig | None = field(
         default=None,
         metadata={
@@ -3449,6 +3457,27 @@ class PPOConfig(BaseExperimentConfig):
 
     def __post_init__(self):
         """Validate the eval generation config."""
+        if (
+            isinstance(self.critic_updates_before_actor, bool)
+            or not isinstance(self.critic_updates_before_actor, int)
+            or self.critic_updates_before_actor < 0
+        ):
+            raise ValueError(
+                "critic_updates_before_actor must be a nonnegative integer"
+            )
+        if self.critic_updates_before_actor:
+            if self.critic is None:
+                raise ValueError("critic_updates_before_actor requires a critic")
+            if not self.actor.backend.startswith(
+                "fsdp:"
+            ) or not self.critic.backend.startswith("fsdp:"):
+                raise ValueError(
+                    "critic_updates_before_actor currently supports FSDP only"
+                )
+            if self.actor.ppo_n_minibatches != 1 or self.critic.ppo_n_minibatches != 1:
+                raise ValueError(
+                    "Critic-first updates require ppo_n_minibatches=1 for both roles"
+                )
         if self.eval_gconfig is None:
             self.eval_gconfig = self.gconfig.new()
         if self.rollout.deterministic_sampling:

@@ -21,6 +21,7 @@ from areal.trainer.ppo.trajectory import (
     action_token_rewards,
     action_trajectory_metadata,
 )
+from areal.trainer.ppo.update import summarize_updates
 from areal.utils import logging, stats_tracker
 from areal.utils.constants import (
     PROX_APPROX_METHOD_LINEAR,
@@ -403,10 +404,10 @@ class PPOActor:
 
     @trace_perf("ppo_actor.ppo_update", category="compute")
     @stats_tracker.scope_func_wrapper("ppo_actor")
-    def ppo_update(self, data: list[dict[str, Any]]) -> None:
-        batched_call(self._ppo_update, data, unpack=False)
+    def ppo_update(self, data: list[dict[str, Any]]) -> dict[str, float]:
+        return batched_call(self._ppo_update, data, unpack=False)
 
-    def _ppo_update(self, data: dict[str, Any]) -> None:
+    def _ppo_update(self, data: dict[str, Any]) -> dict[str, float]:
         attn_mask = data["attention_mask"]
         loss_mask = data["loss_mask"]
         reward_score = data["rewards"]
@@ -496,6 +497,7 @@ class PPOActor:
             mb_spec=MicroBatchSpec(n_mbs=self.config.ppo_n_minibatches),
         )
 
+        update_stats = []
         with stats_tracker.scope("update"):
             # Get current version for proximal approximation metrics
             current_version = self.engine.get_version()
@@ -522,6 +524,8 @@ class PPOActor:
                     loss_weight_fn=lambda x: x["loss_mask"].count_nonzero(),
                 )
                 stats_tracker.scalar(**train_stat)
+                update_stats.append(train_stat)
+        return summarize_updates(update_stats)
 
 
 class PPOActorController(TrainController):
@@ -535,8 +539,8 @@ class PPOActorController(TrainController):
             "compute_advantages", *args, rpc_meta={"broadcast": True}, **kwargs
         )
 
-    def ppo_update(self, *args, **kwargs) -> None:
-        self._custom_function_call(
+    def ppo_update(self, *args, **kwargs):
+        return self._custom_function_call(
             "ppo_update", *args, rpc_meta={"broadcast": True}, **kwargs
         )
 
@@ -556,12 +560,12 @@ class PPOActorControllerV2(GatewayTrainController):
         }
         return self._gateway_post_result("/ppo/actor/compute_advantages", payload)
 
-    def ppo_update(self, *args, **kwargs) -> None:
+    def ppo_update(self, *args, **kwargs):
         payload = {
             "args": serialize_value(list(args)),
             "kwargs": serialize_value(kwargs),
         }
-        self._gateway_post("/ppo/actor/update", payload)
+        return self._gateway_post_result("/ppo/actor/update", payload)
 
 
 def grpo_loss_fn(

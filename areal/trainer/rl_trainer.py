@@ -313,7 +313,15 @@ class PPOTrainer:
         engine_init_kwargs = {"addr": None, "ft_spec": ft_spec}
         self.actor.initialize(**engine_init_kwargs, role="actor")
         if self.critic is not None:
-            self.critic.initialize(**engine_init_kwargs, role="critic")
+            from areal.trainer.ppo.update import critic_optimizer_spec
+
+            self.critic.initialize(
+                addr=None,
+                ft_spec=critic_optimizer_spec(
+                    ft_spec, config.critic_updates_before_actor
+                ),
+                role="critic",
+            )
         if self.ref is not None:
             self.ref.initialize(**engine_init_kwargs, role="ref")
 
@@ -823,8 +831,22 @@ class PPOTrainer:
                     args={"global_step": global_step},
                 ),
             ):
-                self.actor.ppo_update(adv_batch)
-                self.actor.step_lr_scheduler()
+                if config.critic_updates_before_actor:
+                    from areal.trainer.ppo.update import update_critic_before_actor
+
+                    update_report = update_critic_before_actor(
+                        self.actor,
+                        self.critic,
+                        rollout_batch,
+                        adv_batch,
+                        config.critic_updates_before_actor,
+                    )
+                    stats_tracker.scalar(
+                        critic_updates_before_actor=float(len(update_report["critic"]))
+                    )
+                else:
+                    self.actor.ppo_update(adv_batch)
+                    self.actor.step_lr_scheduler()
                 self.actor.get_device_stats().log("ppo update")
 
             if (
@@ -839,7 +861,7 @@ class PPOTrainer:
                 self.actor.stop_memory_profile(snapshot_dir)
                 logger.info(f"Memory snapshots saved to {snapshot_dir}")
 
-            if self.critic is not None:
+            if self.critic is not None and not config.critic_updates_before_actor:
                 with (
                     stats_tracker.record_timing("critic_train_step"),
                     perf_tracer.trace_scope(
@@ -853,6 +875,9 @@ class PPOTrainer:
                     self.critic.get_device_stats().log("ppo critic update")
                 if self._should_offload_critic:
                     self._offload_model(self.critic, role="critic")
+
+            if config.critic_updates_before_actor and self._should_offload_critic:
+                self._offload_model(self.critic, role="critic")
 
             # Save BEFORE update_weights. In AWEX colocate mode the
             # transfer ends with actor weights offloaded, so saving afterwards

@@ -10,6 +10,7 @@ from areal.api.cli_args import MicroBatchSpec, PPOCriticConfig
 from areal.infra import TrainController
 from areal.infra.rpc.serialization import serialize_value
 from areal.trainer.ppo.stats import infer_token_denominator
+from areal.trainer.ppo.update import summarize_updates
 from areal.utils import stats_tracker
 from areal.utils.data import (
     batched_call,
@@ -41,10 +42,10 @@ class PPOCritic:
 
     @trace_perf("ppo_critic.ppo_update", category="compute")
     @stats_tracker.scope_func_wrapper("ppo_critic")
-    def ppo_update(self, data: list[dict[str, Any]]) -> None:
-        batched_call(self._ppo_update, data, unpack=False)
+    def ppo_update(self, data: list[dict[str, Any]]) -> dict[str, float]:
+        return batched_call(self._ppo_update, data, unpack=False)
 
-    def _ppo_update(self, data: dict[str, Any]) -> None:
+    def _ppo_update(self, data: dict[str, Any]) -> dict[str, float]:
         ########## Logging code starts ##########
         scalars = dict(
             mask_no_eos_with_zero=self.config.mask_no_eos_with_zero,
@@ -62,6 +63,7 @@ class PPOCritic:
             data,
             mb_spec=MicroBatchSpec(n_mbs=self.config.ppo_n_minibatches),
         )
+        update_stats = []
         for mb in mb_inputs.mbs:
             train_stat = self.engine.train_batch(
                 mb,
@@ -72,6 +74,8 @@ class PPOCritic:
                 loss_weight_fn=lambda x: x["loss_mask"].count_nonzero(),
             )
             stats_tracker.scalar(**train_stat)
+            update_stats.append(train_stat)
+        return summarize_updates(update_stats)
 
 
 class PPOCriticController(TrainController):
@@ -81,7 +85,7 @@ class PPOCriticController(TrainController):
         )
 
     def ppo_update(self, *args, **kwargs):
-        self._custom_function_call(
+        return self._custom_function_call(
             "ppo_update", *args, rpc_meta={"broadcast": True}, **kwargs
         )
 
@@ -94,12 +98,12 @@ class PPOCriticControllerV2(GatewayTrainController):
         }
         return self._gateway_post_result("/ppo/critic/compute_values", payload)
 
-    def ppo_update(self, *args, **kwargs) -> None:
+    def ppo_update(self, *args, **kwargs):
         payload = {
             "args": serialize_value(list(args)),
             "kwargs": serialize_value(kwargs),
         }
-        self._gateway_post("/ppo/critic/update", payload)
+        return self._gateway_post_result("/ppo/critic/update", payload)
 
 
 def ppo_loss_fn(

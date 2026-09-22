@@ -33,6 +33,12 @@ class TinyTrainEngine:
     def train(self):
         self.model.train()
 
+    def eval(self):
+        self.model.eval()
+
+    def forward(self, input_, aggregate_fn):
+        return aggregate_fn([self.model(input_["input_ids"])])
+
     def get_version(self):
         return 0
 
@@ -59,7 +65,11 @@ class TinyTrainEngine:
         assert self.model.weight.grad.abs().sum() > 0
         self.optimizer.step()
         self.losses.append(loss.detach().clone())
-        return {}
+        return {
+            "update_successful": 1.0,
+            "grad_norm": float(self.model.weight.grad.norm()),
+            "lr": self.optimizer.param_groups[0]["lr"],
+        }
 
 
 def rollout(device="cpu"):

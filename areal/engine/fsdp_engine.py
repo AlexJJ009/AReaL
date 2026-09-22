@@ -2271,8 +2271,8 @@ class FSDPPPOActor(FSDPEngine):
     def compute_advantages(self, *args, **kwargs) -> list[dict[str, Any]]:
         return self.actor.compute_advantages(*args, **kwargs)
 
-    def ppo_update(self, *args, **kwargs) -> None:
-        self.actor.ppo_update(*args, **kwargs)
+    def ppo_update(self, *args, **kwargs):
+        return self.actor.ppo_update(*args, **kwargs)
 
     def sft_train_batch(self, data: list) -> dict:
         import torch
@@ -2351,8 +2351,8 @@ class FSDPPPOCritic(FSDPEngine):
     def compute_values(self, *args, **kwargs) -> torch.Tensor:
         return self.critic.compute_values(*args, **kwargs)
 
-    def ppo_update(self, *args, **kwargs) -> None:
-        self.critic.ppo_update(*args, **kwargs)
+    def ppo_update(self, *args, **kwargs):
+        return self.critic.ppo_update(*args, **kwargs)
 
     @classmethod
     def as_controller(cls, config: PPOCriticConfig, scheduler: Scheduler):
