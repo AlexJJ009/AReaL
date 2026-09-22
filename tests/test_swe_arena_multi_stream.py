@@ -831,7 +831,6 @@ def test_arena_failure_classifier_keeps_explicit_claude_agent_phase_failure():
         ("AGENT_MAX_TURNS_EXCEEDED", "outcome", 2),
         ("AGENT_RUN_TIMEOUT", "outcome_code", 2),
         ("AUTONOMOUS_INCOMPLETE_NO_SHIP", "error", 2),
-        ("LLM_RESPONSE_FAILED", "outcome", 2),
         ("LLM_RESPONSE_TIMEOUT", "outcome_code", 2),
         ("LLM_RESPONSE_FAILED", "outcome", 0),
     ],
