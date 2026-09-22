@@ -87,3 +87,19 @@ parameters, frozen state, and ownership. Schema 1 remains text-only.
 A reduced random Qwen4Exp with actual image processing and visual forward passed
 chunk/full loss and gradient comparisons at CP1 and CP2 on 2026-09-21. This is a
 numerical qualification, not evidence of full-model RL quality or benchmark parity.
+
+### Diagnostic batch snapshots
+
+For a small diagnostic run, set `QWEN_BATCH_SNAPSHOT_DIR` to a new, empty directory on
+shared storage. The controller saves the output of each `prepare_batch` call, and the
+input and output of each `compute_advantages` call as CPU `.pt` files. Snapshots retain
+all batch fields, including image tensors, masks, log probabilities, and version fields.
+Filenames count calls, not optimizer steps. No credentials from the experiment
+configuration are copied into snapshot metadata.
+
+This opt-in path adds CPU memory, remote tensor reads, and storage overhead. Publication
+is atomic and refuses to overwrite existing files; a save failure stops the diagnostic
+run. Load snapshots with `torch.load(path, map_location="cpu", weights_only=True)`.
+These files support input replay investigations, but do not contain model/optimizer
+state or RNG state and do not by themselves reproduce an optimizer step. Repeated
+training on an old snapshot is not an on-policy RL experiment.

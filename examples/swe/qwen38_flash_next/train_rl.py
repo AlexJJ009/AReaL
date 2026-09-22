@@ -4,6 +4,7 @@
 import json
 import os
 import sys
+from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
 
@@ -223,12 +224,31 @@ def main(profile, args):
             train_dataset=dataset,
             valid_dataset=dataset if evaluation_only else None,
         ) as trainer:
-            trainer.train(
-                workflow=workflow,
-                workflow_kwargs=kwargs,
-                eval_workflow=workflow if evaluation_only else None,
-                eval_workflow_kwargs=kwargs if evaluation_only else None,
-            )
+            snapshot_dir = os.environ.get("QWEN_BATCH_SNAPSHOT_DIR")
+            capture = nullcontext()
+            if snapshot_dir and not evaluation_only:
+                from examples.swe.qwen38_flash_next.batch_snapshot import (
+                    capture_training_batches,
+                )
+
+                capture = capture_training_batches(
+                    trainer.actor,
+                    Path(snapshot_dir),
+                    {
+                        "experiment": config.experiment_name,
+                        "trial": config.trial_name,
+                        "model_path": config.tokenizer_path,
+                        "allocation_mode": config.allocation_mode,
+                        "n_samples": config.gconfig.n_samples,
+                    },
+                )
+            with capture:
+                trainer.train(
+                    workflow=workflow,
+                    workflow_kwargs=kwargs,
+                    eval_workflow=workflow if evaluation_only else None,
+                    eval_workflow_kwargs=kwargs if evaluation_only else None,
+                )
     finally:
         RemoteSGLangEngine.as_controller = staticmethod(factory)
 
