@@ -1,0 +1,175 @@
+# Paper mechanisms and approved engineering defaults; resource layout is an example.
+# Base critic requires --allow-base-critic. A pretrained critic requires value_contract.
+experiment_name: gsm8k-sao
+trial_name: trial0
+seed: 1
+enable_offload: false
+total_train_epochs: 1
+tokenizer_path: ${actor.path}
+cluster:
+  n_nodes: 1
+  n_gpus_per_node: 8
+  fileroot: ${oc.env:SAO_RUN_ROOT}
+  name_resolve:
+    type: nfs
+    nfs_record_root: ${cluster.fileroot}/name-resolve
+scheduler:
+  type: local
+rollout:
+  backend: sglang:d4p1t1
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  max_concurrent_rollouts: 128
+  queue_size: null
+  consumer_batch_size: ${train_dataset.batch_size}
+  max_head_offpolicyness: 2
+  enable_rollout_tracing: false
+  scheduling_spec: ${actor.scheduling_spec}
+  fileroot: ${cluster.fileroot}
+  tokenizer_path: ${tokenizer_path}
+  dump_to_file: false
+gconfig:
+  n_samples: 1
+  min_new_tokens: 0
+  max_new_tokens: 1024
+  max_tokens: 2048
+  greedy: false
+  temperature: 1.0
+actor:
+  backend: fsdp:d4p1t1
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  path: ${oc.env:SAO_MODEL_PATH}
+  init_from_scratch: false
+  disable_dropout: true
+  gradient_checkpointing: true
+  dtype: bfloat16
+  mb_spec:
+    n_mbs: 2
+    max_tokens_per_mb: 2048
+  optimizer:
+    type: adam
+    lr: 1.0e-06
+    weight_decay: 0.0
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1e-8
+    lr_scheduler_type: constant
+    gradient_clipping: 1.0
+    warmup_steps_proportion: 0.0
+    warmup_steps: 0
+  temperature: ${gconfig.temperature}
+  reward_scaling: 1.0
+  reward_bias: 0.0
+  kl_ctl: 0.0
+  ppo_n_minibatches: 1
+  recompute_logprob: false
+  use_decoupled_loss: false
+  rejection_sampling: null
+  reward_norm: null
+  adv_norm: null
+  weight_update_mode: xccl
+  max_new_tokens: ${gconfig.max_new_tokens}
+  scheduling_spec:
+  - task_type: worker
+    port_count: 2
+    gpu: 1
+    mem: 32
+    cmd: python3 -m areal.infra.rpc.rpc_server
+    env_vars: {}
+  discount: 1.0
+  gae_lambda: areal.trainer.ppo.lambda_fn.sao_length_adaptive_gae
+  gae_lambda_kwargs:
+    alpha: 1.5
+  critic_gae_lambda: 1.0
+  use_direct_dis_loss: true
+  dis_epsilon_low: 0.3
+  dis_epsilon_high: 5.0
+  attn_impl: flash_attention_2
+  optimizer_dtype: float32
+ref: null
+sglang:
+  model_path: ${actor.path}
+  random_seed: ${seed}
+  skip_tokenizer_init: true
+  dtype: ${actor.dtype}
+  max_running_requests: null
+  context_length: 2048
+  mem_fraction_static: 0.8
+train_dataset:
+  batch_size: 128
+  shuffle: true
+  pin_memory: true
+  num_workers: 0
+  path: openai/gsm8k
+  type: rl
+  max_length: 1024
+valid_dataset: null
+saver:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  freq_epochs: 1
+  freq_steps: null
+  freq_secs: null
+recover:
+  mode: disabled
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  freq_epochs: 1
+  freq_steps: null
+  freq_secs: 3600
+evaluator:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  freq_epochs: 1
+  freq_steps: null
+  freq_secs: null
+stats_logger:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  wandb:
+    mode: disabled
+perf_tracer:
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  enabled: false
+  session_tracer:
+    enabled: false
+critic_updates_before_actor: 2
+critic:
+  backend: ${actor.backend}
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  path: ${oc.env:SAO_VALUE_PATH,${actor.path}}
+  is_critic: true
+  value_contract: null
+  dtype: ${actor.dtype}
+  optimizer_dtype: ${actor.optimizer_dtype}
+  attn_impl: ${actor.attn_impl}
+  disable_dropout: true
+  gradient_checkpointing: true
+  ppo_n_minibatches: 1
+  eps_clip: null
+  mb_spec:
+    n_mbs: ${actor.mb_spec.n_mbs}
+    max_tokens_per_mb: ${actor.mb_spec.max_tokens_per_mb}
+  optimizer:
+    type: adam
+    lr: 5.0e-06
+    weight_decay: 0.0
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1e-8
+    lr_scheduler_type: constant
+    gradient_clipping: 1.0
+    warmup_steps_proportion: 0.0
+    warmup_steps: 0
+  scheduling_strategy:
+    type: colocation
+    target: actor
+  scheduling_spec: ${actor.scheduling_spec}
