@@ -59,6 +59,7 @@ class RLVRWorkflow(RolloutWorkflow):
         | str = default_get_input_ids_fn,
         data_extract_prompt_fn: Callable[[dict[str, Any]], Any]
         | str = default_data_extract_prompt_fn,
+        length_stop_is_terminal: bool | None = None,
     ):
         self.reward_fn = reward_fn
         self.tokenizer = tokenizer
@@ -69,6 +70,9 @@ class RLVRWorkflow(RolloutWorkflow):
             self.tokenizer = tokenizer
         self.gconfig = gconfig.new_with_stop_and_pad_token_ids(self.tokenizer)
         self.enable_thinking = enable_thinking
+        # None preserves legacy rollout metadata. SAO must explicitly select
+        # finite-budget termination or continuable time-limit truncation.
+        self.length_stop_is_terminal = length_stop_is_terminal
         if not isinstance(reward_fn, str):
             self.async_reward_fn = AsyncRewardWrapper(reward_fn)
         # Support string paths for get_input_ids_fn
@@ -177,4 +181,12 @@ class RLVRWorkflow(RolloutWorkflow):
             "attention_mask": torch.ones(len(seq), dtype=torch.bool),
             "rewards": torch.tensor(reward, dtype=torch.float32),
         }
+        if self.length_stop_is_terminal is not None:
+            if resp.stop_reason not in ("stop", "length"):
+                raise ValueError(
+                    f"Incomplete math episode: stop_reason={resp.stop_reason}"
+                )
+            terminal = resp.stop_reason == "stop" or self.length_stop_is_terminal
+            res["terminated"] = torch.tensor(terminal, dtype=torch.bool)
+            res["truncated"] = torch.tensor(not terminal, dtype=torch.bool)
         return {k: v.unsqueeze(0) for k, v in res.items()}

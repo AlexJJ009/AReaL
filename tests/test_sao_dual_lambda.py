@@ -28,6 +28,7 @@ class TinyTrainEngine:
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=0.01)
         self.consumed = []
         self.losses = []
+        self.output_gradients = []
 
     def train(self):
         self.model.train()
@@ -39,6 +40,7 @@ class TinyTrainEngine:
         assert loss_weight_fn(data) > 0
         self.optimizer.zero_grad()
         output = self.model(data["input_ids"])
+        output.retain_grad()
         if self.critic:
             loss = loss_fn(output, data)
         else:
@@ -50,6 +52,9 @@ class TinyTrainEngine:
         assert not data["returns"].requires_grad
         assert not data["advantages"].requires_grad
         loss.backward()
+        self.output_gradients.append(
+            (output.grad.detach().clone(), data["loss_mask"].bool().clone())
+        )
         assert torch.isfinite(self.model.weight.grad).all()
         assert self.model.weight.grad.abs().sum() > 0
         self.optimizer.step()

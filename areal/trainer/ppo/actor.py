@@ -17,6 +17,10 @@ from areal.trainer.ppo.gae import (
 )
 from areal.trainer.ppo.lambda_fn import resolve_gae_lambda_fn
 from areal.trainer.ppo.stats import infer_token_denominator
+from areal.trainer.ppo.trajectory import (
+    action_token_rewards,
+    action_trajectory_metadata,
+)
 from areal.utils import logging, stats_tracker
 from areal.utils.constants import (
     PROX_APPROX_METHOD_LINEAR,
@@ -214,6 +218,11 @@ class PPOActor:
 
         loss_mask = data["loss_mask"].float()
         loss_mask = torch.roll(loss_mask, shifts=-1, dims=-1)
+        explicit_episode = "terminated" in data or "truncated" in data
+        if explicit_episode:
+            terminated, episode_lengths, last_action = action_trajectory_metadata(
+                data, loss_mask
+            )
 
         # Align structural turn IDs to the same next-token prediction
         # convention used by loss_mask and log probabilities.
@@ -251,12 +260,16 @@ class PPOActor:
         attn_mask = data["attention_mask"]
         seqlens = attn_mask.sum(-1).long()
         seq_no_eos_mask = seqlens == attn_mask.shape[1]
+        if explicit_episode:
+            seq_no_eos_mask = ~terminated
         rewards = -self.kl_ctl * self.kl_estimator(old_logp, ref_logp)
         kl_rewards = rewards.clone()
         # KL rewards at the next token after eos is zero.
         rewards[batch_indices, seqlens - 1] = 0
         gae_kl_rewards = rewards.clone()
         indices = torch.clip(seqlens - 2, min=0)
+        if explicit_episode:
+            indices = last_action
         gae_outcome_rewards = torch.zeros_like(rewards)
         if self.mask_no_eos_with_zero:
             gae_outcome_rewards[batch_indices, indices] = torch.where(
@@ -264,6 +277,8 @@ class PPOActor:
             )
         else:
             gae_outcome_rewards[batch_indices, indices] = reward_score
+        if explicit_episode:
+            gae_outcome_rewards += action_token_rewards(data, loss_mask)
 
         # Turn-level GAE treats each generated turn as a macro timestep. Keep
         # token KL as a local actor penalty rather than broadcasting a turn's
@@ -278,6 +293,12 @@ class PPOActor:
             values = torch.zeros_like(rewards)
         else:
             values = data["values"]
+        bootstrap_values = None
+        if explicit_episode:
+            final_values = values.gather(1, (episode_lengths - 1).unsqueeze(1)).squeeze(
+                1
+            )
+            bootstrap_values = torch.where(terminated, 0.0, final_values).detach()
         if self._gae_lambda_is_custom:
             gae_lambda = self._compute_gae_lambda(loss_mask, turn_ids)
         else:
@@ -294,6 +315,7 @@ class PPOActor:
                 seq_no_eos_mask=seq_no_eos_mask,
                 discount=self.discount,
                 gae_lambda=gae_lambda,
+                bootstrap_values=bootstrap_values,
             )
             advantages = advantages + gae_kl_rewards
         else:
@@ -304,6 +326,7 @@ class PPOActor:
                 seq_no_eos_mask=seq_no_eos_mask,
                 discount=self.discount,
                 gae_lambda=gae_lambda,
+                bootstrap_values=bootstrap_values,
             )
         # Critic targets have their own trace decay. Never derive them from
         # normalized policy advantages or a later actor-only transformation.
@@ -315,6 +338,7 @@ class PPOActor:
                 seq_no_eos_mask=seq_no_eos_mask,
                 discount=self.discount,
                 gae_lambda=self.config.critic_gae_lambda,
+                bootstrap_values=bootstrap_values,
             )
             if self.gae_timestep_unit == "turn":
                 _, returns = _compute_turn_level_gae(**critic_kwargs, turn_ids=turn_ids)
