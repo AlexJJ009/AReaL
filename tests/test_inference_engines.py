@@ -222,6 +222,33 @@ def test_awex_sglang_child_enables_cuda_graph_memory_saver(monkeypatch) -> None:
     assert captured["env"]["SGLANG_MEMORY_SAVER_CUDA_GRAPH"] == "1"
 
 
+def test_awex_sglang_child_preserves_dense_transfer_rank_base(monkeypatch) -> None:
+    from areal.engine.sglang_remote import SGLangBackend
+
+    captured = {}
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2,5")
+    monkeypatch.setattr(
+        "areal.engine.sglang_remote.SGLangConfig.build_cmd_from_args",
+        lambda args: ["sglang.launch_server"],
+    )
+    monkeypatch.setattr(
+        "areal.engine.sglang_remote.subprocess.Popen",
+        lambda *args, **kwargs: captured.update(kwargs)
+        or SimpleNamespace(pid=1, poll=lambda: None),
+    )
+
+    SGLangBackend().launch_server(
+        {
+            "model_path": "model",
+            "awex_meta_server_addr": "127.0.0.1:1234",
+            "base_gpu_id": 4,
+            "_awex_gpus_per_server": 2,
+        }
+    )
+
+    assert captured["env"]["AWEX_TRANSFER_RANK_BASE"] == "4"
+
+
 def _dummy_reward_fn(*args, **kwargs):
     """Dummy reward function for testing."""
     return 1.0

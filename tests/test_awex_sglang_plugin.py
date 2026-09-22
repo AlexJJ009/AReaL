@@ -262,6 +262,23 @@ def test_transfer_rank_uses_scheduler_gpu_for_multi_gpu_server(monkeypatch):
     assert ranks == [16, 17, 18, 19]
 
 
+def test_transfer_rank_uses_dense_base_for_noncontiguous_devices(monkeypatch):
+    monkeypatch.setenv("AWEX_TRANSFER_RANK_BASE", "2")
+
+    ranks = [
+        _resolve_transfer_rank(
+            infer_world_size=8,
+            gpu_id=gpu_id,
+            node_id=0,
+            nnodes=1,
+            instance_world_size=2,
+        )
+        for gpu_id in range(2)
+    ]
+
+    assert ranks == [2, 3]
+
+
 def test_transfer_rank_falls_back_to_node_local_identity(monkeypatch):
     monkeypatch.delenv("AWEX_TRANSFER_RANK", raising=False)
     monkeypatch.delenv("RANK", raising=False)
@@ -305,6 +322,7 @@ def test_receiver_init_isolated_tp_servers_register_unique_ranks(monkeypatch, no
     registrations = []
 
     for first_gpu in range(0, 8, 2):
+        monkeypatch.setenv("AWEX_TRANSFER_RANK_BASE", str(first_gpu))
         monkeypatch.setenv("CUDA_VISIBLE_DEVICES", f"{first_gpu},{first_gpu + 1}")
         for logical_gpu in range(2):
             scheduler = SimpleNamespace(
