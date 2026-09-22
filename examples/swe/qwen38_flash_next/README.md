@@ -51,6 +51,16 @@ pauses. Evaluation leaves this unset, using stream/server defaults. Explicit
 
 ## Required runtime support
 
+Qwen4Exp vision needs a Transformers runtime exposing `Qwen4ExpModel.get_rope_index` and
+`get_vision_position_ids`, validated with Transformers 5.16.1. The standard locked
+SGLang/vLLM environments (Transformers 5.3.0/5.7.0) do not provide this model. Supply a
+compatible training runtime; initialization checks these capabilities before model
+allocation. The standard CI image does not validate full Qwen4Exp vision training.
+
+For CP training, the adapter repairs the pinned bridge's PLE hidden-state gather with an
+autograd collective: backward sums gradients from all consuming CP ranks. The bridge's
+packed zigzag order and sequence-parallel handling are preserved.
+
 Both dependency declarations and lockfiles pin the official ModelScope bridge to
 `bc58ea9cf9b1dd2314637703973904f359e67c75`, and AWEX to
 `c2360eaa4cd4fa3f96bd5384a3486b9c3d34c01f`

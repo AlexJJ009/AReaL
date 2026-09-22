@@ -307,6 +307,45 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Install branch-pinned AWEX
+        env:
+          TEST_VARIANT: ${{ matrix.variant }}
+        run: |
+          export PATH="/opt/.venv/bin:$PATH"
+          python - <<'PYTHON'
+          import importlib.metadata
+          import json
+          import os
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          from packaging.requirements import Requirement
+          from packaging.utils import canonicalize_name
+
+          path = "pyproject.vllm.toml" if os.environ["TEST_VARIANT"] == "vllm" else "pyproject.toml"
+          config = tomllib.loads(Path(path).read_text())
+          requirements = [Requirement(dep) for dep in config["project"]["dependencies"]]
+          awex = [req for req in requirements if canonicalize_name(req.name) == "awex"
+                  and (req.marker is None or req.marker.evaluate())]
+          if len(awex) != 1:
+              raise RuntimeError(f"Expected one active AWEX dependency in {path}")
+          requirement = awex[0]
+          if requirement.url:
+              # The runtime image can have the same package version at an older commit.
+              revision = requirement.url.rsplit("@", 1)[-1]
+              if len(revision) != 40 or any(c not in "0123456789abcdef" for c in revision):
+                  raise RuntimeError("AWEX source dependencies must pin a full commit SHA")
+              subprocess.run([
+                  "uv", "pip", "install", "--python", "/opt/.venv/bin/python",
+                  "--no-deps", "--reinstall", str(requirement),
+              ], check=True)
+              source = json.loads(importlib.metadata.distribution("awex").read_text("direct_url.json"))
+              if source.get("vcs_info", {}).get("commit_id") != revision:
+                  raise RuntimeError("Installed AWEX commit does not match the branch pin")
+              print(f"Verified AWEX commit: {revision}")
+          PYTHON
+
       - name: Validate Docker installation
         run: |
           export PATH="/opt/.venv/bin:$PATH"

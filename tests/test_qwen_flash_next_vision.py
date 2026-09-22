@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import sys
 from types import MethodType, SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -30,6 +31,7 @@ from tests import test_qwen_flash_next_training
 from areal.engine.megatron_utils.qwen4_exp_mrope import (
     install_qwen4_exp_visual_token_mask,
     prepare_qwen4_exp_mrope_inputs,
+    require_qwen4_exp_vision_runtime,
 )
 from areal.utils.data import (
     MicroBatchSpec,
@@ -191,9 +193,37 @@ def test_mrope_survives_microbatch_reorder_padding_and_cp_partition(
     torch.testing.assert_close(torch.cat(outputs), expected, atol=0, rtol=0)
 
 
+def _compute_vision_batch_advantages(inputs):
+    from areal.api.cli_args import PPOActorConfig
+    from areal.trainer.ppo.actor import PPOActor
+
+    actor = PPOActor(
+        PPOActorConfig(
+            reward_norm=None,
+            adv_norm=None,
+            kl_ctl=0,
+            recompute_logprob=False,
+            mask_no_eos_with_zero=False,
+        ),
+        MagicMock(),
+    )
+    inputs["logprobs"] = torch.zeros_like(inputs["input_ids"], dtype=torch.float32)
+    inputs["rewards"] = torch.ones(inputs["input_ids"].shape[0])
+    return actor._compute_advantages(inputs)
+
+
+def test_vision_runtime_without_model_fails_with_actionable_error(monkeypatch):
+    monkeypatch.setitem(
+        sys.modules, "transformers.models.qwen4_exp.modeling_qwen4_exp", None
+    )
+    with pytest.raises(RuntimeError, match="Transformers 5.16.1"):
+        require_qwen4_exp_vision_runtime()
+
+
+@pytest.mark.parametrize("after_advantages", [False, True])
 @pytest.mark.parametrize("token_kind", ["image_token_id", "video_token_id"])
 def test_generated_visual_special_tokens_remain_text(
-    hf_qwen4_exp, vision_batch, qwen_config, token_kind
+    hf_qwen4_exp, vision_batch, qwen_config, token_kind, after_advantages
 ):
     original = prepare_qwen4_exp_mrope_inputs(vision_batch, qwen_config)
     inputs = dict(vision_batch)
@@ -203,6 +233,8 @@ def test_generated_visual_special_tokens_remain_text(
         last = int(inputs["attention_mask"][row].sum()) - 1
         inputs["input_ids"][row, last] = getattr(qwen_config, token_kind)
         inputs["loss_mask"][row, last] = True
+    if after_advantages:
+        inputs = _compute_vision_batch_advantages(inputs)
     prepared = prepare_qwen4_exp_mrope_inputs(inputs, qwen_config)
     torch.testing.assert_close(prepared["position_ids"], original["position_ids"])
     torch.testing.assert_close(
@@ -284,23 +316,50 @@ def test_image_groups_cannot_consume_each_others_grid_tokens(qwen_config):
         prepare_qwen4_exp_mrope_inputs(inputs, qwen_config)
 
 
+@pytest.mark.parametrize("after_advantages", [False, True])
 @pytest.mark.parametrize("language_model_only", [False, True])
 @pytest.mark.parametrize("modality", ["image", "video"])
 def test_generated_special_token_without_pixels_remains_text(
-    qwen_config, language_model_only, modality
+    qwen_config, language_model_only, modality, after_advantages
 ):
     special = getattr(qwen_config, f"{modality}_token_id")
     inputs = {
-        "input_ids": torch.tensor([[10, 11, special, 12]]),
+        "input_ids": torch.tensor([[10, 11, 12, special]]),
         "attention_mask": torch.ones(1, 4, dtype=torch.bool),
         "loss_mask": torch.tensor([[0, 0, 1, 1]]),
         "mm_token_type_ids": torch.zeros(1, 4, dtype=torch.long),
     }
+    if after_advantages:
+        inputs = _compute_vision_batch_advantages(inputs)
     result = prepare_qwen4_exp_mrope_inputs(
         inputs, qwen_config, language_model_only=language_model_only
     )
     assert "position_ids" not in result
     torch.testing.assert_close(result["input_ids"], inputs["input_ids"], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("method", ["_train_lm", "_evaluate_lm"])
+def test_sft_preserves_token_provenance_before_loss_alignment(
+    qwen_config, method, monkeypatch
+):
+    from areal.trainer.sft import lm_engine
+
+    engine = MagicMock()
+    engine.train_batch.return_value = {}
+    monkeypatch.setattr(lm_engine, "stage_batch_for_engine", lambda *_: None)
+    inputs = {
+        "input_ids": torch.tensor([[10, 11, 12, qwen_config.image_token_id]]),
+        "attention_mask": torch.ones(1, 4, dtype=torch.bool),
+        "loss_mask": torch.tensor([[0, 0, 1, 1]]),
+    }
+    getattr(lm_engine.LMEngine(engine), method)(inputs)
+    call = engine.train_batch if method == "_train_lm" else engine.eval_batch
+    batch = call.call_args.kwargs["input_"]
+    result = prepare_qwen4_exp_mrope_inputs(batch, qwen_config)
+    assert "position_ids" not in result
+    torch.testing.assert_close(
+        batch["loss_mask"], torch.tensor([[False, True, True, False]]), rtol=0, atol=0
+    )
 
 
 def test_prompt_placeholder_without_pixels_still_rejected(qwen_config):

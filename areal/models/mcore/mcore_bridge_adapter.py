@@ -116,6 +116,18 @@ class MCoreBridgeAdapter:
         self.hf_config: PretrainedConfig = AutoConfig.from_pretrained(
             model_path, trust_remote_code=True
         )
+        if self.hf_config.model_type == "qwen4_exp" and not language_model_only:
+            from areal.engine.megatron_utils.qwen4_exp_mrope import (
+                require_qwen4_exp_vision_runtime,
+            )
+
+            require_qwen4_exp_vision_runtime()
+        if self.hf_config.model_type == "qwen4_exp" and context_parallel_size > 1:
+            from areal.engine.megatron_utils.qwen4_exp_cp import (
+                install_qwen4_exp_ple_cp_autograd,
+            )
+
+            install_qwen4_exp_ple_cp_autograd()
         config_kwargs = hf_to_mcore_config(self.hf_config)
         config_kwargs.update(
             params_dtype=dtype,

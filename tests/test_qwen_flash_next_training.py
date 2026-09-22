@@ -521,3 +521,94 @@ def test_checkpoint_finalization_errors_reach_all_cpu_ranks(tmp_path):
             if process.is_alive():
                 process.terminate()
             process.join(timeout=5)
+
+
+def _check_cp_causal_gradients(rank, init_file):
+    import torch.nn.functional as functional
+    from mcore_bridge.model.modules import ple
+    from mcore_bridge.utils import megatron_utils
+
+    from areal.engine.megatron_utils.qwen4_exp_cp import (
+        install_qwen4_exp_ple_cp_autograd,
+    )
+
+    torch.set_num_threads(1)
+    dist.init_process_group(
+        "gloo",
+        init_method=f"file://{init_file}",
+        rank=rank,
+        world_size=2,
+        timeout=timedelta(seconds=45),
+    )
+    try:
+        megatron_utils.mpu.get_context_parallel_world_size = lambda: 2
+        megatron_utils.mpu.get_context_parallel_rank = lambda: rank
+        megatron_utils.mpu.get_context_parallel_group = lambda: dist.group.WORLD
+        original = ple.reconstruct_tensor_cp
+        install_qwen4_exp_ple_cp_autograd()
+        installed = ple.reconstruct_tensor_cp
+        install_qwen4_exp_ple_cp_autograd()
+        assert ple.reconstruct_tensor_cp is installed
+        assert megatron_utils.reconstruct_tensor_cp is original
+        full = torch.arange(16, dtype=torch.float64).reshape(8, 1, 2) / 10
+        indices = torch.tensor([0, 1, 6, 7] if rank == 0 else [2, 3, 4, 5])
+        weights = torch.arange(1, 17, dtype=torch.float64).reshape_as(full)
+        kernel = torch.tensor(
+            [[[0.2, 0.3, 0.5]], [[0.4, 0.1, 0.7]]], dtype=torch.float64
+        )
+
+        def causal(hidden, conv_weight):
+            x = hidden.permute(1, 2, 0)
+            return functional.conv1d(
+                functional.pad(x, (2, 0)), conv_weight, groups=2
+            ).permute(2, 0, 1)
+
+        reference = full.clone().requires_grad_()
+        ref_kernel = kernel.clone().requires_grad_()
+        expected = causal(reference, ref_kernel)
+        (expected * weights).sum().backward()
+
+        # IDs and no-grad/recompute forwards retain the pinned bridge behavior.
+        ids = indices.unsqueeze(0)
+        torch.testing.assert_close(
+            installed(ids, None, dim=1), torch.arange(8).unsqueeze(0), rtol=0, atol=0
+        )
+        with torch.no_grad():
+            torch.testing.assert_close(
+                installed(full[indices], None, dim=0), full, rtol=0, atol=0
+            )
+        for differentiable in (False, True):
+            local = full[indices].clone().requires_grad_()
+            local_kernel = kernel.clone().requires_grad_()
+            reconstruct = installed if differentiable else original
+            restored = reconstruct(local, None, dim=0)
+            output = causal(restored, local_kernel)[indices]
+            torch.testing.assert_close(
+                output, expected.detach()[indices], rtol=1e-12, atol=1e-12
+            )
+            (output * weights[indices]).sum().backward()
+            if differentiable:
+                torch.testing.assert_close(
+                    local.grad, reference.grad[indices], rtol=1e-12, atol=1e-12
+                )
+                dist.all_reduce(local_kernel.grad, group=dist.group.WORLD)
+                torch.testing.assert_close(
+                    local_kernel.grad, ref_kernel.grad, rtol=1e-12, atol=1e-12
+                )
+            else:
+                assert not torch.allclose(local.grad, reference.grad[indices])
+    finally:
+        dist.destroy_process_group()
+
+
+@pytest.mark.slow
+@pytest.mark.ci
+def test_cp_causal_convolution_preserves_remote_input_gradients(tmp_path):
+    """Two real CP ranks match CP1 across both zigzag boundaries, including backward."""
+    pytest.importorskip("mcore_bridge.model.modules.ple")
+    mp.spawn(
+        _check_cp_causal_gradients,
+        args=(str(tmp_path / "cp-init"),),
+        nprocs=2,
+        join=True,
+    )

@@ -13,6 +13,25 @@ _VISION_KEYS = (
 )
 
 
+def require_qwen4_exp_vision_runtime() -> type[Any]:
+    """Fail before model allocation if the runtime cannot construct vision mRoPE."""
+    try:
+        from transformers.models.qwen4_exp.modeling_qwen4_exp import Qwen4ExpModel
+    except ImportError as exc:
+        raise RuntimeError(
+            "Qwen4Exp vision requires a Transformers runtime with "
+            "Qwen4ExpModel.get_rope_index and get_vision_position_ids "
+            "(validated with Transformers 5.16.1). The standard locked "
+            "5.3.0/5.7.0 environments do not support this model."
+        ) from exc
+    if not all(
+        callable(getattr(Qwen4ExpModel, name, None))
+        for name in ("get_rope_index", "get_vision_position_ids")
+    ):
+        raise RuntimeError("Qwen4Exp vision runtime lacks required mRoPE methods.")
+    return Qwen4ExpModel
+
+
 def install_qwen4_exp_visual_token_mask(model: torch.nn.Module) -> None:
     """Scope the pinned bridge's ID-only visual scatter to actual visual tokens.
 
@@ -97,9 +116,9 @@ def prepare_qwen4_exp_mrope_inputs(
         | (input_ids == hf_config.video_token_id)
     ) & attention_mask
     # Generated special tokens are text, not evidence of image/video payloads.
-    # Only the rollout loss mask can establish this provenance; unmarked prompt
-    # placeholders still trigger the strict payload validation below.
-    loss_mask = data.get("loss_mask")
+    # Trainers preserve the input-aligned mask before shifting loss_mask for labels.
+    # Raw batches still carry the unshifted mask in loss_mask.
+    loss_mask = data.get("input_token_loss_mask", data.get("loss_mask"))
     if loss_mask is not None:
         if loss_mask.shape != input_ids.shape:
             raise ValueError("loss_mask must have the same [B, S] shape as input_ids.")
@@ -203,13 +222,7 @@ def prepare_qwen4_exp_mrope_inputs(
                     f"Sample {index} {grid_key} does not match modality token groups."
                 )
 
-    try:
-        from transformers.models.qwen4_exp.modeling_qwen4_exp import Qwen4ExpModel
-    except ImportError as exc:
-        raise RuntimeError(
-            "Qwen4Exp vision mRoPE requires a Transformers runtime with "
-            "Qwen4ExpModel.get_rope_index (available in 5.16.1)."
-        ) from exc
+    Qwen4ExpModel = require_qwen4_exp_vision_runtime()
     context = SimpleNamespace(config=hf_config)
     context.get_vision_position_ids = MethodType(
         Qwen4ExpModel.get_vision_position_ids, context
