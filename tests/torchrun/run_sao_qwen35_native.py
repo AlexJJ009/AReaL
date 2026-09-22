@@ -287,6 +287,18 @@ def jsonable_stats(stats: Any) -> Any:
     return repr(stats)
 
 
+def sample_indices(numel: int, count: int, device: torch.device) -> torch.Tensor:
+    """Evenly sample valid indices without rounding large offsets through fp32."""
+    take = min(count, numel)
+    if take < 1:
+        return torch.empty(0, dtype=torch.int64, device=device)
+    if take == 1:
+        return torch.zeros(1, dtype=torch.int64, device=device)
+    return (
+        torch.arange(take, dtype=torch.int64, device=device) * (numel - 1) // (take - 1)
+    )
+
+
 def sample_local_shards(
     engine: Any, elements_per_param: int
 ) -> dict[str, dict[str, Any]]:
@@ -300,9 +312,7 @@ def sample_local_shards(
             take = min(elements_per_param, flat.numel())
             if take == 0:
                 continue
-            indices = torch.linspace(
-                0, flat.numel() - 1, steps=take, device=flat.device
-            ).long()
+            indices = sample_indices(flat.numel(), take, flat.device)
             cpu = flat.index_select(0, indices).float().cpu().contiguous()
             sampled[name] = {
                 "shape": list(local.shape),
@@ -359,9 +369,7 @@ def sample_optimizer_state(engine: Any, elements_per_tensor: int) -> dict[str, A
                 if take == 0:
                     state_sample[key] = {"shape": list(value.shape), "sampled": 0}
                     continue
-                indices = torch.linspace(
-                    0, flat.numel() - 1, steps=take, device=flat.device
-                ).long()
+                indices = sample_indices(flat.numel(), take, flat.device)
                 cpu = flat.index_select(0, indices).float().cpu().contiguous()
                 state_sample[key] = {
                     "shape": list(value.shape),

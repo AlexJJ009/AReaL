@@ -392,6 +392,10 @@ class RemotevLLMEngine(InferenceEngine):
         """Get the workflow executor of the inference engine."""
         return self._engine.workflow_executor
 
+    def on_batch_consumed_without_update(self):
+        """Release worker rollout capacity without publishing new weights."""
+        self.workflow_executor.staleness_manager.on_batch_consumed_without_update()
+
     def set_version(self, version: int):
         """Set the current weight version."""
         return self._engine.set_version(version)

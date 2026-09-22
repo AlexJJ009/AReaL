@@ -610,4 +610,6 @@ def export_all(reduce_group=None, key_sync_group=None, reset=True) -> dict[str, 
         stat.update(x)
     if duplicate_keys:
         logger.warning(f"Duplicate stat keys detected: {list(duplicate_keys)}")
-    return stat
+    from areal.trainer.ppo.stats import derive_critic_update_metrics
+
+    return derive_critic_update_metrics(stat)

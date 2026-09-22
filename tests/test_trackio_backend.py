@@ -159,6 +159,32 @@ class TestStatsLoggerTrackioIntegration:
     @patch("areal.utils.stats_logger.wandb")
     @patch("areal.utils.stats_logger.swanlab")
     @patch("areal.utils.stats_logger.dist")
+    def test_commit_filters_none_values_from_backends(
+        self, mock_dist, mock_swanlab, mock_wandb, mock_trackio
+    ):
+        """Undefined metrics should not be sent to scalar logging backends."""
+        mock_dist.is_initialized.return_value = False
+
+        from areal.utils.stats_logger import StatsLogger
+
+        config = _make_test_config(TrackioConfig(mode="online"))
+        logger = StatsLogger(config, _make_ft_spec())
+        mock_wandb.log.reset_mock()
+        mock_swanlab.log.reset_mock()
+        mock_trackio.log.reset_mock()
+
+        data = {"critic/ev": None, "critic/ev_defined": 0.0}
+        logger.commit(epoch=0, step=0, global_step=0, data=data)
+
+        expected = {"critic/ev_defined": 0.0}
+        mock_wandb.log.assert_called_once_with(expected, step=0)
+        mock_swanlab.log.assert_called_once_with(expected, step=0)
+        mock_trackio.log.assert_called_once_with(expected, step=0)
+
+    @patch("areal.utils.stats_logger.trackio")
+    @patch("areal.utils.stats_logger.wandb")
+    @patch("areal.utils.stats_logger.swanlab")
+    @patch("areal.utils.stats_logger.dist")
     def test_trackio_finish_called_on_close(
         self, mock_dist, mock_swanlab, mock_wandb, mock_trackio
     ):

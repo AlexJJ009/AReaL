@@ -942,11 +942,11 @@ class PPOTrainer:
                         self.eval_rollout.set_version(new_version)
                 else:
                     if is_single_controller():
-                        sm = self.rollout.staleness_manager
+                        self.rollout.on_batch_consumed_without_update()
                     else:
                         sm = self.rollout.workflow_executor.staleness_manager
-                    if sm is not None:
-                        sm.on_batch_consumed_without_update()
+                        if sm is not None:
+                            sm.on_batch_consumed_without_update()
 
             if not self._is_v1_awex_colocate(config):
                 self._save_training_state(
