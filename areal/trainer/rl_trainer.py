@@ -1437,6 +1437,19 @@ class PPOTrainer:
             epoch_step=epoch_step,
             steps_per_epoch=len(self.train_dataloader),
         )
+        trainer_state = {
+            "num_critic_only_steps": self.config.num_critic_only_steps,
+            "policy_version": max(
+                0, global_step + 1 - self.config.num_critic_only_steps
+            ),
+        }
+        should_recover_rollout_inputs = (
+            self.config.num_critic_only_steps or self.config.critic_updates_before_actor
+        )
+        if self.config.critic_updates_before_actor:
+            trainer_state["rollout_recovery_policy"] = (
+                "replay_raw_inputs_discard_generated_trajectories"
+            )
         self.recover_handler.dump(
             to_save,
             step_info,
@@ -1446,15 +1459,10 @@ class PPOTrainer:
             self.train_dataloader,
             tokenizer=self.tokenizer,
             processor=self.processor,
-            trainer_state={
-                "num_critic_only_steps": self.config.num_critic_only_steps,
-                "policy_version": max(
-                    0, global_step + 1 - self.config.num_critic_only_steps
-                ),
-            },
+            trainer_state=trainer_state,
             rollout_input_state=(
                 self.rollout.get_input_recovery_state()
-                if self.config.num_critic_only_steps
+                if should_recover_rollout_inputs
                 and is_single_controller()
                 and hasattr(self.rollout, "get_input_recovery_state")
                 else None

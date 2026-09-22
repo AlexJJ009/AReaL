@@ -25,10 +25,15 @@ class DCPState(Stateful):
     """
 
     def __init__(
-        self, model: nn.Module, optimizer: torch.optim.Optimizer | None = None
+        self,
+        model: nn.Module,
+        optimizer: torch.optim.Optimizer | None = None,
+        *,
+        saved_optimizer_parameters: set[str] | None = None,
     ):
         self.model = model
         self.optimizer = optimizer
+        self.saved_optimizer_parameters = saved_optimizer_parameters
 
     def state_dict(self) -> dict[str, Any]:
         """
@@ -40,6 +45,24 @@ class DCPState(Stateful):
             model_state_dict, optimizer_state_dict = get_state_dict(
                 self.model, self.optimizer
             )
+            if self.saved_optimizer_parameters is not None:
+                missing = self.saved_optimizer_parameters.difference(
+                    optimizer_state_dict["state"]
+                )
+                if missing:
+                    raise ValueError(
+                        "Optimizer load template lacks saved parameter state; "
+                        "restore into a fresh optimizer: " + ", ".join(sorted(missing))
+                    )
+                # A fresh optimizer gets dense placeholder state from PyTorch,
+                # but the checkpoint may contain only parameters used so far.
+                # Prune whole absent entries, never individual moment tensors:
+                # incomplete state for an initialized parameter must still fail.
+                optimizer_state_dict["state"] = {
+                    name: value
+                    for name, value in optimizer_state_dict["state"].items()
+                    if name in self.saved_optimizer_parameters
+                }
             state_dict = {"model": model_state_dict, "optim": optimizer_state_dict}
         else:
             state_dict = {"model": get_model_state_dict(self.model)}
@@ -50,12 +73,26 @@ class DCPState(Stateful):
         Load state dicts onto model and optimizer.
         """
         if self.optimizer is not None:
+            optim_state = state_dict["optim"]
+            # PyTorch's FQN splitter assumes every trainable parameter has
+            # state, which is false for lazy AdamW state (e.g. unused vision).
+            # Empty entries retain lazy initialization without inventing moments.
+            optim_state = {
+                **optim_state,
+                "state": dict(optim_state["state"]),
+            }
+            for group in optim_state["param_groups"]:
+                for name in group["params"]:
+                    optim_state["state"].setdefault(name, {})
             set_state_dict(
                 self.model,
                 self.optimizer,
                 model_state_dict=state_dict["model"],
-                optim_state_dict=state_dict["optim"],
+                optim_state_dict=optim_state,
             )
+            for parameter in list(self.optimizer.state):
+                if not self.optimizer.state[parameter]:
+                    del self.optimizer.state[parameter]
         else:
             set_model_state_dict(
                 self.model,

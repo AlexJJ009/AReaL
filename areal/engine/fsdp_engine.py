@@ -2059,7 +2059,19 @@ class FSDPEngine(TrainEngine):
         if self.model is None:
             raise RuntimeError("Model not initialized")
 
-        dcp_state = DCPState(self.model, self.optimizer if with_optim else None)
+        saved_optimizer_parameters = None
+        if with_optim:
+            metadata = dcp.FileSystemReader(path).read_metadata()
+            saved_optimizer_parameters = {
+                keys[3]
+                for keys in metadata.planner_data.values()
+                if len(keys) >= 5 and keys[:3] == ("dcp", "optim", "state")
+            }
+        dcp_state = DCPState(
+            self.model,
+            self.optimizer if with_optim else None,
+            saved_optimizer_parameters=saved_optimizer_parameters,
+        )
         state_dict = {"dcp": dcp_state}
         dcp.load(
             state_dict=state_dict,

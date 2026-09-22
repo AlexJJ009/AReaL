@@ -136,6 +136,12 @@ class _Rollout:
     def set_version(self, version: int) -> None:
         self.versions.append(version)
 
+    def get_input_recovery_state(self) -> dict:
+        return {
+            "outstanding": [{"id": "inflight"}],
+            "buffer": [{"id": "prefetched"}],
+        }
+
     def export_stats(self) -> dict:
         return {"rollout/paused": self.pause_calls}
 
@@ -218,10 +224,15 @@ class _TrainEngine:
         self.scheduler.load_state_dict(state["scheduler"])
 
 
-def _make_trainer(*, total_steps: int, num_critic_only_steps: int) -> PPOTrainer:
+def _make_trainer(
+    *,
+    total_steps: int,
+    num_critic_only_steps: int,
+    critic_updates_before_actor: int = 0,
+) -> PPOTrainer:
     trainer = PPOTrainer.__new__(PPOTrainer)
     trainer.config = SimpleNamespace(
-        critic_updates_before_actor=0,
+        critic_updates_before_actor=critic_updates_before_actor,
         total_train_epochs=1,
         total_train_steps=total_steps,
         num_critic_only_steps=num_critic_only_steps,
@@ -428,6 +439,40 @@ def test_train_short_critic_only_run_keeps_policy_frozen_and_checkpoints_zero_ve
 
     trainer_state = trainer.recover_handler.dumps[-1]["kwargs"]["trainer_state"]
     assert trainer_state == {"policy_version": 0, "num_critic_only_steps": 10}
+
+
+def test_save_recover_checkpoint_keeps_plain_ppo_rollout_inputs_out_of_checkpoint():
+    trainer = _make_trainer(total_steps=1, num_critic_only_steps=0)
+
+    trainer._save_recover_checkpoint(epoch=0, epoch_step=0, global_step=0)
+
+    dump = trainer.recover_handler.dumps[-1]["kwargs"]
+    assert dump["rollout_input_state"] is None
+    assert dump["trainer_state"] == {
+        "policy_version": 1,
+        "num_critic_only_steps": 0,
+    }
+
+
+def test_save_recover_checkpoint_records_sao_raw_input_replay_policy():
+    trainer = _make_trainer(
+        total_steps=1,
+        num_critic_only_steps=0,
+        critic_updates_before_actor=2,
+    )
+
+    trainer._save_recover_checkpoint(epoch=0, epoch_step=0, global_step=0)
+
+    dump = trainer.recover_handler.dumps[-1]["kwargs"]
+    assert dump["rollout_input_state"] == {
+        "outstanding": [{"id": "inflight"}],
+        "buffer": [{"id": "prefetched"}],
+    }
+    assert dump["trainer_state"] == {
+        "policy_version": 1,
+        "num_critic_only_steps": 0,
+        "rollout_recovery_policy": "replay_raw_inputs_discard_generated_trajectories",
+    }
 
 
 def test_train_resume_from_warmup_checkpoint_matches_uninterrupted_state():

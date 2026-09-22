@@ -59,6 +59,31 @@ def test_dispatcher_recovery_drops_only_consumed_results():
     assert dispatcher.get_input_recovery_state() == {"outstanding": []}
 
 
+def test_recovery_state_replays_raw_inputs_not_finished_trajectory_outputs():
+    dispatcher = BatchTaskDispatcher(
+        max_queue_size=8,
+        task_factory=lambda _item: None,
+        staleness_manager=_Staleness(),
+        deterministic_order=True,
+    )
+    dispatcher.submit_task_input(_Input(0, {"id": 0}))
+    dispatcher._pending_results[0] = TimedResult(
+        0,
+        {
+            "id": 0,
+            "behavior_logprobs": [-0.1],
+            "versions": [3],
+        },
+        0,
+    )
+
+    state = dispatcher.get_input_recovery_state()
+
+    assert state == {"outstanding": [{"id": 0}]}
+    assert "behavior_logprobs" not in state["outstanding"][0]
+    assert "versions" not in state["outstanding"][0]
+
+
 def test_partial_batch_buffer_keeps_unsubmitted_items_until_acknowledged():
     buffer = deque()
     next_id = 0
