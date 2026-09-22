@@ -49,6 +49,7 @@ class RecoverInfo:
     stats_logger_info: dict
     dataloader_info: dict | list[dict]
     checkpoint_info: dict
+    trainer_state: dict = dataclasses.field(default_factory=dict)
 
     def dump(self, dump_dir: str):
         # Dumps the recover info to multiple files in `dump_dir`:
@@ -89,6 +90,9 @@ class RecoverInfo:
         with open(checkpoint_info_path, "w") as f:
             json.dump(self.checkpoint_info, f, indent=4)
 
+        with open(os.path.join(dump_dir, "trainer_state.json"), "w") as f:
+            json.dump(self.trainer_state, f, indent=4)
+
         dataloader_info_path = os.path.join(dump_dir, "dataloader_info.pkl")
         with open(dataloader_info_path, "wb") as f:
             pickle.dump(dataloader_info, f)
@@ -123,6 +127,13 @@ class RecoverInfo:
             with open(checkpoint_info_path) as f:
                 checkpoint_info = json.load(f)
 
+            trainer_state_path = os.path.join(load_dir, "trainer_state.json")
+            if os.path.exists(trainer_state_path):
+                with open(trainer_state_path) as f:
+                    trainer_state = json.load(f)
+            else:
+                trainer_state = {}
+
             dataloader_info_path = os.path.join(load_dir, "dataloader_info.pkl")
             with open(dataloader_info_path, "rb") as f:
                 dataloader_info = pickle.load(f)
@@ -143,6 +154,7 @@ class RecoverInfo:
                 stats_logger_info=stats_logger_info,
                 dataloader_info=dataloader_info,
                 checkpoint_info=checkpoint_info,
+                trainer_state=trainer_state,
             )
         except Exception as e:
             logger.error(f"Failed to load recover info from {load_dir}: {e}")
@@ -276,6 +288,7 @@ class RecoverHandler:
         tokenizer: PreTrainedTokenizerFast | None = None,
         processor: AutoProcessor | None = None,
         base_model_path: str | None = None,
+        trainer_state: dict | None = None,
     ):
         if self.config.mode in ("disabled", "off"):
             return
@@ -306,6 +319,7 @@ class RecoverHandler:
             stats_logger_info=stats_logger.state_dict(),
             dataloader_info=dataloader.state_dict(),
             checkpoint_info=self.freq_ctl.state_dict(),
+            trainer_state=trainer_state or {},
         )
 
         recover_info_path = self.recover_info_path(
@@ -326,6 +340,7 @@ class RecoverHandler:
         weight_update_meta: WeightUpdateMeta | None = None,
         inference_engine_update_from: str = "default",
         colocated_rollout: bool = False,
+        expected_trainer_state: dict | None = None,
     ) -> RecoverInfo | None:
         if self.config.mode in ("disabled", "off"):
             return
@@ -347,8 +362,36 @@ class RecoverHandler:
             self.config.fileroot,
         )
         logger.info(f"Loading recover info from {recover_info_path}")
+        recover_info = None
         try:
             recover_info: RecoverInfo = RecoverInfo.load(recover_info_path)
+            # Validate every role's checkpoint path before loading any role.
+            # This prevents a partially restored actor from being left in a
+            # live trainer when the paired critic checkpoint is missing.
+            for name in normalized_engine:
+                path = os.path.join(
+                    Saver.get_save_root(
+                        self.config.experiment_name,
+                        self.config.trial_name,
+                        self.config.fileroot,
+                    ),
+                    name,
+                    "recover_checkpoint",
+                )
+                if not os.path.exists(path):
+                    raise RuntimeError(
+                        "Recovery metadata exists but a required training "
+                        f"checkpoint is missing for role {name}; refusing "
+                        "a partially restored trainer."
+                    )
+            for key, expected in (expected_trainer_state or {}).items():
+                # Legacy checkpoints predate critic-only rounds and imply zero.
+                observed = recover_info.trainer_state.get(key, 0)
+                if observed != expected:
+                    raise ValueError(
+                        f"Recovery trainer state mismatch for {key}: "
+                        f"saved={observed}, configured={expected}"
+                    )
             logger.info(f"Recovering from {recover_info.last_step_info.next()}.")
             saver.load_state_dict(recover_info.saver_info)
             self.freq_ctl.load_state_dict(recover_info.checkpoint_info)
@@ -357,7 +400,22 @@ class RecoverHandler:
             dataloader.load_state_dict(recover_info.dataloader_info)
 
             global_step = recover_info.last_step_info.global_step
-            recovery_version = global_step + 1
+            recovery_version = recover_info.trainer_state.get(
+                "policy_version", global_step + 1
+            )
+            if type(recovery_version) is not int or recovery_version < 0:
+                raise ValueError("Recovered policy_version must be a non-negative int")
+            if "num_critic_only_steps" in recover_info.trainer_state:
+                expected_version = max(
+                    0,
+                    global_step
+                    + 1
+                    - recover_info.trainer_state["num_critic_only_steps"],
+                )
+                if recovery_version != expected_version:
+                    raise ValueError(
+                        "Recovered policy version disagrees with warmup rounds"
+                    )
 
             is_awex_colocate = self._should_run_awex_colocate_transfer(
                 inference_engine=inference_engine,
@@ -404,10 +462,22 @@ class RecoverHandler:
                     # Always resume: leaving rollout paused after a failed
                     # checkpoint load or transfer would hang every later step.
                     inference_engine.resume()
-                update_engine.set_version(recovery_version)
+                for engine_ in normalized_engine.values():
+                    engine_.set_version(recovery_version)
                 inference_engine.set_version(recovery_version)
             return recover_info
-        except (FileNotFoundError, InValidRecoverInfo):
+        except (FileNotFoundError, InValidRecoverInfo) as exc:
+            if recover_info is not None:
+                raise RuntimeError(
+                    "Recovery metadata exists but a required training checkpoint "
+                    "could not be loaded; refusing to continue with partially "
+                    "restored actor/critic state."
+                ) from exc
+            if expected_trainer_state and any(expected_trainer_state.values()):
+                if os.path.exists(recover_info_path):
+                    raise RuntimeError(
+                        "Invalid critic-only recovery metadata; refusing a fresh start"
+                    ) from exc
             logger.warning(
                 f"Resume info not found at {recover_info_path}. "
                 f"This should not be a resumed experiment!"

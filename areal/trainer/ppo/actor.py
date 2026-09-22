@@ -89,6 +89,7 @@ class PPOActor:
         self.gae_lambda_kwargs = (
             dict(config.gae_lambda_kwargs) if self._gae_lambda_is_custom else {}
         )
+        self.critic_gae_lambda = config.critic_gae_lambda
         self.gae_timestep_unit = config.gae_timestep_unit
         self.mask_no_eos_with_zero = config.mask_no_eos_with_zero
 
@@ -155,6 +156,7 @@ class PPOActor:
             f"  reward_norm: {config.reward_norm if config.reward_norm else 'DISABLED (None)'}"
         )
         logger.info(f"  gae_lambda: {config.gae_lambda}")
+        logger.info(f"  critic_gae_lambda: {config.critic_gae_lambda}")
         logger.info(f"  gae_timestep_unit: {config.gae_timestep_unit}")
         logger.info(f"  eps_clip: {config.eps_clip}")
         logger.info("=" * 70)
@@ -345,7 +347,30 @@ class PPOActor:
                 gae_lambda=gae_lambda,
                 bootstrap_values=bootstrap_values,
             )
-        data["returns"] = returns
+        critic_gae_lambda = getattr(self, "critic_gae_lambda", None)
+        if critic_gae_lambda is not None:
+            if self.gae_timestep_unit == "turn":
+                assert turn_ids is not None
+                _, returns = _compute_turn_level_gae(
+                    rewards=rewards,
+                    values=values,
+                    loss_mask=loss_mask,
+                    turn_ids=turn_ids,
+                    seq_no_eos_mask=seq_no_eos_mask,
+                    discount=self.discount,
+                    gae_lambda=float(critic_gae_lambda),
+                    bootstrap_values=bootstrap_values,
+                )
+            else:
+                _, returns = _compute_token_level_gae(
+                    rewards=rewards,
+                    values=values,
+                    loss_mask=loss_mask,
+                    seq_no_eos_mask=seq_no_eos_mask,
+                    discount=self.discount,
+                    gae_lambda=float(critic_gae_lambda),
+                    bootstrap_values=bootstrap_values,
+                )
 
         # Optionally perform advantage normalization.
         if self.adv_norm is not None:
@@ -354,6 +379,7 @@ class PPOActor:
             advantages = self.adv_norm(advantages, loss_mask, group_sizes=group_sizes)
 
         # Store data in the dict.
+        data["returns"] = returns
         data["advantages"] = advantages
         data["kl_rewards"] = kl_rewards
         data["tot_rewards"] = gae_kl_rewards + gae_outcome_rewards

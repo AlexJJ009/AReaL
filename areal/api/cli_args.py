@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 import os
 import warnings
 from dataclasses import MISSING as dataclass_missing
@@ -1744,6 +1745,13 @@ class PPOActorConfig(TrainEngineConfig):
             "per local trajectory."
         },
     )
+    critic_gae_lambda: float | None = field(
+        default=None,
+        metadata={
+            "help": "Optional static GAE lambda used only for critic returns. "
+            "None reuses gae_lambda-derived returns for backward compatibility."
+        },
+    )
     gae_lambda_kwargs: dict[str, Any] = field(
         default_factory=dict,
         metadata={
@@ -1882,6 +1890,23 @@ class PPOActorConfig(TrainEngineConfig):
             )
         if isinstance(self.gae_lambda, str) and not self.gae_lambda:
             raise ValueError("gae_lambda function path must not be empty")
+
+        if self.critic_gae_lambda is not None:
+            if isinstance(self.critic_gae_lambda, bool) or not isinstance(
+                self.critic_gae_lambda, int | float
+            ):
+                raise ValueError(
+                    "critic_gae_lambda must be a finite float in [0, 1] or None, "
+                    f"got {self.critic_gae_lambda!r}"
+                )
+            critic_gae_lambda = float(self.critic_gae_lambda)
+            if not math.isfinite(critic_gae_lambda) or not (
+                0.0 <= critic_gae_lambda <= 1.0
+            ):
+                raise ValueError(
+                    "critic_gae_lambda must be a finite float in [0, 1] or None, "
+                    f"got {self.critic_gae_lambda!r}"
+                )
 
         if self.gae_timestep_unit not in {"token", "turn"}:
             raise ValueError(
@@ -3429,11 +3454,61 @@ class PPOConfig(BaseExperimentConfig):
             "This results in variable-sized batches of valid data."
         },
     )
+    num_critic_only_steps: int = field(
+        default=0,
+        metadata={
+            "help": "Number of initial PPO train steps that update only the critic. "
+            "Zero disables critic-only warmup."
+        },
+    )
 
     def __post_init__(self):
         """Validate the eval generation config."""
         if self.eval_gconfig is None:
             self.eval_gconfig = self.gconfig.new()
+        if isinstance(self.num_critic_only_steps, bool) or not isinstance(
+            self.num_critic_only_steps, int
+        ):
+            raise ValueError(
+                "num_critic_only_steps must be a non-negative integer, got "
+                f"{self.num_critic_only_steps!r}"
+            )
+        if self.num_critic_only_steps < 0:
+            raise ValueError(
+                "num_critic_only_steps must be a non-negative integer, got "
+                f"{self.num_critic_only_steps}"
+            )
+        if self.num_critic_only_steps > 0:
+            critic = self.critic
+            if isinstance(critic, (dict, DictConfig)):
+                has_critic = critic is not None
+                is_critic = bool(critic.get("is_critic", False))
+            else:
+                has_critic = critic is not None
+                is_critic = bool(getattr(critic, "is_critic", False))
+            if not has_critic or not is_critic:
+                raise ValueError(
+                    "num_critic_only_steps > 0 requires a critic config with "
+                    "is_critic=True"
+                )
+        actor = self.actor
+        if isinstance(actor, (dict, DictConfig)):
+            critic_gae_lambda = actor.get("critic_gae_lambda")
+        else:
+            critic_gae_lambda = getattr(actor, "critic_gae_lambda", None)
+        if critic_gae_lambda is not None:
+            critic = self.critic
+            if isinstance(critic, (dict, DictConfig)):
+                has_critic = critic is not None
+                is_critic = bool(critic.get("is_critic", False))
+            else:
+                has_critic = critic is not None
+                is_critic = bool(getattr(critic, "is_critic", False))
+            if not has_critic or not is_critic:
+                raise ValueError(
+                    "actor.critic_gae_lambda requires a critic config with "
+                    "is_critic=True"
+                )
         if self.rollout.deterministic_sampling:
             for config_name, generation_config in (
                 ("gconfig", self.gconfig),

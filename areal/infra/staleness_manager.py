@@ -65,6 +65,7 @@ class StalenessManager:
         # Thread-safe access to rollout statistics
         self.lock = Lock()
         self.rollout_stat = RolloutStat()
+        self._consumed_without_update = 0
 
     def get_pending_limit(self) -> int:
         """Get the maximum number of pending rollouts allowed.
@@ -104,7 +105,11 @@ class StalenessManager:
 
             # Calculate staleness-based capacity
             ofp = self.max_staleness
-            sample_cnt = self.rollout_stat.accepted + self.rollout_stat.running
+            sample_cnt = (
+                self.rollout_stat.accepted
+                + self.rollout_stat.running
+                - self._consumed_without_update
+            )
             consumer_bs = max(1, self.consumer_batch_size)
             staleness_capacity = (ofp + current_version + 1) * consumer_bs - sample_cnt
 
@@ -129,6 +134,18 @@ class StalenessManager:
         with self.lock:
             consumer_bs = max(1, self.consumer_batch_size)
             self.rollout_stat.accepted = version * consumer_bs
+            self._consumed_without_update = 0
+
+    def on_batch_consumed_without_update(self) -> None:
+        """Release one batch of capacity without changing the behavior policy.
+
+        Critic-only rounds consume prompts but do not publish actor weights.
+        Grant the same capacity as one normal policy update would, while keeping
+        accepted statistics and token policy-version labels unchanged. Units
+        are prompt groups (consumer_batch_size), not expanded trajectories.
+        """
+        with self.lock:
+            self._consumed_without_update += max(1, self.consumer_batch_size)
 
     def on_rollout_enqueued(self) -> None:
         """Callback when a rollout is enqueued as a pending input task.

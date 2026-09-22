@@ -1,0 +1,42 @@
+# Minimal native-trainer example; this is not the DAPO experiment launcher.
+# Algorithm settings follow miles-values aa2071f8's scalar PPO branch.
+defaults:
+  - gsm8k_ppo
+  - _self_
+
+experiment_name: gsm8k-ppo-critic-warmup
+num_critic_only_steps: 10
+
+train_dataset:
+  batch_size: 16
+
+gconfig:
+  n_samples: 8
+
+actor:
+  gae_lambda: 0.95
+  critic_gae_lambda: 1.0
+  adv_norm: null
+  reward_bias: 0.0
+  reward_scaling: 1.0
+  eps_clip: 0.2
+  eps_clip_higher: 0.28
+  optimizer:
+    lr: 1.0e-6
+    weight_decay: 0.01
+    beta2: 0.98
+    warmup_steps: 5
+
+critic:
+  eps_clip: 0.2
+  optimizer:
+    type: adam
+    lr: 5.0e-6
+    weight_decay: 0.01
+    beta1: 0.9
+    beta2: 0.98
+    eps: 1.0e-8
+    lr_scheduler_type: constant
+    gradient_clipping: 1.0
+    warmup_steps_proportion: 0.001
+    warmup_steps: 5
