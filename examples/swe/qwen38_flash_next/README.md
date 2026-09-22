@@ -10,7 +10,7 @@ The long-context settings are:
 - Chunked LM-head loss: `enable_chunked_logits: true`, chunk size 1024.
 - PLE causal chunks: `QWEN_PLE_CHUNK_TOKENS=8192`; overlapping causal history is
   retained within each sequence, and shared weight gradients accumulate in FP32.
-- QSA query chunks: `QWEN_QSA_QUERY_CHUNK_SIZE=1024`.
+- QSA index-score workspace: the pinned upstream bridge limits it to 1 GiB.
 - Actor allocator: `expandable_segments:True`; rollout: `False`. AWEX allocates only its
   IPC staging buffers with expandable segments temporarily disabled, restoring all
   runtime allocator settings before serialization, including on packing errors. Training
@@ -124,3 +124,32 @@ batch is consumed once, with the normal optimizer update and AWEX transfer betwe
 batches; exhaustion cannot fall back to live rollout. This reproduces the sequence of
 inputs, not exact RNG, concurrent generation, or optimizer recovery. It is a diagnostic,
 not an RL learning or evaluation run.
+
+## Pinned bridge and multimodal recipes
+
+`runtime.env` pins upstream ModelScope mcore-bridge to
+`bc58ea9cf9b1dd2314637703973904f359e67c75`. `submit_rl.sh` rejects a different or dirty
+bridge checkout before submitting. Supply its path through `MCORE_BRIDGE_ROOT`. This
+main revision already includes QSA/PLE int64 offsets, checkpoint helpers and QSA indexer
+freezing; do not apply the duplicate local QSA patch. The earlier SWE recipe used an
+AReaL-local checkpoint validator, explaining why its older bridge worked without the
+newly imported checkpoint module.
+
+Set `QWEN_CONFIG` to `swe_mm_rl.yaml` for the small ten-step vision RL recipe (batch2,
+samples4, CP2, chunk loss1024, PLE chunk8192, staleness2). Paths, images, reservation,
+streams and the schema2 frozen contract remain external environment settings. Use fresh
+trial names and disable diagnostic replay for real RL.
+
+Use `submit_rl.sh swe-eval` with `swe_mm_eval.yaml` for one full validation pass. Set
+`QWEN_ARENA_TASK_IDS_FILE` to explicit reference Env versions, `QWEN_EVAL_TASK_COUNT` to
+their count, and `QWEN_ARENA_STREAMS_FILE` to the exact reference Harness and Reward
+configuration. Both sample counts are one; training steps are zero, recovery is
+disabled, and validation is unshuffled without dropping tasks. No optimizer update or
+asynchronous training prefetch occurs. The current reference uses 32768 response tokens,
+temperature1 and medium reasoning effort; these differ from the earlier 65536-token
+reference.
+
+Compare the complete task set, including failed tasks as zero where required by the
+reference aggregation. A single sampled pass need not produce identical trajectories or
+exactly the same score. Do not interpret a zero-gradient replay as proof of effective RL
+learning, checkpoint correctness, or AWEX value equality.

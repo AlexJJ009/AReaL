@@ -1,0 +1,9 @@
+arena_streams:
+- name: swemm
+  stream_id: swebench-multimodal
+  sampling_weight: 1
+  harness: areal-rust-core-runtime@1.0.29-master-b199fd0-mm-native
+  llm_protocol: chat_completions
+  expected_reward_ref:
+    key: swebench-mm-official-tests
+    version: 1.2.0

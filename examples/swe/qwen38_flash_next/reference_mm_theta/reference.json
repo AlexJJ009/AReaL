@@ -1,0 +1,37 @@
+{
+  "job_id": "areal-master-b199fd0-mm-theta-full-2609212153",
+  "benchmark_ref": {
+    "key": "swebench-mm-areal-native",
+    "version": "1.0.0"
+  },
+  "harness_ref": {
+    "key": "areal-rust-core-runtime",
+    "version": "1.0.29-master-b199fd0-mm-native"
+  },
+  "model_ref": {
+    "key": "areal-qwen38-flash-next-theta",
+    "version": "1.0.1-native-medium"
+  },
+  "sample_numbers": 1,
+  "concurrency": 64,
+  "task_count": 480,
+  "reward_ref": {
+    "key": "swebench-mm-official-tests",
+    "version": "1.2.0"
+  },
+  "aggregation": {
+    "method": "mean",
+    "failed_task_policy": "failed_as_zero"
+  },
+  "harness_content_hash": "b8f056ed323529c4708adad6620401081736f3ff59881415baf5856888604819",
+  "harness_parameters": {
+    "max_tokens": 32768,
+    "reasoning_effort": "medium",
+    "temperature": 1.0
+  },
+  "model_parameters": {
+    "reasoning_effort": "medium",
+    "temperature": 1
+  },
+  "checkpoint_identity_verified": false
+}

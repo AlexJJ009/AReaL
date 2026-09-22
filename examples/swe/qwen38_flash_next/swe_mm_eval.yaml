@@ -1,9 +1,10 @@
-experiment_name: qwen38-swe-rl256-cp1
+# One full, fixed-weight evaluation pass; select explicit task versions externally.
+experiment_name: chucai-qwen38-swemm-parity
 trial_name: ${oc.env:QWEN_ARENA_TRIAL}
 seed: 1234
 enable_offload: false
-total_train_epochs: 10
-total_train_steps: ${oc.env:TOTAL_TRAIN_STEPS,10}
+total_train_epochs: 1
+total_train_steps: 0
 tokenizer_path: ${oc.env:QWEN_MODEL}
 should_accept_fn: null
 dynamic_bs: false
@@ -18,9 +19,9 @@ allocation_mode: megatron[actor]:(attn:d1p4t8c2|ffn:d1p4t1e16)|sglang[rollout]:d
 scheduler:
   type: slurm
 gconfig:
-  n_samples: 8
+  n_samples: 1
   min_new_tokens: 0
-  max_new_tokens: 65536
+  max_new_tokens: 32768
   max_tokens: 262144
   greedy: false
   top_p: 1.0
@@ -33,13 +34,13 @@ gconfig:
   frequency_penalty: 0.0
   lora_name: ''
   use_beam_search: false
-  reward_normalization: true
+  reward_normalization: false
   reward_normalization_use_std: false
   drop_incomplete_group: false
 eval_gconfig:
-  n_samples: 8
+  n_samples: 1
   min_new_tokens: 0
-  max_new_tokens: 65536
+  max_new_tokens: 32768
   max_tokens: 262144
   greedy: false
   top_p: 1.0
@@ -58,10 +59,10 @@ rollout:
   backend: sglang:d16t4
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
-  max_concurrent_rollouts: 128
-  queue_size: null
-  consumer_batch_size: 16
-  max_head_offpolicyness: 2
+  max_concurrent_rollouts: 64
+  queue_size: ${oc.env:QWEN_EVAL_TASK_COUNT,480}
+  consumer_batch_size: ${oc.env:QWEN_EVAL_TASK_COUNT,480}
+  max_head_offpolicyness: 0
   enable_rollout_tracing: true
   check_trajectory_format: false
   scheduling_spec:
@@ -103,7 +104,6 @@ rollout:
     - test "$TMS_INIT_ENABLE" = 0
     - test "$TMS_INIT_ENABLE_CPU_BACKUP" = 0
     - cd ${oc.env:QWEN_REPO}
-    # Requires a fresh writable layer of SGLang 0.5.19.dev125+g119b5ffe4.
     - python3 -m examples.swe.qwen38_flash_next.patch_sglang_qsa_topk
     - python3 -m examples.swe.qwen38_flash_next.patch_sglang_qsa_compress_gather
     image: ${oc.env:QWEN_ROLLOUT_IMAGE}
@@ -142,7 +142,7 @@ rollout:
   return_routed_experts: false
   _version: v1
 actor:
-  min_usable_group_size: 8
+  min_usable_group_size: 1
   backend: megatron:(attn:d1p4t8c2|ffn:d1p4t1e16)
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
@@ -154,13 +154,13 @@ actor:
   grad_reduce_dtype: float32
   weight_update_mode: awex
   mb_spec:
-    n_mbs: 128
+    n_mbs: 480
     granularity: 1
     max_tokens_per_mb: 262144
     n_mbs_divisor: 8
   optimizer:
     type: adam
-    lr: 3.0e-06
+    lr: 0.0
     weight_decay: 0.01
     beta1: 0.9
     beta2: 0.95
@@ -188,7 +188,7 @@ actor:
     moe_router_bias_update_rate: 0.0
     bridge_type: mcore-bridge
     freeze_ple_table: true
-    language_model_only: true
+    language_model_only: false
     use_bridge_for_update_weights: false
     enable_mtp: false
     moe_permute_fusion: true
@@ -284,21 +284,19 @@ econfig:
   arena_request_timeout: 180.0
   arena_request_retries: 1
   arena_poll_interval: 5.0
-  arena_task_envs:
-    DSH_LLM_REQUEST_TIMEOUT_SECONDS: '7200'
   timeout: 15000.0
   arena_streams_file: ${oc.env:QWEN_ARENA_STREAMS_FILE}
   arena_mixture_epoch_size: 0
 sglang:
   model_path: ${tokenizer_path}
   random_seed: 1234
-  skip_tokenizer_init: false
+  skip_tokenizer_init: true
   dtype: bfloat16
   context_length: 262144
   max_prefill_tokens: 8192
   chunked_prefill_size: 8192
   max_running_requests: 16
-  mem_fraction_static: 0.70
+  mem_fraction_static: 0.7
   attention_backend: null
   sampling_backend: null
   disable_cuda_graph: false
@@ -308,8 +306,9 @@ sglang:
   mamba_ssm_dtype: bfloat16
   ep_size: 4
   log_level: info
+  enable_multimodal: true
 train_dataset:
-  batch_size: 16
+  batch_size: ${oc.env:QWEN_EVAL_TASK_COUNT,480}
   shuffle: false
   pin_memory: true
   num_workers: 0
@@ -317,7 +316,15 @@ train_dataset:
   type: rl
   max_length: 262144
   drop_last: true
-valid_dataset: null
+valid_dataset:
+  batch_size: ${oc.env:QWEN_EVAL_TASK_COUNT,480}
+  shuffle: false
+  pin_memory: true
+  num_workers: 0
+  path: ''
+  type: rl
+  max_length: 262144
+  drop_last: false
 saver:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
@@ -326,7 +333,7 @@ saver:
   freq_steps: null
   freq_secs: null
 recover:
-  mode: auto
+  mode: disabled
   retries: 3
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
@@ -343,6 +350,7 @@ evaluator:
   freq_epochs: null
   freq_steps: null
   freq_secs: null
+  eval_before_train: true
 stats_logger:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
