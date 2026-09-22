@@ -56,7 +56,12 @@ from areal.api import (
     WeightUpdateMeta,
     WorkflowLike,
 )
-from areal.api.cli_args import OptimizerConfig, PerfTracerConfig, TrainEngineConfig
+from areal.api.cli_args import (
+    MicroBatchSpec,
+    OptimizerConfig,
+    PerfTracerConfig,
+    TrainEngineConfig,
+)
 from areal.api.io_struct import DeviceRuntimeInfo
 from areal.engine.core import (
     aggregate_eval_losses,
@@ -243,6 +248,54 @@ class FSDPEngine(TrainEngine):
             trust_remote_code=True,
         )
         self.is_vision_model = is_valid_vision_model(self.model_config.model_type)
+        self._scalar_value_artifact = self.config.is_critic and (
+            getattr(self.model_config, "areal_scalar_value_artifact", False)
+            or os.path.isfile(os.path.join(self.config.path, "value_manifest.json"))
+            or getattr(self.config, "value_contract", None) is not None
+        )
+        if self._scalar_value_artifact:
+            from areal.trainer.ppo.value_checkpoint import (
+                PROTOCOL_KEYS,
+                validate_value_artifact,
+            )
+
+            contract = getattr(self.config, "value_contract", None)
+            if contract is not None:
+                if set(contract) != {
+                    "identity",
+                    "protocol",
+                    "require_pretrained",
+                } or not isinstance(contract["require_pretrained"], bool):
+                    raise ValueError(
+                        "value_contract requires identity, protocol, require_pretrained"
+                    )
+                if not isinstance(contract["identity"], dict) or set(
+                    contract["identity"]
+                ) != {"backbone_id", "tokenizer_id"}:
+                    raise ValueError(
+                        "value_contract requires expected backbone_id and tokenizer_id"
+                    )
+                if (
+                    not isinstance(contract["protocol"], dict)
+                    or not PROTOCOL_KEYS <= contract["protocol"].keys()
+                ):
+                    raise ValueError("value_contract requires expected target protocol")
+            self._value_manifest = validate_value_artifact(
+                self.config.path,
+                expected_identity=contract["identity"]
+                if contract is not None
+                else None,
+                expected_protocol=contract["protocol"]
+                if contract is not None
+                else None,
+                require_pretrained=contract["require_pretrained"]
+                if contract is not None
+                else False,
+            )
+            if self.config.init_from_scratch or self.config.use_lora:
+                raise ValueError(
+                    "Scalar value artifacts require full strict weight loading"
+                )
 
         # FSDP-specific initialization
         self.cpu_offload: CPUOffloadPolicy | None = None
@@ -414,18 +467,25 @@ class FSDPEngine(TrainEngine):
         is_llm_cpu_load = (
             self.config.fsdp.memory_efficient_load
             and not self.config.init_from_scratch
-            and not self.is_vision_model
+            and (not self.is_vision_model or self._scalar_value_artifact)
         )
 
         if is_llm_cpu_load or self.config.use_lora:
             need_broadcast = True
             if dist.get_rank() == 0:
                 if is_llm_cpu_load:
-                    pretrained_state = get_state_dict_from_repo_id_or_path(
-                        self.config.path
-                    )
+                    if self._scalar_value_artifact:
+                        from areal.trainer.ppo.value_checkpoint import (
+                            scalar_value_state,
+                        )
+
+                        pretrained_state = scalar_value_state(self.config.path)
+                    else:
+                        pretrained_state = get_state_dict_from_repo_id_or_path(
+                            self.config.path
+                        )
                     missing, unexpected = self.model.load_state_dict(
-                        pretrained_state, strict=False
+                        pretrained_state, strict=self._scalar_value_artifact
                     )
                     if missing:
                         self.logger.warning(
@@ -759,6 +819,8 @@ class FSDPEngine(TrainEngine):
             with trace_scope("fsdp_engine.forward"):
                 outputs = self.model(**inputs)
             logits = outputs.logits.squeeze(0)
+            if self._scalar_value_artifact and logits.shape[-1] != 1:
+                raise ValueError("Sealed value model must output one scalar per token")
 
             # Release tree attention metadata after forward pass
             for key in tree_attn_keys:
@@ -1007,6 +1069,20 @@ class FSDPEngine(TrainEngine):
         # in forward/backward.
         dtype = getattr(torch, self.config.optimizer_dtype)
 
+        if self._scalar_value_artifact:
+            from areal.trainer.ppo.value_checkpoint import (
+                create_scalar_value_model,
+                validate_value_artifact,
+            )
+
+            validate_value_artifact(self.config.path)
+            return create_scalar_value_model(
+                self.config.path,
+                config=self.model_config,
+                initialize_only=self.config.fsdp.memory_efficient_load,
+                dtype=dtype,
+                attn_implementation=self.config.attn_impl,
+            )
         if self.config.is_critic:
             model_class = AutoModelForTokenClassification
             model_kwargs = {"num_labels": 1}
@@ -1051,7 +1127,9 @@ class FSDPEngine(TrainEngine):
             # Weights are broadcast from rank 0 after FSDP sharding in initialize().
             # Note: meta device optimization only applies to LLM (not VLM), because
             # VLM uses from_pretrained() which doesn't support meta device context.
-            if not self.is_vision_model and dist.get_rank() != 0:
+            if (
+                not self.is_vision_model or self._scalar_value_artifact
+            ) and dist.get_rank() != 0:
                 loading_device = "meta"
             else:
                 loading_device = "cpu"
@@ -1062,7 +1140,15 @@ class FSDPEngine(TrainEngine):
 
         # Note: VLMs often have vision_tower in fp32 already; loading whole
         # model in optimizer_dtype (fp32 default) is consistent.
-        if self.is_vision_model:
+        if self._scalar_value_artifact:
+            self.tokenizer = load_hf_tokenizer(self.config.path)
+            self.processor = None
+            tik = time.perf_counter()
+            with torch.device(loading_device):
+                model = self._create_llm_actor_or_critic()
+                if self.config.disable_dropout:
+                    disable_dropout_in_model(model)
+        elif self.is_vision_model:
             # Compute dtype (config.dtype) is what FSDP2 MP casts to in
             # forward/backward; storage dtype (optimizer_dtype) is restricted
             # to fp32/bf16 by config validation, so checking it would never
@@ -1815,12 +1901,61 @@ class FSDPEngine(TrainEngine):
                 tokenizer.save_pretrained(path)
             if processor is not None:
                 processor.save_pretrained(path)
+            if self._scalar_value_artifact:
+                import json
+                from pathlib import Path
+
+                from areal.trainer.ppo.value_checkpoint import (
+                    file_digest,
+                    validate_value_artifact,
+                    write_value_manifest,
+                )
+
+                parent = validate_value_artifact(self.config.path)
+                report = {
+                    "kind": "online",
+                    "parent_manifest_sha256": file_digest(
+                        Path(self.config.path) / "value_manifest.json"
+                    ),
+                    "policy_version": self.get_version(),
+                    "note": "Online value export; not independent pretraining qualification",
+                }
+                (Path(path) / "value_export.json").write_text(
+                    json.dumps(report, indent=2) + "\n"
+                )
+                write_value_manifest(
+                    path,
+                    identity=parent["identity"],
+                    protocol=parent["protocol"],
+                    qualification={
+                        "kind": "online",
+                        "report": "value_export.json",
+                        "passed": False,
+                    },
+                )
         dist.barrier(group=self.cpu_group)
 
     def _load_model_from_hf(self, path: str):
         """Load model from HuggingFace format."""
+        if self._scalar_value_artifact:
+            from areal.trainer.ppo.value_checkpoint import (
+                validate_scalar_state_layout,
+                validate_value_artifact,
+            )
+
+            validate_value_artifact(
+                path,
+                expected_identity=self._value_manifest["identity"],
+                expected_protocol=self._value_manifest["protocol"],
+            )
+            validate_scalar_state_layout(path, self.model)
         if dist.get_rank() == 0:
-            full_state = get_state_dict_from_repo_id_or_path(path)
+            if self._scalar_value_artifact:
+                from areal.trainer.ppo.value_checkpoint import scalar_value_state
+
+                full_state = scalar_value_state(path)
+            else:
+                full_state = get_state_dict_from_repo_id_or_path(path)
         else:
             full_state = {}
 
@@ -1943,7 +2078,15 @@ class FSDPEngine(TrainEngine):
         else:
             input_ = amend_position_ids(input_)
 
-        mb_list = split_padded_tensor_dict_into_mb_list(input_, self.config.mb_spec)
+        mb_spec = self.config.mb_spec
+        if is_qwen3_5_model(self.model_config.model_type):
+            # GatedDeltaNet/convolution do not reset their state at cu_seqlens.
+            # Keep one episode per forward; n_mbs is a hint, never permission
+            # to mix recurrent states. Report actual count from train_batch.
+            mb_spec = MicroBatchSpec.new(
+                mb_spec, n_mbs=input_["input_ids"].shape[0], granularity=1
+            )
+        mb_list = split_padded_tensor_dict_into_mb_list(input_, mb_spec)
         mb_list.mbs = [pack_tensor_dict(mb) for mb in mb_list.mbs]
         mb_list = pad_mb_list(
             mb_list,

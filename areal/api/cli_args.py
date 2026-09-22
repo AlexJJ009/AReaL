@@ -2007,6 +2007,14 @@ class PPOActorConfig(TrainEngineConfig):
 class PPOCriticConfig(TrainEngineConfig):
     """Configuration for PPO critic model, a subclass of a TrainEngine."""
 
+    value_contract: dict[str, Any] | None = field(
+        default=None,
+        metadata={
+            "help": "Optional strict scalar checkpoint contract: expected identity, "
+            "protocol and require_pretrained. None preserves legacy PPO loading. "
+            "SAO must supply a complete consuming-run contract."
+        },
+    )
     ppo_n_minibatches: int = field(
         default=4, metadata={"help": "Number of minibatches for each PPO update"}
     )

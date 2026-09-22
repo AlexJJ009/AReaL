@@ -12,7 +12,7 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from transformers import PreTrainedTokenizerFast, Qwen2Config, Qwen2ForCausalLM
 
-from areal.api import FinetuneSpec
+from areal.api import FinetuneSpec, SaveLoadMeta
 from areal.api.cli_args import (
     FSDPEngineConfig,
     MicroBatchSpec,
@@ -65,6 +65,7 @@ def main():
     parser.add_argument("--microbatches", type=int, default=1)
     parser.add_argument("--dtype", choices=["float32", "bfloat16"], default="bfloat16")
     parser.add_argument("--attention", default="flash_attention_2")
+    parser.add_argument("--independent-value", action="store_true")
     args = parser.parse_args()
     rank, world = int(os.environ["RANK"]), int(os.environ["WORLD_SIZE"])
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
@@ -75,6 +76,10 @@ def main():
         if rank == 0:
             args.output.mkdir(parents=True, exist_ok=True)
             build_model(model_path)
+            if args.independent_value:
+                from tests.test_sao_value_checkpoint import make_artifact
+
+                make_artifact(args.output)
         ready = [str(model_path)]
         dist.broadcast_object_list(ready, src=0)
         common = dict(
@@ -115,7 +120,15 @@ def main():
         )
         critic = FSDPPPOCritic(
             PPOCriticConfig(
-                **common, optimizer=optimizer(5e-6), is_critic=True, eps_clip=1000
+                **{
+                    **common,
+                    "path": str(args.output / "value")
+                    if args.independent_value
+                    else ready[0],
+                },
+                optimizer=optimizer(5e-6),
+                is_critic=True,
+                eps_clip=1000,
             )
         )
         ft = FinetuneSpec(
@@ -154,6 +167,27 @@ def main():
         ]
         for row, values in zip(raw, critic.compute_values(raw)):
             row["values"] = values
+        if args.independent_value:
+            from areal.trainer.ppo.value_checkpoint import create_scalar_value_model
+
+            with torch.device(actor.device):
+                oracle = create_scalar_value_model(
+                    critic.config.path,
+                    dtype=torch.bfloat16,
+                    attn_implementation=args.attention,
+                ).eval()
+            for row in raw:
+                expected = (
+                    oracle(
+                        input_ids=row["input_ids"], attention_mask=row["attention_mask"]
+                    )
+                    .logits.squeeze(-1)
+                    .float()
+                )
+                torch.testing.assert_close(
+                    row["values"].float(), expected, rtol=0.01, atol=0.002
+                )
+            del oracle
         fixed = actor.compute_advantages(copy.deepcopy(raw))
         before = {"actor": snapshot(actor), "critic": snapshot(critic)}
         targets = [row["returns"].clone() for row in fixed]
@@ -171,6 +205,27 @@ def main():
             assert changed[role] > 0
         for row, target in zip(fixed, targets):
             torch.testing.assert_close(row["returns"], target, rtol=0, atol=0)
+        reload_checked = False
+        if args.independent_value:
+            saved_values = critic.compute_values(raw)
+            export = args.output / "value_reload"
+            critic.save(
+                SaveLoadMeta(
+                    path=str(export),
+                    weight_format="hf",
+                    with_optim=False,
+                    tokenizer=critic.tokenizer,
+                )
+            )
+            with torch.no_grad():
+                for parameter in critic.model.parameters():
+                    parameter.zero_()
+            critic.load(
+                SaveLoadMeta(path=str(export), weight_format="hf", with_optim=False)
+            )
+            for actual, expected in zip(critic.compute_values(raw), saved_values):
+                torch.testing.assert_close(actual, expected, rtol=0.01, atol=0.002)
+            reload_checked = True
         if rank == 0:
             torch.save({"before": before, "after": after}, args.output / "weights.pt")
             (args.output / "result.json").write_text(
@@ -185,6 +240,8 @@ def main():
                         "critic_lr": 5e-6,
                         "dtype": args.dtype,
                         "attention": args.attention,
+                        "independent_value": args.independent_value,
+                        "value_reload_checked": reload_checked,
                         "scope": "M4 synthetic real FSDP; not SAO end-to-end or value qualification",
                     },
                     indent=2,
