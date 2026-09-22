@@ -1375,3 +1375,47 @@ def test_native_failure_system_status_takes_precedence(native_model_failure_rece
         _native_failure_disposition(native_model_failure_receipt, status="SETUP_FAILED")
         == "system_failure_reject"
     )
+
+
+@pytest.mark.parametrize("context_overflow", [False, True])
+@pytest.mark.parametrize("interaction_count", [0, 3])
+def test_grader_error_is_system_failure_even_with_model_evidence(
+    context_overflow, interaction_count, native_model_failure_receipt
+):
+    """An evaluator ERROR cannot be rescued by model failure evidence."""
+    error = ArenaTaskFailedError(
+        task_id="task-1",
+        status="ERROR",
+        result=ArenaTaskResult(
+            task_id="task-1",
+            status="ERROR",
+            score=0.0,
+            raw=native_model_failure_receipt,
+        ),
+    )
+    assert (
+        ArenaStreamAgentWorkflow.classify_proxy_failure(
+            error,
+            context_overflow=context_overflow,
+            interaction_count=interaction_count,
+        )
+        == "system_failure_reject"
+    )
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "shared model request budget exhausted",
+        "model stopped without visible output or tool calls",
+        "tool calls and finish reason disagree",
+        "invalid tool name",
+    ],
+)
+def test_unattributed_native_harness_error_is_not_a_model_zero(message):
+    """Native exit code 1 alone does not establish healthy model attribution."""
+    raw = {
+        "error": f"harness: harness agent phase exited with code 1: {message}",
+        "harness": {"exit_code": 1, "phase": "agent", "result_status": "ERROR"},
+    }
+    assert _native_failure_disposition(raw) == "unknown_failure_reject"
