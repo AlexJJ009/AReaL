@@ -1,4 +1,4 @@
-arena_streams:
+streams:
 - name: swemm
   stream_id: swebench-multimodal
   sampling_weight: 1

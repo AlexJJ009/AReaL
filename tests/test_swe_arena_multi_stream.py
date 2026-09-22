@@ -831,7 +831,6 @@ def test_arena_failure_classifier_keeps_explicit_claude_agent_phase_failure():
         ("AGENT_MAX_TURNS_EXCEEDED", "outcome", 2),
         ("AGENT_RUN_TIMEOUT", "outcome_code", 2),
         ("AUTONOMOUS_INCOMPLETE_NO_SHIP", "error", 2),
-        ("LLM_RESPONSE_FAILED", "outcome", 2),
         ("LLM_RESPONSE_TIMEOUT", "outcome_code", 2),
         ("LLM_RESPONSE_FAILED", "outcome", 0),
     ],
@@ -1375,4 +1374,35 @@ def test_native_failure_system_status_takes_precedence(native_model_failure_rece
     assert (
         _native_failure_disposition(native_model_failure_receipt, status="SETUP_FAILED")
         == "system_failure_reject"
+    )
+
+
+@pytest.mark.parametrize("encoding", ["outcome", "outcome_code", "error"])
+@pytest.mark.parametrize("context_overflow", [False, True])
+def test_response_failure_is_rejected_without_independent_overflow(
+    encoding, context_overflow
+):
+    code = "LLM_RESPONSE_FAILED"
+    raw = {
+        "outcome": {"code": code},
+        "outcome_code": code,
+        "error": f"GAMEAGENT_OUTCOME_CODE={code} upstream_api_error",
+    }
+    error = ArenaTaskFailedError(
+        task_id="task-1",
+        status="HARNESS_FAILED",
+        result=ArenaTaskResult(
+            task_id="task-1",
+            status="HARNESS_FAILED",
+            score=None,
+            raw={encoding: raw[encoding]},
+        ),
+    )
+    disposition = ArenaStreamAgentWorkflow.classify_proxy_failure(
+        error,
+        context_overflow=context_overflow,
+        interaction_count=13,
+    )
+    assert disposition == (
+        "model_failure_zero" if context_overflow else "unknown_failure_reject"
     )

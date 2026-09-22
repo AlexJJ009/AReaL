@@ -483,3 +483,110 @@ async def test_concat_per_completion_rewards_do_not_fill_unscored_branch(monkeyp
     assert result["child"].reward is None
     assert result["main"].reward == 1.0
     assert not normalize_logical_rollout_rewards([result])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["inline", "online"])
+@pytest.mark.parametrize("metadata_error", [False, True, "non_json"])
+async def test_episode_metadata_preserves_export_and_reward(
+    monkeypatch, mode, metadata_error
+):
+    fake_client = _FakeProxyClient()
+    fake_client.context_overflow = False
+    fake_client.interaction.reward = 1.0
+    fake_client.interaction.metadata = {"existing": "kept"}
+    monkeypatch.setattr(
+        workflow_module, "OpenAIProxyClient", lambda *a, **kw: fake_client
+    )
+    agent = _SuccessfulAgent()
+    agent.get_episode_metadata = AsyncMock(
+        side_effect=ValueError("optional metadata failed")
+        if metadata_error is True
+        else None,
+        return_value={"unserializable": object()}
+        if metadata_error == "non_json"
+        else {"arena_task_id": "task-a", "arena_status": "OK"},
+    )
+    workflow = OpenAIProxyWorkflow(
+        mode=mode, agent=agent, proxy_gateway_addr="http://localhost"
+    )
+    workflow.agent.get_episode_metadata = agent.get_episode_metadata
+    if mode == "online":
+        monkeypatch.setattr(
+            workflow,
+            "_run_agent",
+            AsyncMock(
+                return_value=CompletedSessionInfo(
+                    session_api_key="session-key",
+                    session_id="session-1",
+                    worker_addr="",
+                )
+            ),
+        )
+    monkeypatch.setattr(workflow, "_grant_capacity", AsyncMock())
+    monkeypatch.setattr(
+        workflow_context, "get_aiohttp_session", AsyncMock(return_value=object())
+    )
+    workflow_context.set(WorkflowContext(task_id=1))
+    try:
+        result = await workflow.arun_episode(None, {})
+    finally:
+        workflow_context.set(WorkflowContext())
+        stats_tracker.export_all(reset=True)
+    assert result["completion-1"] is fake_client.interaction
+    assert result["completion-1"].reward == 1.0
+    metadata = result["completion-1"].metadata
+    assert metadata["existing"] == "kept"
+    assert metadata["session_id"] == "session-1"
+    assert metadata.get("arena_task_id") == (None if metadata_error else "task-a")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reason", ["upstream_api_error", "stream_abort:MessageParseError"]
+)
+async def test_response_failure_is_not_zeroed_or_exported(monkeypatch, reason):
+    from examples.swe.arena_agent import ArenaStreamAgentWorkflow
+    from examples.swe.arena_client import ArenaTaskFailedError, ArenaTaskResult
+
+    error = ArenaTaskFailedError(
+        task_id="task-1",
+        status="HARNESS_FAILED",
+        result=ArenaTaskResult(
+            task_id="task-1",
+            status="HARNESS_FAILED",
+            score=None,
+            raw={"error": f"GAMEAGENT_OUTCOME_CODE=LLM_RESPONSE_FAILED {reason}"},
+        ),
+    )
+
+    class Agent:
+        classify_proxy_failure = staticmethod(
+            ArenaStreamAgentWorkflow.classify_proxy_failure
+        )
+
+        async def run(self, data, **kwargs):
+            raise error
+
+    client = _FakeProxyClient(interaction_count=13)
+    client.context_overflow = False
+    client.set_last_reward = AsyncMock()
+    client.export_interactions = AsyncMock(return_value={})
+    monkeypatch.setattr(
+        workflow_module, "OpenAIProxyClient", lambda *args, **kwargs: client
+    )
+    workflow = OpenAIProxyWorkflow(mode="inline", agent=Agent())
+    monkeypatch.setattr(workflow, "_grant_capacity", AsyncMock())
+    monkeypatch.setattr(
+        workflow_context, "get_aiohttp_session", AsyncMock(return_value=object())
+    )
+    workflow_context.set(WorkflowContext(task_id=1))
+    try:
+        with pytest.raises(ArenaTaskFailedError) as caught:
+            await workflow.arun_episode(None, {})
+        assert caught.value is error
+    finally:
+        workflow_context.set(WorkflowContext())
+        stats_tracker.export_all(reset=True)
+    client.set_last_reward.assert_not_awaited()
+    client.export_interactions.assert_not_awaited()

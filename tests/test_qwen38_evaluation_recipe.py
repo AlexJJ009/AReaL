@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -104,3 +105,18 @@ def test_evaluation_ambiguous_source_rejected():
         select_evaluation_rows(
             [{"data_id": "env:a@v1"}, {"data_id": "env:a@v2"}], ["env:a@old"]
         )
+
+
+def test_reference_stream_recipe_loads_with_runtime_loader():
+    from examples.swe.arena_config import load_arena_stream_configs
+
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "examples/swe/qwen38_flash_next/reference_mm_theta/streams.yaml"
+    )
+    streams = load_arena_stream_configs({"arena_streams_file": str(path)})
+
+    assert len(streams) == 1
+    assert streams[0].llm_protocol == "chat_completions"
+    assert streams[0].expected_reward_ref.key
+    assert streams[0].expected_reward_ref.version
