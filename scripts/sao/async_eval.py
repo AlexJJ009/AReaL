@@ -9,6 +9,7 @@ import json
 import os
 import time
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from areal.api import WeightUpdateMeta
 from areal.api.alloc_mode import ModelAllocation
 from areal.api.cli_args import GRPOConfig, InferenceEngineConfig, SGLangConfig
 from areal.engine import RemoteSGLangEngine
+from areal.utils import name_resolve, names
 from areal.utils.saver import Saver
 
 
@@ -90,6 +92,8 @@ class AsyncEvalGRPOTrainer(PPOTrainer):
     def _init_dedicated_eval_rollout(self) -> None:
         self._assert_dedicated_eval_preconditions()
         config = deepcopy(self.config.evaluation_rollout)
+        config.experiment_name = self.config.experiment_name
+        config.trial_name = f"{self.config.trial_name}-dedicated-eval"
         config.max_head_offpolicyness = int(1e12)
         alloc = ModelAllocation.from_str(config.backend, name=self._DEDICATED_ROLE)
         server_args = SGLangConfig.build_args(
@@ -277,6 +281,32 @@ class AsyncEvalGRPOTrainer(PPOTrainer):
             )
             raise
 
+    def _publish_eval_checkpoint_ready(self, wait_version: int) -> str:
+        """Publish the disk checkpoint readiness key expected by rollout workers.
+
+        Remote inference engines wait on the current rollout version's
+        ``update_weights_from_disk`` name before sending the HTTP load request.
+        Normal training updates publish this key from the training engine after
+        saving the checkpoint. Dedicated async eval bypasses that training engine,
+        so the eval trainer must publish the same readiness signal itself once it
+        is about to load an already-saved checkpoint.
+        """
+
+        rollout_config = self._async_eval_rollout.config
+        update_name = names.update_weights_from_disk(
+            rollout_config.experiment_name,
+            rollout_config.trial_name,
+            wait_version,
+        )
+        try:
+            name_resolve.delete(update_name)
+        except Exception:
+            pass
+        name_resolve.add(
+            update_name, str(datetime.now().timestamp()), keepalive_ttl=120
+        )
+        return update_name
+
     def _load_eval_checkpoint(self, checkpoint_path: str, version: int) -> None:
         meta = WeightUpdateMeta(
             type="disk",
@@ -284,6 +314,8 @@ class AsyncEvalGRPOTrainer(PPOTrainer):
             version=version,
             clear_checkpoint_after_load=False,
         )
+        wait_version = self._async_eval_rollout.get_version()
+        self._publish_eval_checkpoint_ready(wait_version)
         self._async_eval_rollout._collective_rpc(
             "update_weights_from_disk",
             meta=meta,

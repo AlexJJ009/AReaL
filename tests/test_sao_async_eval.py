@@ -21,6 +21,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 class _FakeController:
     def __init__(self, fail_wait: bool = False, wait_event=None, entered_event=None):
+        self.config = SimpleNamespace(
+            experiment_name="exp", trial_name="trial-dedicated-eval"
+        )
         self.fail_wait = fail_wait
         self.wait_event = wait_event
         self.entered_event = entered_event
@@ -40,6 +43,9 @@ class _FakeController:
         raise AssertionError(
             "adapter must not call controller.update_weights_from_disk"
         )
+
+    def get_version(self):
+        return self.versions[-1] if self.versions else 0
 
     def set_version(self, version):
         self.versions.append(version)
@@ -131,9 +137,14 @@ def test_dedicated_eval_controller_uses_separate_role_and_records_gpus(
         "scripts.sao.async_eval.SGLangConfig.build_args",
         lambda **kwargs: {"tp_size": kwargs["tp_size"], "pp_size": kwargs["pp_size"]},
     )
+
+    def fake_as_controller(config, scheduler):
+        fake.config = config
+        return fake
+
     monkeypatch.setattr(
         "scripts.sao.async_eval.RemoteSGLangEngine.as_controller",
-        lambda config, scheduler: fake,
+        fake_as_controller,
     )
 
     trainer._init_dedicated_eval_rollout()
@@ -146,6 +157,8 @@ def test_dedicated_eval_controller_uses_separate_role_and_records_gpus(
             "server_args": {"tp_size": 1, "pp_size": 1},
         }
     ]
+    assert fake.config.experiment_name == "exp"
+    assert fake.config.trial_name == "trial-dedicated-eval"
     payload = json.loads((tmp_path / "evidence/gpu-allocation.json").read_text())
     assert payload["roles"]["actor"][0]["gpu_devices"] == [0]
     assert payload["roles"]["dedicated-eval"][0]["gpu_devices"] == [7]
@@ -173,9 +186,14 @@ def test_dedicated_eval_controller_is_owned_before_initialize(monkeypatch, tmp_p
         "scripts.sao.async_eval.SGLangConfig.build_args",
         lambda **kwargs: {"tp_size": kwargs["tp_size"], "pp_size": kwargs["pp_size"]},
     )
+
+    def fake_as_controller(config, scheduler):
+        fake.config = config
+        return fake
+
     monkeypatch.setattr(
         "scripts.sao.async_eval.RemoteSGLangEngine.as_controller",
-        lambda config, scheduler: fake,
+        fake_as_controller,
     )
 
     with pytest.raises(RuntimeError, match="launch failed"):
@@ -242,12 +260,27 @@ def test_dedicated_eval_rejects_wrapped_gpu_allocation(tmp_path):
         trainer._assert_dedicated_eval_preconditions()
 
 
+def _record_checkpoint_ready(monkeypatch):
+    calls = []
+
+    def fake_delete(name):
+        calls.append(("delete", name, None))
+
+    def fake_add(name, value, keepalive_ttl=None):
+        calls.append(("add", name, keepalive_ttl))
+
+    monkeypatch.setattr("scripts.sao.async_eval.name_resolve.delete", fake_delete)
+    monkeypatch.setattr("scripts.sao.async_eval.name_resolve.add", fake_add)
+    return calls
+
+
 def test_eval_jobs_load_checkpoints_without_deleting_and_pin_versions(
     monkeypatch, tmp_path
 ):
-    """Baseline and checkpoint evals use direct RPC loading and stable versions."""
+    """Baseline and checkpoint evals use isolated eval readiness keys."""
     controller = _FakeController()
     trainer = _trainer(tmp_path, controller)
+    ready_calls = _record_checkpoint_ready(monkeypatch)
     monkeypatch.setenv("SAO_PREFLIGHT", "1")
 
     trainer._run_eval_job(0, trainer.config.actor.path, "workflow", {"x": 1}, False)
@@ -264,6 +297,14 @@ def test_eval_jobs_load_checkpoints_without_deleting_and_pin_versions(
     assert [meta.version for meta in metas] == [0, 20]
     assert all(meta.clear_checkpoint_after_load is False for meta in metas)
     assert controller.versions == [0, 20]
+    assert [call[0] for call in ready_calls] == ["delete", "add", "delete", "add"]
+    assert [call[1] for call in ready_calls] == [
+        "root/exp/trial-dedicated-eval/update_weights_from_disk/0",
+        "root/exp/trial-dedicated-eval/update_weights_from_disk/0",
+        "root/exp/trial-dedicated-eval/update_weights_from_disk/0",
+        "root/exp/trial-dedicated-eval/update_weights_from_disk/0",
+    ]
+    assert [call[2] for call in ready_calls if call[0] == "add"] == [120, 120]
     assert {row["version"] for row in controller.submits[:2]} == {0}
     assert {row["version"] for row in controller.submits[2:]} == {20}
     assert (
@@ -278,6 +319,7 @@ def test_snapshot_uses_exact_version_whitelist(monkeypatch, tmp_path):
 
     calls = []
     trainer = _trainer(tmp_path, _FakeController())
+    _record_checkpoint_ready(monkeypatch)
     monkeypatch.setattr(
         snapshot_module,
         "snapshot_eval",
@@ -291,12 +333,13 @@ def test_snapshot_uses_exact_version_whitelist(monkeypatch, tmp_path):
     assert calls[0][2:] == (0, (0,))
 
 
-def test_async_queue_does_not_change_version_during_running_eval(tmp_path):
+def test_async_queue_does_not_change_version_during_running_eval(monkeypatch, tmp_path):
     """The single worker queue prevents later evals from mutating an active version."""
     release = threading.Event()
     entered = threading.Event()
     controller = _FakeController(wait_event=release, entered_event=entered)
     trainer = _trainer(tmp_path, controller)
+    _record_checkpoint_ready(monkeypatch)
     trainer._async_eval_executor = ThreadPoolExecutor(max_workers=1)
 
     trainer._enqueue_eval(
@@ -322,10 +365,11 @@ def test_async_queue_does_not_change_version_during_running_eval(tmp_path):
     assert controller.versions == [1, 2]
 
 
-def test_eval_failure_is_recorded_and_propagated(tmp_path):
+def test_eval_failure_is_recorded_and_propagated(monkeypatch, tmp_path):
     """A failed async job writes failure evidence and re-raises through futures."""
     controller = _FakeController(fail_wait=True)
     trainer = _trainer(tmp_path, controller)
+    _record_checkpoint_ready(monkeypatch)
 
     with pytest.raises(RuntimeError, match="eval failed"):
         trainer._run_eval_job(3, trainer.config.actor.path, "workflow", {}, False)
