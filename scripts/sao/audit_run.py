@@ -174,7 +174,9 @@ def _single_behavior_version(record: dict[str, Any]) -> int:
     return unique.pop()
 
 
-def _validate_sample_record(record: dict[str, Any], *, is_eval: bool) -> list[str]:
+def _validate_sample_record(
+    record: dict[str, Any], *, is_eval: bool, expected_n: int = EXPECTED_N
+) -> list[str]:
     errors: list[str] = []
     output_tokens = record.get("output_tokens")
     logprobs = record.get("behavior_logprobs")
@@ -214,7 +216,7 @@ def _validate_sample_record(record: dict[str, Any], *, is_eval: bool) -> list[st
     if not _is_int(record.get("task_id")) or record["task_id"] < 0:
         errors.append("invalid_task_id")
     if not _is_int(record.get("sample_idx")) or record["sample_idx"] not in range(
-        EXPECTED_N
+        expected_n
     ):
         errors.append("invalid_sample_idx")
     if record.get("is_eval") is not is_eval:
@@ -264,13 +266,15 @@ def aggregate_eval(
     expected_source_ids: set[str] | None = None,
     expected_n: int = EXPECTED_N,
 ) -> dict[str, Any]:
-    """Return per-version N=4 mean/pass metrics with strict grouping."""
-    if expected_n != EXPECTED_N:
-        raise ValueError("this contract requires N=4")
+    """Return per-version mean/pass metrics with strict N-response grouping."""
+    if not _is_int(expected_n) or expected_n <= 0:
+        raise ValueError("expected_n must be a positive integer")
+    mean_key = f"mean@{expected_n}"
+    pass_key = f"pass@{expected_n}"
     by_version: dict[int, list[dict[str, Any]]] = defaultdict(list)
     sample_errors = []
     for index, record in enumerate(eval_records):
-        errors = _validate_sample_record(record, is_eval=True)
+        errors = _validate_sample_record(record, is_eval=True, expected_n=expected_n)
         if errors:
             sample_errors.append({"index": index, "errors": errors})
             continue
@@ -321,7 +325,7 @@ def aggregate_eval(
                 bad_sample_sets.append(
                     {
                         "source_id": source_id,
-                        "reason": "expected_exact_sample_idx_0_to_3",
+                        "reason": f"expected_exact_sample_idx_0_to_{expected_n - 1}",
                         "sample_idx": sorted(sample_indices),
                     }
                 )
@@ -334,8 +338,8 @@ def aggregate_eval(
                 pass_by_set[benchmark].append(pass_score)
                 per_source[source_id] = {
                     "benchmark": benchmark,
-                    "mean@4": mean_score,
-                    "pass@4": pass_score,
+                    mean_key: mean_score,
+                    pass_key: pass_score,
                 }
 
         per_set = {}
@@ -345,8 +349,8 @@ def aggregate_eval(
             per_set[benchmark] = {
                 "count": len(means),
                 "expected_count": EXPECTED_EVAL_ROWS.get(benchmark),
-                "mean@4": sum(means) / len(means) if means else None,
-                "pass@4": sum(passes) / len(passes) if passes else None,
+                mean_key: sum(means) / len(means) if means else None,
+                pass_key: sum(passes) / len(passes) if passes else None,
             }
         complete_sets = [
             item
@@ -361,42 +365,42 @@ def aggregate_eval(
             "duplicate_sources": duplicate_sources,
             "bad_sample_sets": bad_sample_sets,
             "per_set": per_set,
-            "macro_mean@4": (
-                sum(item["mean@4"] for item in complete_sets) / len(EXPECTED_EVAL_ROWS)
+            f"macro_{mean_key}": (
+                sum(item[mean_key] for item in complete_sets) / len(EXPECTED_EVAL_ROWS)
                 if len(complete_sets) == len(EXPECTED_EVAL_ROWS)
                 else None
             ),
-            "macro_pass@4": (
-                sum(item["pass@4"] for item in complete_sets) / len(EXPECTED_EVAL_ROWS)
+            f"macro_{pass_key}": (
+                sum(item[pass_key] for item in complete_sets) / len(EXPECTED_EVAL_ROWS)
                 if len(complete_sets) == len(EXPECTED_EVAL_ROWS)
                 else None
             ),
-            "weighted_overall_mean@4": (
+            f"weighted_overall_{mean_key}": (
                 sum(
-                    item["mean@4"] * item["count"]
+                    item[mean_key] * item["count"]
                     for item in per_set.values()
-                    if item["mean@4"] is not None
+                    if item[mean_key] is not None
                 )
                 / sum(
                     item["count"]
                     for item in per_set.values()
-                    if item["mean@4"] is not None
+                    if item[mean_key] is not None
                 )
-                if any(item["mean@4"] is not None for item in per_set.values())
+                if any(item[mean_key] is not None for item in per_set.values())
                 else None
             ),
-            "weighted_overall_pass@4": (
+            f"weighted_overall_{pass_key}": (
                 sum(
-                    item["pass@4"] * item["count"]
+                    item[pass_key] * item["count"]
                     for item in per_set.values()
-                    if item["pass@4"] is not None
+                    if item[pass_key] is not None
                 )
                 / sum(
                     item["count"]
                     for item in per_set.values()
-                    if item["pass@4"] is not None
+                    if item[pass_key] is not None
                 )
-                if any(item["pass@4"] is not None for item in per_set.values())
+                if any(item[pass_key] is not None for item in per_set.values())
                 else None
             ),
             "per_source": per_source,

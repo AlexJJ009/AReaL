@@ -14,6 +14,9 @@ if [[ "${SAO_TRAIN_MODULE}" == "examples.math.sao_ppo" ]]; then
 fi
 cd "${SAO_REPO_ROOT}"
 source scripts/sao/runtime_env.sh
+if [[ "${SAO_TRAIN_MODULE}" == "examples.math.sao_ppo" ]]; then
+  export WANDB_MODE=online
+fi
 if [[ -f .venv/bin/activate ]]; then
   source .venv/bin/activate
 fi

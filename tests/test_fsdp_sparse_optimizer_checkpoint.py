@@ -68,6 +68,8 @@ def _optimizer(model: nn.ModuleDict, *, alternate_groups: bool = False):
 
 def _engine(model: nn.ModuleDict, optimizer: torch.optim.Optimizer) -> FSDPEngine:
     engine = FSDPEngine.__new__(FSDPEngine)
+    engine._initialized = True
+    engine._cpu_group = None
     engine.model = model
     engine.optimizer = optimizer
     return engine

@@ -79,16 +79,40 @@ class AuditedMathWorkflow(RLVRWorkflow):
     ) -> tuple[ModelResponse, float]:
         context = workflow_context.get()
         started_ns = time.time_ns()
+        resp = None
+        generated_ns = None
+        scoring_error = None
         try:
             async with atrace_session_phase("generate"):
                 resp = await engine.agenerate(req)
             generated_ns = time.time_ns()
-            reward = await self._compute_rewards(resp, prompt_str, task_data)
+            try:
+                reward = await self._compute_rewards(resp, prompt_str, task_data)
+            except Exception as exc:
+                # Semantic timeout retries are bounded inside the scorer. Keep
+                # this trajectory, but distinguish fallback zero from a wrong answer.
+                scoring_error = {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                }
+                reward = 0.0
         except Exception as exc:
             await self._write_record(
                 {
                     "request_id": req.rid,
                     "source_id": task_data["source_id"],
+                    "task_id": context.task_id,
+                    "sample_idx": context.sample_idx,
+                    "benchmark": task_data.get(
+                        "benchmark", task_data.get("data_source")
+                    ),
+                    "answer": task_data.get("answer"),
+                    "completion": (
+                        self.tokenizer.decode(resp.output_tokens)
+                        if resp is not None
+                        else None
+                    ),
+                    "generation_completed_ns": generated_ns,
                     "is_eval": context.is_eval,
                     "started_ns": started_ns,
                     "failed_ns": time.time_ns(),
@@ -139,9 +163,13 @@ class AuditedMathWorkflow(RLVRWorkflow):
             "truncated": resp.stop_reason == "length",
             "stop_reason": resp.stop_reason,
             "reward": reward,
+            "scoring_error": scoring_error,
+            "reward_fallback_zero": scoring_error is not None,
         }
         await self._write_record(record, context.is_eval)
-        stats_tracker.get(workflow_context.stat_scope()).scalar(reward=reward)
+        stats_tracker.get(workflow_context.stat_scope()).scalar(
+            reward=reward, scoring_failure=float(scoring_error is not None)
+        )
         return resp, reward
 
     async def _write_record(self, record: dict[str, Any], is_eval: bool) -> None:

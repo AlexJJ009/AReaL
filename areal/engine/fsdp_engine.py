@@ -230,6 +230,12 @@ def _use_qwen35_token_critic_adapter(
     return bool(config.is_critic and is_qwen3_5_model(model_config.model_type))
 
 
+def _dcp_has_uninitialized_state_manifest(path: str) -> bool:
+    metadata = dcp.FileSystemReader(path).read_metadata()
+    state_dict_metadata = getattr(metadata, "state_dict_metadata", {})
+    return "dcp.optim_uninitialized_state" in state_dict_metadata
+
+
 class FSDPEngine(TrainEngine):
     def __init__(self, config: TrainEngineConfig):
         self.config = config
@@ -1052,6 +1058,11 @@ class FSDPEngine(TrainEngine):
             return stats_tracker.export_all(
                 reduce_group=self.data_parallel_group,
             )
+
+    def _release_unused_cuda_cache(self) -> None:
+        gc.collect()
+        current_platform.empty_cache()
+        gc.collect()
 
     def offload(self) -> None:
         """Offload model memory to CPU using torch_memory_saver.
@@ -2052,7 +2063,10 @@ class FSDPEngine(TrainEngine):
 
         dcp_state = DCPState(self.model, self.optimizer if with_optim else None)
         state_dict = {"dcp": dcp_state}
-        dcp.save(state_dict, checkpoint_id=path)
+        # DCP exchanges Python save plans via object collectives. Use the
+        # existing CPU group: lazily initializing the default NCCL group here
+        # can exhaust GPU memory even after training on FSDP subgroups succeeds.
+        dcp.save(state_dict, checkpoint_id=path, process_group=self.cpu_group)
 
     def _load_from_dcp(self, path: str, with_optim: bool):
         """Load model from Distributed Checkpoint (DCP) format."""
@@ -2060,8 +2074,13 @@ class FSDPEngine(TrainEngine):
             raise RuntimeError("Model not initialized")
 
         saved_optimizer_parameters = None
+        include_uninitialized_state_manifest = False
         if with_optim:
             metadata = dcp.FileSystemReader(path).read_metadata()
+            state_dict_metadata = getattr(metadata, "state_dict_metadata", {})
+            include_uninitialized_state_manifest = (
+                "dcp.optim_uninitialized_state" in state_dict_metadata
+            )
             saved_optimizer_parameters = {
                 keys[3]
                 for keys in metadata.planner_data.values()
@@ -2071,11 +2090,13 @@ class FSDPEngine(TrainEngine):
             self.model,
             self.optimizer if with_optim else None,
             saved_optimizer_parameters=saved_optimizer_parameters,
+            include_uninitialized_state_manifest=include_uninitialized_state_manifest,
         )
         state_dict = {"dcp": dcp_state}
         dcp.load(
             state_dict=state_dict,
             checkpoint_id=path,
+            process_group=self.cpu_group,
         )
 
     def _save_training_state(self, path: str):

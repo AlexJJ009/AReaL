@@ -43,6 +43,7 @@ from areal.utils.data import (
 )
 from areal.utils.functional import (
     cispo_loss_fn,
+    loss_reduction_weight,
     ppo_actor_loss_fn,
     reward_overlong_penalty,
     sapo_loss_fn,
@@ -552,12 +553,24 @@ class PPOActor:
                         sapo_tau_neg=self.config.sapo_tau_neg,
                         use_cispo_loss=self.config.use_cispo_loss,
                         use_decoupled_loss=self.config.use_decoupled_loss,
+                        loss_reduction=self.config.loss_reduction,
+                    )
+                )
+                loss_weight_fn = (
+                    (lambda x: x["loss_mask"].count_nonzero())
+                    if self.config.use_direct_dis_loss
+                    else (
+                        lambda x: loss_reduction_weight(
+                            x["loss_mask"],
+                            self.config.loss_reduction,
+                            x.get("cu_seqlens"),
+                        )
                     )
                 )
                 train_stat = self.engine.train_batch(
                     mb,
                     loss_fn=loss_fn,
-                    loss_weight_fn=lambda x: x["loss_mask"].count_nonzero(),
+                    loss_weight_fn=loss_weight_fn,
                 )
                 stats_tracker.scalar(**train_stat)
                 update_stats.append(train_stat)
@@ -621,6 +634,7 @@ def grpo_loss_fn(
     sapo_tau_neg: float = 1.05,
     use_cispo_loss: bool = False,
     use_decoupled_loss: bool = False,
+    loss_reduction: str = "token_mean",
     vocab_min_logits: torch.Tensor | None = None,
     vocab_max_logits: torch.Tensor | None = None,
     vocab_mean_logits: torch.Tensor | None = None,
@@ -634,6 +648,18 @@ def grpo_loss_fn(
     prox_logp_gt = input_data.get("prox_logp")  # Could be None if skipped
 
     entropy = entropy.detach()
+
+    if loss_reduction == "sequence_mean":
+        if use_cispo_loss:
+            raise ValueError("loss_reduction='sequence_mean' does not support CISPO")
+        if use_sapo_loss:
+            raise ValueError("loss_reduction='sequence_mean' does not support SAPO")
+        if m2_threshold is not None:
+            raise ValueError("loss_reduction='sequence_mean' does not support M2PO")
+        if input_data.get("teacher_logp") is not None:
+            raise ValueError(
+                "loss_reduction='sequence_mean' does not support teacher distillation"
+            )
 
     if ProxLogpMethod(prox_logp_method) == ProxLogpMethod.REUSE_TRAIN_LOGP:
         prox_logp_gt = logprobs.detach()
@@ -704,6 +730,7 @@ def grpo_loss_fn(
             rejection_sampling=rejection_sampling,
             importance_sampling_level=importance_sampling_level,
             cu_seqlens=input_data.get("cu_seqlens"),
+            loss_reduction=loss_reduction,
         )
 
     # Joint Distillation KL Loss

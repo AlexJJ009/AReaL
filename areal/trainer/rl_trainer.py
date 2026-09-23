@@ -485,7 +485,12 @@ class PPOTrainer:
             # AWEX clears that flag because it drives the handover itself.
             colocated_rollout=self._is_actor_rollout_colocated(config),
             expected_trainer_state={
-                "num_critic_only_steps": config.num_critic_only_steps
+                "num_critic_only_steps": config.num_critic_only_steps,
+                "rollout_recovery_policy": (
+                    "replay_raw_inputs_discard_generated_trajectories"
+                    if config.critic_updates_before_actor
+                    else 0
+                ),
             },
         )
 
@@ -656,6 +661,38 @@ class PPOTrainer:
         if self._should_offload_actor:
             self._offload_model(self.actor, role="actor")
 
+    def _release_unused_cuda_cache(self, engine, role: str) -> None:
+        backend = str(getattr(getattr(engine, "config", None), "backend", ""))
+        if not backend.startswith("fsdp"):
+            return
+        if hasattr(engine, "_custom_function_call"):
+            engine._custom_function_call("_release_unused_cuda_cache")
+        elif hasattr(engine, "_release_unused_cuda_cache"):
+            engine._release_unused_cuda_cache()
+        else:
+            logger.debug("%s engine does not expose unused CUDA cache release", role)
+
+    def _apply_initial_step_policy_version(self, initial_step: int) -> None:
+        if initial_step <= 0:
+            return
+        initial_version = max(0, initial_step - self.config.num_critic_only_steps)
+        if getattr(self, "_initial_step_policy_version", None) == initial_version:
+            return
+        self.actor.set_version(initial_version)
+        if self.critic is not None:
+            self.critic.set_version(initial_version)
+        self.rollout.set_version(initial_version)
+        if self.eval_rollout is not None:
+            self.eval_rollout.set_version(initial_version)
+        if is_single_controller():
+            sm = self.rollout.staleness_manager
+        else:
+            sm = self.rollout.workflow_executor.staleness_manager
+        if sm is not None:
+            sm.on_version_recovered(initial_version)
+        self._initial_step_policy_version = initial_version
+        self._optimizer_steps_base = initial_step
+
     def train(
         self,
         workflow: WorkflowLike | None = None,
@@ -664,13 +701,21 @@ class PPOTrainer:
         eval_workflow_kwargs: dict[str, Any] | None = None,
         dynamic_filter_fn: Callable[[dict[str, Any]], bool] | str | None = None,
         total_epochs: int | None = None,
+        initial_step: int = 0,
     ):
         config = self.config
-        start_step = (
-            self.recover_info.last_step_info.next().global_step
-            if self.recover_info is not None
-            else 0
-        )
+        if initial_step < 0:
+            raise ValueError(f"initial_step must be non-negative: {initial_step}")
+        if self.recover_info is not None:
+            if initial_step != 0:
+                raise ValueError(
+                    "initial_step is only valid for weight-only starts without "
+                    "recover_info. Use native recovery for optimizer/dataloader "
+                    "state continuation."
+                )
+            start_step = self.recover_info.last_step_info.next().global_step
+        else:
+            start_step = initial_step
 
         if total_epochs is None:
             total_epochs = config.total_train_epochs
@@ -678,6 +723,14 @@ class PPOTrainer:
             raise ValueError(f"Total epochs must be positive: {total_epochs}")
         steps_per_epoch = len(self.train_dataloader)
         max_steps = total_epochs * steps_per_epoch
+        if self.recover_info is None and initial_step >= max_steps:
+            raise ValueError(
+                f"initial_step {initial_step} must be less than "
+                f"the maximum training steps {max_steps}"
+            )
+
+        if self.recover_info is None and initial_step:
+            self._apply_initial_step_policy_version(initial_step)
 
         # Initialize proxy workers if not using RolloutWorkflow
         if workflow is None:
@@ -744,6 +797,7 @@ class PPOTrainer:
                     for traj, v in zip(rollout_batch, values):
                         traj["values"] = v
                     self.critic.get_device_stats().log("critic values")
+                    self._release_unused_cuda_cache(self.critic, role="critic")
                 # Critic stays onloaded — offloaded after ppo_update below
 
             if self.ref is not None:
@@ -867,6 +921,9 @@ class PPOTrainer:
                         self.actor.step_lr_scheduler()
                 if not critic_only:
                     self.actor.get_device_stats().log("ppo update")
+                    if self.critic is not None:
+                        # Other role processes cannot reuse this allocator's cache.
+                        self._release_unused_cuda_cache(self.actor, role="actor")
 
             if (
                 config.memory_profiler is not None
@@ -1025,6 +1082,7 @@ class PPOTrainer:
         epoch: int,
         epoch_step: int,
         global_step: int,
+        force: bool = False,
     ) -> None:
         with (
             stats_tracker.record_timing("save"),
@@ -1034,7 +1092,12 @@ class PPOTrainer:
                 args={"global_step": global_step},
             ),
         ):
-            self._save_hf(epoch=epoch, epoch_step=epoch_step, global_step=global_step)
+            self._save_hf(
+                epoch=epoch,
+                epoch_step=epoch_step,
+                global_step=global_step,
+                force=force,
+            )
 
         with (
             stats_tracker.record_timing("checkpoint_for_recover"),
@@ -1048,6 +1111,7 @@ class PPOTrainer:
                 epoch=epoch,
                 epoch_step=epoch_step,
                 global_step=global_step,
+                force=force,
             )
 
     def close(self):
@@ -1400,7 +1464,9 @@ class PPOTrainer:
 
         return path
 
-    def _save_hf(self, epoch: int, epoch_step: int, global_step: int):
+    def _save_hf(
+        self, epoch: int, epoch_step: int, global_step: int, force: bool = False
+    ):
         # Save as HF models for evaluation
         saved = self.saver.save(
             self.actor,
@@ -1409,6 +1475,8 @@ class PPOTrainer:
             global_step,
             tokenizer=self.tokenizer,
             processor=self.processor,
+            force=force,
+            advance_cadence=force,
         )
         if saved and self.critic is not None:
             self.saver.save(
@@ -1426,7 +1494,9 @@ class PPOTrainer:
             dist.barrier(group=self.actor.cpu_group)
             current_platform.synchronize()
 
-    def _save_recover_checkpoint(self, epoch: int, epoch_step: int, global_step: int):
+    def _save_recover_checkpoint(
+        self, epoch: int, epoch_step: int, global_step: int, force: bool = False
+    ):
         # Save recoverable checkpoints
         to_save: dict = dict(default=self.actor)
         if self.critic is not None:
@@ -1443,6 +1513,10 @@ class PPOTrainer:
                 0, global_step + 1 - self.config.num_critic_only_steps
             ),
         }
+        if self.config.num_critic_only_steps:
+            trainer_state["optimizer_steps_base"] = getattr(
+                self, "_optimizer_steps_base", 0
+            )
         should_recover_rollout_inputs = (
             self.config.num_critic_only_steps or self.config.critic_updates_before_actor
         )
@@ -1467,6 +1541,8 @@ class PPOTrainer:
                 and hasattr(self.rollout, "get_input_recovery_state")
                 else None
             ),
+            force=force,
+            advance_cadence=force,
         )
 
         if not is_single_controller():

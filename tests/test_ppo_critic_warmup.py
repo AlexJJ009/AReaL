@@ -112,9 +112,13 @@ class _Evaluator:
 class _StalenessManager:
     def __init__(self):
         self.consumed_without_update = 0
+        self.recovered_versions = []
 
     def on_batch_consumed_without_update(self) -> None:
         self.consumed_without_update += 1
+
+    def on_version_recovered(self, version: int) -> None:
+        self.recovered_versions.append(version)
 
 
 class _Rollout:
@@ -274,8 +278,10 @@ def _make_trainer(
     trainer._save_hf_calls = []
     trainer._eval_calls = []
 
-    def _save_hf(*, epoch: int, epoch_step: int, global_step: int) -> None:
-        trainer._save_hf_calls.append((epoch, epoch_step, global_step))
+    def _save_hf(
+        *, epoch: int, epoch_step: int, global_step: int, force: bool = False
+    ) -> None:
+        trainer._save_hf_calls.append((epoch, epoch_step, global_step, force))
 
     def _evaluate(**kwargs) -> None:
         trainer._eval_calls.append(kwargs)
@@ -370,6 +376,75 @@ def test_train_with_default_zero_warmup_keeps_original_policy_update_semantics()
     )
 
 
+def test_train_weight_only_initial_step_uses_cumulative_versions_with_fresh_updates():
+    trainer = _make_trainer(total_steps=6, num_critic_only_steps=0)
+
+    trainer.train(workflow=_Workflow(), initial_step=2)
+
+    assert len(trainer.actor.ppo_update_steps) == 4
+    assert trainer.actor.ppo_update_steps == [0, 1, 2, 3]
+    assert trainer.actor.weight_update_versions == [3, 4, 5, 6]
+    assert trainer.actor.versions == [2, 3, 4, 5, 6]
+    assert trainer.critic.versions == [2, 3, 4, 5, 6]
+    assert trainer.rollout.versions == [2, 3, 4, 5, 6]
+    assert [commit["global_step"] for commit in trainer.stats_logger.commits] == [
+        2,
+        3,
+        4,
+        5,
+    ]
+    assert [call[:3] for call in trainer._save_hf_calls] == [
+        (0, 2, 2),
+        (0, 3, 3),
+        (0, 4, 4),
+        (0, 5, 5),
+    ]
+    assert not any(call[3] for call in trainer._save_hf_calls)
+    assert trainer._optimizer_steps_base == 2
+
+
+def test_initial_step_policy_version_syncs_single_controller_staleness(monkeypatch):
+    trainer = _make_trainer(total_steps=6, num_critic_only_steps=0)
+    rollout = SimpleNamespace(
+        versions=[],
+        staleness_manager=_StalenessManager(),
+        set_version=lambda version: rollout.versions.append(version),
+    )
+    trainer.rollout = rollout
+    monkeypatch.setattr("areal.trainer.rl_trainer.is_single_controller", lambda: True)
+
+    trainer._apply_initial_step_policy_version(2)
+
+    assert trainer.rollout.versions == [2]
+    assert trainer.rollout.staleness_manager.recovered_versions == [2]
+
+
+def test_train_rejects_initial_step_when_native_recovery_loaded():
+    trainer = _make_trainer(total_steps=6, num_critic_only_steps=0)
+    trainer.recover_info = SimpleNamespace(
+        last_step_info=SimpleNamespace(
+            next=lambda: SimpleNamespace(global_step=2),
+        )
+    )
+
+    with pytest.raises(ValueError, match="weight-only starts"):
+        trainer.train(workflow=_Workflow(), initial_step=2)
+
+
+def test_train_native_recovery_at_terminal_step_remains_noop():
+    trainer = _make_trainer(total_steps=6, num_critic_only_steps=0)
+    trainer.recover_info = SimpleNamespace(
+        last_step_info=SimpleNamespace(
+            next=lambda: SimpleNamespace(global_step=6),
+        )
+    )
+
+    trainer.train(workflow=_Workflow())
+
+    assert trainer.actor.ppo_update_steps == []
+    assert trainer.stats_logger.commits == []
+
+
 def test_train_skips_actor_and_weight_updates_for_first_ten_warmup_steps():
     trainer = _make_trainer(total_steps=12, num_critic_only_steps=10)
 
@@ -438,7 +513,11 @@ def test_train_short_critic_only_run_keeps_policy_frozen_and_checkpoints_zero_ve
     assert len(trainer._eval_calls) == 0
 
     trainer_state = trainer.recover_handler.dumps[-1]["kwargs"]["trainer_state"]
-    assert trainer_state == {"policy_version": 0, "num_critic_only_steps": 10}
+    assert trainer_state == {
+        "policy_version": 0,
+        "num_critic_only_steps": 10,
+        "optimizer_steps_base": 0,
+    }
 
 
 def test_save_recover_checkpoint_keeps_plain_ppo_rollout_inputs_out_of_checkpoint():
@@ -486,6 +565,7 @@ def test_train_resume_from_warmup_checkpoint_matches_uninterrupted_state():
     assert snapshot.trainer_state == {
         "policy_version": 0,
         "num_critic_only_steps": 10,
+        "optimizer_steps_base": 0,
     }
 
     resumed = _make_trainer(total_steps=12, num_critic_only_steps=10)

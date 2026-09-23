@@ -9,6 +9,30 @@ from areal.trainer.rl_trainer import PPOTrainer
 from areal.utils.saver import Saver
 
 
+def test_sao_checkpoint_preserves_outstanding_inputs(monkeypatch):
+    monkeypatch.setattr("areal.trainer.rl_trainer.is_single_controller", lambda: True)
+    pending = {"outstanding": [{"source_id": "prefetched"}], "buffer": []}
+    captured = {}
+    trainer = PPOTrainer.__new__(PPOTrainer)
+    trainer.actor = object()
+    trainer.critic = object()
+    trainer.config = SimpleNamespace(
+        num_critic_only_steps=0, critic_updates_before_actor=2
+    )
+    trainer.train_dataloader = [None] * 100
+    trainer.rollout = SimpleNamespace(get_input_recovery_state=lambda: pending)
+    trainer.recover_handler = SimpleNamespace(
+        dump=lambda *args, **kwargs: captured.update(kwargs)
+    )
+    trainer.saver = trainer.evaluator = trainer.stats_logger = None
+    trainer.tokenizer = trainer.processor = None
+
+    trainer._save_recover_checkpoint(epoch=0, epoch_step=49, global_step=49)
+
+    assert captured["rollout_input_state"] == pending
+    assert captured["trainer_state"]["policy_version"] == 50
+
+
 def test_actor_and_critic_save_together_every_twenty_steps_and_at_tail(
     tmp_path, monkeypatch
 ):
@@ -49,6 +73,59 @@ def test_actor_and_critic_save_together_every_twenty_steps_and_at_tail(
         ]
 
 
+def test_forced_save_counts_step_without_resetting_periodic_cadence(
+    tmp_path, monkeypatch
+):
+    saved = []
+    actor = SimpleNamespace(save=lambda meta: saved.append(meta.path))
+    config = SaverConfig(
+        experiment_name="cadence",
+        trial_name="forced",
+        fileroot=str(tmp_path),
+        mode="sync",
+        freq_steps=50,
+        freq_epochs=None,
+        freq_secs=None,
+    )
+    saver = Saver(
+        config,
+        FinetuneSpec(total_train_epochs=1, dataset_size=100, train_batch_size=1),
+    )
+    monkeypatch.setattr(saver, "_should_use_async", lambda engine: False)
+
+    saver.save(actor, 0, 50, 50, force=True, advance_cadence=True)
+    for step in range(51, 99):
+        assert not saver.save(actor, 0, step, step)
+    assert saver.save(actor, 0, 99, 99)
+
+    assert [path.split("globalstep")[-1] for path in saved] == ["50", "99"]
+
+
+def test_plain_forced_save_preserves_existing_cadence_bypass(tmp_path, monkeypatch):
+    saved = []
+    actor = SimpleNamespace(save=lambda meta: saved.append(meta.path))
+    config = SaverConfig(
+        experiment_name="cadence",
+        trial_name="plain-force",
+        fileroot=str(tmp_path),
+        mode="sync",
+        freq_steps=2,
+        freq_epochs=None,
+        freq_secs=None,
+    )
+    saver = Saver(
+        config,
+        FinetuneSpec(total_train_epochs=1, dataset_size=10, train_batch_size=1),
+    )
+    monkeypatch.setattr(saver, "_should_use_async", lambda engine: False)
+
+    assert saver.save(actor, 0, 0, 0, force=True)
+    assert not saver.save(actor, 0, 1, 1)
+    assert saver.save(actor, 0, 2, 2)
+
+    assert [path.split("globalstep")[-1] for path in saved] == ["0", "2"]
+
+
 def test_controller_critic_metrics_are_exported_without_overwriting_actor(monkeypatch):
     trainer = PPOTrainer.__new__(PPOTrainer)
     trainer.actor = SimpleNamespace(
@@ -57,6 +134,7 @@ def test_controller_critic_metrics_are_exported_without_overwriting_actor(monkey
     trainer.critic = SimpleNamespace(
         export_stats=lambda: {"grad_norm": 0.3, "optimizer_steps": 2}
     )
+    trainer.config = SimpleNamespace(num_critic_only_steps=0)
     trainer.rollout = SimpleNamespace(export_stats=lambda: {"reward": 0.5})
     trainer.eval_rollout = None
     recorded = []

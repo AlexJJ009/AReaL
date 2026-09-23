@@ -16,9 +16,16 @@ from pathlib import Path
 import requests
 import torch
 from datasets import load_from_disk
+from omegaconf import OmegaConf
 
-from areal import PPOTrainer
-from areal.api.cli_args import PPOConfig, load_expr_config
+from scripts.sao.async_eval import AsyncEvalPPOTrainer, SaoPPOConfig
+
+from areal.api.cli_args import (
+    PPOConfig,
+    load_expr_config,
+    parse_cli_args,
+    to_structured_cfg,
+)
 from areal.infra.rpc.rtensor import RTensor
 from areal.trainer.ppo.validation import verify_gamma_one_episodic_returns
 from areal.utils import logging
@@ -27,18 +34,112 @@ from areal.utils.network import format_hostport
 logger = logging.getLogger("SaoPpo")
 
 
-def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
+def _safetensors_weight_keys(path: Path, role: str) -> set[str]:
+    from safetensors import safe_open
+
+    index_path = path / "model.safetensors.index.json"
+    if index_path.exists():
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        weight_map = payload.get("weight_map")
+        if not isinstance(weight_map, dict) or not weight_map:
+            raise ValueError(
+                f"{role} safetensors index has no weight_map: {index_path}"
+            )
+        missing = sorted(
+            name
+            for name in set(weight_map.values())
+            if not (path / str(name)).is_file()
+        )
+        if missing:
+            raise ValueError(
+                f"{role} safetensors index references missing shards: {missing}"
+            )
+        keys = set()
+        for shard_name in sorted(set(weight_map.values())):
+            with safe_open(
+                path / str(shard_name), framework="pt", device="cpu"
+            ) as handle:
+                keys.update(handle.keys())
+        return keys
+
+    shards = sorted(path.glob("*.safetensors"))
+    if not shards:
+        return set()
+
+    keys = set()
+    for shard in shards:
+        with safe_open(shard, framework="pt", device="cpu") as handle:
+            keys.update(handle.keys())
+    return keys
+
+
+def validate_hf_checkpoint_paths(config: PPOConfig) -> None:
+    """Lightweight CPU-only validation for the selected actor and critic HF dirs."""
+    if config.critic is None:
+        raise ValueError("A critic config is required before checkpoint validation")
+
+    actor_path = Path(config.actor.path).expanduser()
+    critic_path = Path(config.critic.path).expanduser()
+    for role, path in (("actor", actor_path), ("critic", critic_path)):
+        if not path.is_dir():
+            raise ValueError(
+                f"{role} checkpoint path must be a local directory: {path}"
+            )
+        if not (path / "config.json").is_file():
+            raise ValueError(f"{role} checkpoint is missing config.json: {path}")
+        has_model_file = any(
+            (path / name).is_file()
+            for name in (
+                "model.safetensors",
+                "model.safetensors.index.json",
+                "pytorch_model.bin",
+                "pytorch_model.bin.index.json",
+            )
+        ) or any(path.glob("*.safetensors"))
+        if not has_model_file:
+            raise ValueError(f"{role} checkpoint has no HF model shard: {path}")
+
+    if actor_path.resolve() == critic_path.resolve():
+        raise ValueError("Actor Base and pretrained critic checkpoints must differ")
+
+    critic_keys = _safetensors_weight_keys(critic_path, "critic")
+    if "score.weight" not in critic_keys:
+        raise ValueError(
+            "Pretrained critic checkpoint must expose score.weight in safetensors headers"
+        )
+
+
+def validate_contract(config: SaoPPOConfig, *, preflight: bool = False) -> None:
+    AsyncEvalPPOTrainer._validate_save_eval_sync(config)
     expected = {
+        "actor.backend": (config.actor.backend, "fsdp:d4p1t1"),
+        "critic.backend": (
+            config.critic.backend if config.critic else None,
+            "fsdp:d4p1t1",
+        ),
+        "rollout.backend": (config.rollout.backend, "sglang:d3p1t1"),
+        "evaluation_rollout.backend": (
+            config.evaluation_rollout.backend,
+            "sglang:d1p1t1",
+        ),
+        "scheduler.type": (config.scheduler.type, "local"),
+        "cluster.n_nodes": (config.cluster.n_nodes, 1),
+        "cluster.n_gpus_per_node": (config.cluster.n_gpus_per_node, 8),
         "actor.discount": (config.actor.discount, 1.0),
-        "actor.gae_lambda": (config.actor.gae_lambda, 1.0),
+        "actor.loss_reduction": (config.actor.loss_reduction, "sequence_mean"),
+        "actor.gae_lambda": (config.actor.gae_lambda, 0.95),
+        "actor.critic_gae_lambda": (config.actor.critic_gae_lambda, 1.0),
         "actor.gae_timestep_unit": (config.actor.gae_timestep_unit, "token"),
-        "actor.reward_scaling": (config.actor.reward_scaling, 10.0),
-        "actor.reward_bias": (config.actor.reward_bias, -0.5),
+        "actor.reward_scaling": (config.actor.reward_scaling, 1.0),
+        "actor.reward_bias": (config.actor.reward_bias, 0.0),
         "actor.use_decoupled_loss": (config.actor.use_decoupled_loss, True),
         "actor.recompute_logprob": (config.actor.recompute_logprob, True),
+        "actor.prox_logp_method": (config.actor.prox_logp_method, "recompute"),
+        "actor.ppo_n_minibatches": (config.actor.ppo_n_minibatches, 1),
         "actor.reward_norm": (config.actor.reward_norm, None),
-        "actor.eps_clip": (config.actor.eps_clip, 0.4),
-        "actor.eps_clip_higher": (config.actor.eps_clip_higher, None),
+        "actor.adv_norm": (config.actor.adv_norm, None),
+        "actor.eps_clip": (config.actor.eps_clip, 0.2),
+        "actor.eps_clip_higher": (config.actor.eps_clip_higher, 0.28),
         "actor.kl_ctl": (config.actor.kl_ctl, 0.0),
         "actor.use_sapo_loss": (config.actor.use_sapo_loss, False),
         "actor.use_cispo_loss": (config.actor.use_cispo_loss, False),
@@ -48,8 +149,10 @@ def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
             "token",
         ),
         "dynamic_bs": (config.dynamic_bs, False),
+        "num_critic_only_steps": (config.num_critic_only_steps, 0),
         "gconfig.reward_normalization": (config.gconfig.reward_normalization, False),
         "train_dataset.drop_last": (config.train_dataset.drop_last, False),
+        "actor.init_from_scratch": (config.actor.init_from_scratch, False),
     }
     if not preflight:
         expected.update(
@@ -57,9 +160,15 @@ def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
                 "total_train_epochs": (config.total_train_epochs, 1),
                 "total_train_steps": (config.total_train_steps, None),
                 "gconfig.max_new_tokens": (config.gconfig.max_new_tokens, 8192),
-                "gconfig.n_samples": (config.gconfig.n_samples, 4),
-                "eval_gconfig.n_samples": (config.eval_gconfig.n_samples, 4),
+                "gconfig.n_samples": (config.gconfig.n_samples, 8),
+                "eval_gconfig.n_samples": (config.eval_gconfig.n_samples, 2),
+                "train_dataset.batch_size": (config.train_dataset.batch_size, 16),
                 "saver.freq_steps": (config.saver.freq_steps, 20),
+                "recover.freq_steps": (config.recover.freq_steps, 20),
+                "evaluator.eval_before_train": (
+                    config.evaluator.eval_before_train,
+                    True,
+                ),
                 "evaluator.freq_steps": (config.evaluator.freq_steps, 20),
             }
         )
@@ -68,10 +177,31 @@ def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
     }
     if mismatches:
         raise ValueError(f"PPO contract mismatch (observed, expected): {mismatches}")
+    for role in ("actor", "rollout", "evaluation_rollout"):
+        role_config = getattr(config, role)
+        if role_config.scheduling_strategy.type != "separation":
+            raise ValueError(f"{role} must use separate GPU workers")
+        if not role_config.scheduling_spec or any(
+            spec.gpu != 1 for spec in role_config.scheduling_spec
+        ):
+            raise ValueError(f"{role} workers must reserve one GPU each")
     if config.critic is None or not config.critic.is_critic:
         raise ValueError("A trainable scalar critic is required")
-    if config.critic.path != config.actor.path:
-        raise ValueError("Actor and critic must share the pinned Base checkpoint")
+    if (
+        config.critic.scheduling_strategy.type != "colocation"
+        or config.critic.scheduling_strategy.target != "actor"
+    ):
+        raise ValueError("critic must colocate with actor on the four training GPUs")
+    if config.critic.loss_reduction != "sequence_mean":
+        raise ValueError("critic.loss_reduction must be sequence_mean")
+    if config.critic.path == config.actor.path:
+        raise ValueError("Actor Base and pretrained critic checkpoints must differ")
+    if config.critic.init_from_scratch:
+        raise ValueError("Pretrained critic must load from SAO_CRITIC_PATH")
+    if config.critic.eps_clip != 0.2:
+        raise ValueError("critic.eps_clip must be 0.2")
+    if config.critic.ppo_n_minibatches != 1:
+        raise ValueError("critic.ppo_n_minibatches must be 1")
     rejection = config.actor.rejection_sampling
     if rejection is None or (
         rejection.level,
@@ -81,16 +211,24 @@ def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
         rejection.lower,
     ) != ("token", "mask", "ratio", 5.0, None):
         raise ValueError("Expected official GSM8K token ratio rejection above 5")
-    for role in ("actor", "critic"):
-        optimizer = getattr(config, role).optimizer
+    optimizers = {
+        "actor": (config.actor.optimizer, 1.0e-6),
+        "critic": (config.critic.optimizer, 5.0e-6),
+    }
+    for role, (optimizer, lr) in optimizers.items():
         if optimizer is None or (
+            optimizer.type,
             optimizer.lr,
             optimizer.weight_decay,
+            optimizer.beta1,
+            optimizer.beta2,
+            optimizer.eps,
             optimizer.warmup_steps_proportion,
             optimizer.lr_scheduler_type,
             optimizer.warmup_steps,
-        ) != (1.7e-5, 0.017, 0.001, "constant", 5):
-            raise ValueError(f"{role} optimizer must match the official GSM8K recipe")
+            optimizer.gradient_clipping,
+        ) != ("adam", lr, 0.01, 0.9, 0.98, 1.0e-8, 0.0, "constant", 0, 1.0):
+            raise ValueError(f"{role} optimizer must match the SAO PPO recipe")
     if config.ref is not None or config.teacher is not None:
         raise ValueError("No reference/privileged teacher belongs in this PPO baseline")
     if config.sglang.attention_backend == "fa3":
@@ -147,6 +285,222 @@ def check_step_metrics(
         ):
             raise RuntimeError(f"Non-finite metric {key} at step {completed_step}")
     return roles
+
+
+def source_id_digest(source_ids: list[str]) -> str:
+    return hashlib.sha256(("\n".join(source_ids) + "\n").encode()).hexdigest()
+
+
+def source_key(source_id: str) -> int:
+    return int.from_bytes(
+        hashlib.sha256(str(source_id).encode()).digest()[:8], "big"
+    ) & ((1 << 63) - 1)
+
+
+def source_key_digest(source_ids: list[str]) -> str:
+    return hashlib.sha256(
+        (
+            "\n".join(str(source_key(source_id)) for source_id in source_ids) + "\n"
+        ).encode()
+    ).hexdigest()
+
+
+def weight_only_start_step_from_env() -> int:
+    raw = os.environ.get("SAO_WEIGHT_ONLY_START_STEP")
+    if raw in (None, ""):
+        return 0
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError("SAO_WEIGHT_ONLY_START_STEP must be an integer") from exc
+    if value < 0:
+        raise ValueError("SAO_WEIGHT_ONLY_START_STEP must be non-negative")
+    return value
+
+
+def _global_epoch_source_ids(
+    trainer,
+    train_dataset,
+    *,
+    config: PPOConfig,
+    count: int,
+) -> list[str]:
+    sampler = trainer.train_dataloader.sampler
+    dataset_len = len(train_dataset)
+    generator = torch.Generator()
+    generator.manual_seed(int(getattr(sampler, "seed", config.seed)))
+    if getattr(sampler, "shuffle", False):
+        indices = torch.randperm(dataset_len, generator=generator).tolist()
+    else:
+        indices = list(range(dataset_len))
+    total_size = int(getattr(sampler, "total_size", len(indices)))
+    if not getattr(sampler, "drop_last", False) and total_size > len(indices):
+        padding_size = total_size - len(indices)
+        if padding_size <= len(indices):
+            indices += indices[:padding_size]
+        else:
+            indices += (indices * math.ceil(padding_size / len(indices)))[:padding_size]
+    else:
+        indices = indices[:total_size]
+    if count > len(indices):
+        raise ValueError(
+            f"Weight-only start needs {count} skipped prompts, but the seeded epoch "
+            f"contains only {len(indices)} prompts"
+        )
+    source_ids = list(train_dataset["source_id"])
+    return [str(source_ids[index]) for index in indices[:count]]
+
+
+def _load_expected_weight_only_digest(
+    source: Path,
+    *,
+    start_step: int,
+    batch_size: int,
+) -> dict[str, str]:
+    if source.is_dir():
+        continuation = source / "weight-only-continuation.json"
+        if continuation.is_file():
+            return _load_expected_weight_only_digest(
+                continuation, start_step=start_step, batch_size=batch_size
+            )
+        consumed = None
+        if (source / "consumed").is_dir():
+            consumed = source / "consumed"
+        elif (source / "1.json").is_file():
+            consumed = source
+        if consumed is not None:
+            keys = []
+            seen = set()
+            for step in range(1, start_step + 1):
+                path = consumed / f"{step}.json"
+                if not path.is_file():
+                    raise ValueError(f"Missing consumed evidence file: {path}")
+                for row in json.loads(path.read_text(encoding="utf-8")):
+                    key = int(row["audit_source_key"])
+                    if key not in seen:
+                        seen.add(key)
+                        keys.append(str(key))
+            expected = start_step * batch_size
+            if len(keys) != expected:
+                raise ValueError(
+                    f"Consumed evidence has {len(keys)} unique prompts, expected {expected}"
+                )
+            return {
+                "source_key_sha256": hashlib.sha256(
+                    ("\n".join(keys) + "\n").encode()
+                ).hexdigest()
+            }
+        epoch_order = source / "epoch-order.json"
+        if epoch_order.is_file():
+            return _load_expected_weight_only_digest(
+                epoch_order, start_step=start_step, batch_size=batch_size
+            )
+        raise ValueError(f"No supported source evidence found in {source}")
+
+    payload = json.loads(source.read_text(encoding="utf-8"))
+    if "skipped_source_id_sha256" in payload or "skipped_source_key_sha256" in payload:
+        return {
+            "source_id_sha256": payload.get("skipped_source_id_sha256"),
+            "source_key_sha256": payload.get("skipped_source_key_sha256"),
+        }
+    if "source_id_order_sha256" in payload and "source_ids" in payload:
+        ids = [str(item) for item in payload["source_ids"][: start_step * batch_size]]
+        return {
+            "source_id_sha256": source_id_digest(ids),
+            "source_key_sha256": source_key_digest(ids),
+        }
+    for key in (
+        "source_id_sha256",
+        "consumed_source_id_sha256",
+        "source_key_sha256",
+        "consumed_source_key_sha256",
+    ):
+        if key in payload:
+            return {key.replace("consumed_", ""): payload[key]}
+    raise ValueError(f"Unsupported source evidence payload: {source}")
+
+
+def prepare_weight_only_continuation(
+    trainer,
+    train_dataset,
+    evidence: Path,
+    *,
+    config: PPOConfig,
+    initial_step: int,
+) -> None:
+    if initial_step == 0:
+        return
+    if trainer.recover_info is not None:
+        raise ValueError(
+            "SAO_WEIGHT_ONLY_START_STEP is only valid when native recovery did not load"
+        )
+
+    skipped_prompt_count = initial_step * config.train_dataset.batch_size
+    skipped_source_ids = _global_epoch_source_ids(
+        trainer,
+        train_dataset,
+        config=config,
+        count=skipped_prompt_count,
+    )
+    payload = {
+        "mode": "weight_only",
+        "initial_step": initial_step,
+        "next_cumulative_step": initial_step + 1,
+        "skipped_prompt_count": skipped_prompt_count,
+        "train_batch_size": config.train_dataset.batch_size,
+        "seed": config.seed,
+        "skipped_source_id_sha256": source_id_digest(skipped_source_ids),
+        "skipped_source_key_sha256": source_key_digest(skipped_source_ids),
+        "source_evidence": os.environ.get("SAO_WEIGHT_ONLY_SOURCE_EVIDENCE"),
+        "optimizer_state": "reset",
+        "async_rollout_state": "reset",
+    }
+
+    expected_id_digest = os.environ.get("SAO_WEIGHT_ONLY_SOURCE_IDS_SHA256")
+    expected_key_digest = os.environ.get("SAO_WEIGHT_ONLY_SOURCE_KEYS_SHA256")
+    source_evidence = os.environ.get("SAO_WEIGHT_ONLY_SOURCE_EVIDENCE")
+    if not source_evidence and not expected_id_digest and not expected_key_digest:
+        raise ValueError(
+            "Weight-only continuation requires prior-source evidence. Set "
+            "SAO_WEIGHT_ONLY_SOURCE_EVIDENCE, SAO_WEIGHT_ONLY_SOURCE_IDS_SHA256, "
+            "or SAO_WEIGHT_ONLY_SOURCE_KEYS_SHA256."
+        )
+    if source_evidence:
+        expected = _load_expected_weight_only_digest(
+            Path(source_evidence).expanduser(),
+            start_step=initial_step,
+            batch_size=config.train_dataset.batch_size,
+        )
+        expected_id_digest = expected.get("source_id_sha256") or expected_id_digest
+        expected_key_digest = expected.get("source_key_sha256") or expected_key_digest
+    if expected_id_digest and expected_id_digest != payload["skipped_source_id_sha256"]:
+        raise ValueError(
+            "Skipped source_id digest does not match prior evidence: "
+            f"observed={payload['skipped_source_id_sha256']} expected={expected_id_digest}"
+        )
+    if (
+        expected_key_digest
+        and expected_key_digest != payload["skipped_source_key_sha256"]
+    ):
+        raise ValueError(
+            "Skipped source_key digest does not match prior evidence: "
+            f"observed={payload['skipped_source_key_sha256']} expected={expected_key_digest}"
+        )
+
+    iterator = iter(trainer.train_dataloader)
+    for _ in range(initial_step):
+        try:
+            next(iterator)
+        except StopIteration as exc:
+            raise ValueError(
+                f"Cannot skip {initial_step} dataloader batches for weight-only start"
+            ) from exc
+    state = trainer.train_dataloader.state_dict()
+    trainer.train_dataloader.load_state_dict(state)
+    (evidence / "weight-only-continuation.json").write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
 
 
 def verify_published_policy(trainer, evidence: Path, step: int) -> None:
@@ -222,14 +576,25 @@ def split_trajectory_groups(batch: list[dict]) -> list[dict]:
     return individual
 
 
-def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> None:
+def install_audit_hooks(
+    trainer,
+    evidence: Path,
+    *,
+    preflight: bool = False,
+    initial_step: int = 0,
+) -> None:
     """Keep native PPO execution; record consumed IDs and completed RPC spans."""
     consumed_dir = evidence / "consumed"
     consumed_dir.mkdir(exist_ok=True)
     start_step = (
         trainer.recover_info.last_step_info.next().global_step
         if trainer.recover_info is not None
-        else 0
+        else initial_step
+    )
+    optimizer_steps_base = (
+        trainer.recover_info.trainer_state.get("optimizer_steps_base", 0)
+        if trainer.recover_info is not None
+        else initial_step
     )
     state = {"step": start_step, "spans": []}
     original_prepare = trainer.actor.prepare_batch
@@ -264,6 +629,22 @@ def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> 
         return batch
 
     trainer.actor.prepare_batch = prepare
+    original_save_training_state = trainer._save_training_state
+
+    def save_training_state(*, epoch, epoch_step, global_step, force=False):
+        force = force or (
+            initial_step > 0
+            and trainer.recover_info is None
+            and global_step == initial_step
+        )
+        return original_save_training_state(
+            epoch=epoch,
+            epoch_step=epoch_step,
+            global_step=global_step,
+            force=force,
+        )
+
+    trainer._save_training_state = save_training_state
     original_advantages = trainer.actor.compute_advantages
 
     def advantages(*args, **kwargs):
@@ -288,6 +669,10 @@ def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> 
                 reward_bias=trainer.config.actor.reward_bias,
                 reward_clip=trainer.config.actor.reward_clip,
             )
+            if report["bootstrapped"] != 0:
+                raise RuntimeError(
+                    "SAO PPO critic-return audit unexpectedly bootstrapped"
+                )
             report["step"] = state["step"]
             report["consumed_sha256"] = hashlib.sha256(
                 (consumed_dir / f"{state['step']}.json").read_bytes()
@@ -305,7 +690,14 @@ def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> 
         original_update = engine.ppo_update
 
         def update(*args, _fn=original_update, _role=role, **kwargs):
-            if not preflight and _role == "actor" and state["step"] <= 5:
+            # Profiler RPCs can wait for decode activity; they are diagnostics,
+            # not a prerequisite for a valid optimizer update.
+            if (
+                os.environ.get("SAO_PROFILE_ROLLOUT", "0") == "1"
+                and not preflight
+                and _role == "actor"
+                and state["step"] <= 5
+            ):
                 for index, server in enumerate(trainer.rollout.server_infos):
                     address = format_hostport(server.host, server.port)
                     response = requests.post(
@@ -335,8 +727,11 @@ def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> 
     original_commit = trainer.stats_logger.commit
 
     def commit(epoch, step, global_step, data):
+        trainer.check_evaluation()
         completed_step = global_step + 1
-        roles = check_step_metrics(data, completed_step, completed_step - start_step)
+        roles = check_step_metrics(
+            data, completed_step, completed_step - optimizer_steps_base
+        )
         if data.get("ppo_actor/explicit_termination") != 1:
             raise RuntimeError(
                 "PPO update did not consume explicit episode termination metadata"
@@ -412,9 +807,16 @@ def install_audit_hooks(trainer, evidence: Path, *, preflight: bool = False) -> 
 def main(args: list[str]) -> None:
     config_only = "--check-config" in args
     args = [x for x in args if x != "--check-config"]
-    config, _ = load_expr_config(args, PPOConfig)
+    if config_only:
+        cfg, _ = parse_cli_args(args)
+        cfg = to_structured_cfg(cfg, SaoPPOConfig)
+        config = OmegaConf.to_object(cfg)
+        assert isinstance(config, SaoPPOConfig)
+    else:
+        config, _ = load_expr_config(args, SaoPPOConfig)
     preflight = os.environ.get("SAO_PREFLIGHT", "0") == "1"
     validate_contract(config, preflight=preflight)
+    validate_hf_checkpoint_paths(config)
     if config_only:
         sys.stdout.write(
             json.dumps(dataclasses.asdict(config), indent=2, default=str) + "\n"
@@ -445,9 +847,10 @@ def main(args: list[str]) -> None:
     }
     eval_kwargs = {**workflow_kwargs, "gconfig": config.eval_gconfig}
 
-    with PPOTrainer(
+    with AsyncEvalPPOTrainer(
         config, train_dataset=train_dataset, valid_dataset=valid_dataset
     ) as trainer:
+        weight_only_initial_step = weight_only_start_step_from_env()
         trainer.rollout.prepare_batch = functools.partial(
             trainer.rollout.prepare_batch, finite_epoch=True, fail_on_rejection=True
         )
@@ -470,11 +873,24 @@ def main(args: list[str]) -> None:
             )
             + "\n"
         )
-        install_audit_hooks(trainer, evidence, preflight=preflight)
+        prepare_weight_only_continuation(
+            trainer,
+            train_dataset,
+            evidence,
+            config=config,
+            initial_step=weight_only_initial_step,
+        )
+        trainer._apply_initial_step_policy_version(weight_only_initial_step)
+        install_audit_hooks(
+            trainer,
+            evidence,
+            preflight=preflight,
+            initial_step=weight_only_initial_step,
+        )
         if preflight and trainer.recover_info is None:
             verify_published_policy(trainer, evidence, 0)
         if config.evaluator.eval_before_train and trainer.recover_info is None:
-            # Consume only the initial trigger; do not advance step20 cadence.
+            # Consume only the initial trigger; do not advance the periodic evaluation cadence.
             trainer.evaluator.freq_ctl.check(epochs=0, steps=0)
             trainer._evaluate_fn(workflow, eval_kwargs)
         trainer.train(
@@ -482,6 +898,7 @@ def main(args: list[str]) -> None:
             workflow_kwargs=workflow_kwargs,
             eval_workflow=workflow,
             eval_workflow_kwargs=eval_kwargs,
+            initial_step=weight_only_initial_step,
         )
         (evidence / "epoch-finished.json").write_text(
             json.dumps(

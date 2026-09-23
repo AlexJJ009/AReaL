@@ -313,15 +313,20 @@ class RecoverHandler:
         base_model_path: str | None = None,
         trainer_state: dict | None = None,
         rollout_input_state: dict | None = None,
+        force: bool = False,
+        advance_cadence: bool = False,
     ):
         if self.config.mode in ("disabled", "off"):
             return
         self._ensure_recover_supported(engine)
         # currently only support recover on one engine
-        if not self.freq_ctl.check(
-            epochs=int(step_info.epoch_step == self.ft_spec.steps_per_epoch - 1),
-            steps=1,
-        ):
+        should_dump = True
+        if not force or advance_cadence:
+            should_dump = self.freq_ctl.check(
+                epochs=int(step_info.epoch_step == self.ft_spec.steps_per_epoch - 1),
+                steps=1,
+            )
+        if not force and not should_dump:
             return
         normalized_engine: dict[str, TrainEngine | TrainController] = (
             self._normalize_recover_engines(engine)

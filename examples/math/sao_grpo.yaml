@@ -1,13 +1,15 @@
 defaults:
-  - gsm8k_ppo
+  - gsm8k_grpo
   - _self_
 
-experiment_name: sao-math-async-ppo
+# Hyperparameters: radixark/miles@366f614b8ba3904984d431291dd396be48ae1aed
+# examples/infra_features/fully_async/run_qwen3_5_4b_fully_async_eval.py
+# AReaL correction/backend and the existing Base/nonthinking evaluation stay local.
+experiment_name: sao-math-miles-grpo
 trial_name: ${oc.env:SAO_TRIAL_NAME}
 seed: 42
 total_train_epochs: 1
 total_train_steps: null
-num_critic_only_steps: 0
 enable_offload: false
 tokenizer_path: ${actor.path}
 dynamic_bs: false
@@ -75,20 +77,10 @@ eval_gconfig:
 actor:
   backend: fsdp:d4p1t1
   path: ${oc.env:SAO_MODEL_PATH}
-  init_from_scratch: false
-  dtype: bfloat16
-  optimizer_dtype: float32
-  gradient_checkpointing: true
-  attn_impl: flash_attention_2
-  mb_spec:
-    max_tokens_per_mb: 9216
-    granularity: 1
-  # Scalars follow the miles-values 4B PPO example (aa2071f8).
-  # Keep AReaL's asynchronous correction and disabled LR warmup explicit.
   optimizer:
     type: adam
     lr: 1.0e-6
-    weight_decay: 0.01
+    weight_decay: 0.1
     beta1: 0.9
     beta2: 0.98
     eps: 1.0e-8
@@ -96,36 +88,46 @@ actor:
     gradient_clipping: 1.0
     warmup_steps: 0
     warmup_steps_proportion: 0.0
-  ppo_n_minibatches: 1
-  loss_reduction: sequence_mean
+  init_from_scratch: false
+  dtype: bfloat16
+  optimizer_dtype: float32
+  grad_reduce_dtype: float32
+  disable_dropout: true
+  gradient_checkpointing: true
+  attn_impl: flash_attention_2
+  mb_spec:
+    max_tokens_per_mb: 9216
+    packing_algorithm: ffd
+  # Miles sampling/optimizer/group normalization; native AReaL loss reduction.
   eps_clip: 0.2
   eps_clip_higher: 0.28
   c_clip: null
-  discount: 1.0
-  gae_lambda: 0.95
-  critic_gae_lambda: 1.0
-  gae_timestep_unit: token
   reward_scaling: 1.0
   reward_bias: 0.0
-  reward_norm: null
-  adv_norm: null
+  kl_ctl: 0.0
+  discount: 1.0
+  gae_lambda: 1.0
+  ppo_n_minibatches: 1
+  importance_sampling_level: token
+  use_sapo_loss: false
+  use_cispo_loss: false
+  overlong_reward_penalty: false
+  mask_no_eos_with_zero: false
   recompute_logprob: true
-  prox_logp_method: recompute
   use_decoupled_loss: true
+  # Keep AReaL masking, not an additional Miles TIS factor.
   rejection_sampling:
     level: token
     action: mask
     metric: ratio
     upper: 5.0
     lower: null
-  kl_ctl: 0.0
-  importance_sampling_level: token
-  use_sapo_loss: false
-  use_cispo_loss: false
-  m2_threshold: null
-  overlong_reward_penalty: false
-  # AuditedMathWorkflow supplies bootstrap_mask=false for EOS and budget cutoffs.
-  mask_no_eos_with_zero: false
+  reward_norm:
+    mean_level: group
+    std_level: group
+    group_size: ${gconfig.n_samples}
+  adv_norm: null  # Miles does not enable --normalize-advantages.
+  temperature: ${gconfig.temperature}
   max_new_tokens: ${gconfig.max_new_tokens}
   scheduling_spec:
     - task_type: worker
@@ -135,47 +137,16 @@ actor:
       cmd: python3 -m areal.infra.rpc.rpc_server
       env_vars: {}
 
-critic:
-  backend: ${actor.backend}
-  is_critic: true
-  # Load pretrained value weights (including score.weight), not recovery state.
-  path: ${oc.env:SAO_CRITIC_PATH}
-  init_from_scratch: false
-  dtype: ${actor.dtype}
-  optimizer_dtype: float32
-  gradient_checkpointing: true
-  attn_impl: flash_attention_2
-  mask_no_eos_with_zero: false
-  eps_clip: 0.2
-  ppo_n_minibatches: 1
-  loss_reduction: sequence_mean
-  mb_spec:
-    max_tokens_per_mb: 9216
-    granularity: 1
-  optimizer:
-    type: adam
-    lr: 5.0e-6
-    weight_decay: 0.01
-    beta1: 0.9
-    beta2: 0.98
-    eps: 1.0e-8
-    lr_scheduler_type: constant
-    gradient_clipping: 1.0
-    warmup_steps: 0
-    warmup_steps_proportion: 0.0
-  scheduling_strategy:
-    type: colocation
-    target: actor
-  scheduling_spec: ${actor.scheduling_spec}
-
+critic: null
 ref: null
 teacher: null
 
 sglang:
   model_path: ${actor.path}
   attention_backend: flashinfer
-  dtype: bfloat16
+  random_seed: ${seed}
   skip_tokenizer_init: true
+  dtype: bfloat16
   context_length: 9216
   mem_fraction_static: 0.75
   max_running_requests: 64
@@ -190,10 +161,10 @@ train_dataset:
   path: ${oc.env:SAO_DATA_PATH}
   split: train
   type: rl
-  batch_size: 16
+  batch_size: 32
   max_length: 1024
+  drop_last: true
   shuffle: true
-  drop_last: false
   num_workers: 0
   scheduling_spec: null
 
@@ -227,11 +198,7 @@ evaluator:
 
 stats_logger:
   wandb:
-    mode: online
-    entity: ${oc.env:SAO_WANDB_ENTITY,null}
-    project: ${oc.env:SAO_WANDB_PROJECT,areal-math-ppo}
-    tags: [async-ppo, dapo, qwen35-4b-base, pretrained-critic, sequence-mean]
-    notes: Base actor and pretrained Step50 critic; raw binary rewards; zero terminal bootstrap.
+    mode: disabled
   swanlab:
     mode: disabled
   trackio:

@@ -49,6 +49,7 @@ class AsyncEvalGRPOTrainer(PPOTrainer):
     """PPO trainer variant that queues eval on a dedicated SGLang controller."""
 
     _DEDICATED_ROLE = "dedicated-eval"
+    _snapshot_evidence = True
 
     def _init_impl(self, config, train_dataset=None, valid_dataset=None):
         self._async_eval_executor: concurrent.futures.ThreadPoolExecutor | None = None
@@ -181,7 +182,7 @@ class AsyncEvalGRPOTrainer(PPOTrainer):
             checkpoint_path=self.config.actor.path,
             eval_workflow=eval_workflow,
             eval_workflow_kwargs=eval_workflow_kwargs,
-            snapshot=False,  # Generic RLVR dumps; no experiment-specific sample ledger.
+            snapshot=self._snapshot_evidence and not self._is_preflight(),
         )
 
     def _evaluate(
@@ -210,7 +211,7 @@ class AsyncEvalGRPOTrainer(PPOTrainer):
                 checkpoint_path=checkpoint_path,
                 eval_workflow=eval_workflow,
                 eval_workflow_kwargs=eval_workflow_kwargs,
-                snapshot=False,  # Generic RLVR dumps; no experiment-specific sample ledger.
+                snapshot=self._snapshot_evidence and not self._is_preflight(),
             )
 
         self.evaluator.evaluate(queue_checkpoint_eval, epoch, epoch_step, global_step)

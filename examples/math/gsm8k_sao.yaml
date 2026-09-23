@@ -84,6 +84,7 @@ actor:
   reward_bias: 0.0
   kl_ctl: 0.0
   ppo_n_minibatches: 1
+  loss_reduction: token_mean
   recompute_logprob: false
   use_decoupled_loss: false
   rejection_sampling: null
@@ -147,13 +148,13 @@ saver:
   freq_steps: 20
   freq_secs: null
 recover:
-  mode: disabled
+  mode: auto
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
-  freq_epochs: 1
-  freq_steps: null
-  freq_secs: 3600
+  freq_epochs: null
+  freq_steps: 20
+  freq_secs: null
 evaluator:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
@@ -188,6 +189,7 @@ critic:
   disable_dropout: true
   gradient_checkpointing: true
   ppo_n_minibatches: 1
+  loss_reduction: token_mean
   eps_clip: null
   mb_spec:
     n_mbs: ${actor.mb_spec.n_mbs}

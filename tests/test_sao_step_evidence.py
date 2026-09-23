@@ -6,7 +6,14 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from examples.math.sao_ppo import check_step_metrics, verify_published_policy
+from examples.math.sao_ppo import (
+    check_step_metrics,
+    install_audit_hooks,
+    source_id_digest,
+    source_key_digest,
+    verify_published_policy,
+    weight_only_start_step_from_env,
+)
 
 from areal.engine.sglang_remote import SGLangBackend
 
@@ -48,6 +55,79 @@ def test_recovered_process_counts_updates_relative_to_init():
     }
     with pytest.raises(RuntimeError):
         check_step_metrics(_metrics(1), 21)
+
+
+def test_weight_only_start_step_env_validation(monkeypatch):
+    monkeypatch.delenv("SAO_WEIGHT_ONLY_START_STEP", raising=False)
+    assert weight_only_start_step_from_env() == 0
+    monkeypatch.setenv("SAO_WEIGHT_ONLY_START_STEP", "50")
+    assert weight_only_start_step_from_env() == 50
+    monkeypatch.setenv("SAO_WEIGHT_ONLY_START_STEP", "-1")
+    with pytest.raises(ValueError, match="non-negative"):
+        weight_only_start_step_from_env()
+
+
+def test_weight_only_source_digests_are_order_sensitive():
+    ids = ["gsm8k/train/2", "math/train/4"]
+    assert source_id_digest(ids) != source_id_digest(list(reversed(ids)))
+    assert source_key_digest(ids) != source_key_digest(list(reversed(ids)))
+
+
+def test_weight_only_hook_forces_first_continuation_checkpoint(tmp_path):
+    calls = []
+    trainer = SimpleNamespace()
+    trainer.recover_info = None
+    trainer.actor = SimpleNamespace(
+        prepare_batch=lambda *a, **k: [{"audit_source_key": torch.tensor([1])}],
+        compute_advantages=lambda *a, **k: a[0],
+        ppo_update=lambda *a, **k: None,
+    )
+    trainer.critic = SimpleNamespace(ppo_update=lambda *a, **k: None)
+    trainer._save_training_state = lambda **kwargs: calls.append(kwargs)
+    trainer.stats_logger = SimpleNamespace(commit=lambda *a, **k: None)
+    trainer._save_perf_tracer = lambda step: None
+    trainer.rollout = SimpleNamespace(pause=lambda: None, resume=lambda: None)
+
+    install_audit_hooks(trainer, tmp_path, initial_step=50)
+    trainer._save_training_state(epoch=0, epoch_step=50, global_step=50)
+    trainer._save_training_state(epoch=0, epoch_step=51, global_step=51)
+
+    assert calls[0]["force"] is True
+    assert calls[1]["force"] is False
+
+
+def test_recovered_weight_only_hook_uses_persisted_optimizer_base(tmp_path):
+    commits = []
+    trainer = SimpleNamespace()
+    trainer.recover_info = SimpleNamespace(
+        last_step_info=SimpleNamespace(
+            next=lambda: SimpleNamespace(global_step=51),
+        ),
+        trainer_state={"optimizer_steps_base": 50},
+    )
+    trainer.actor = SimpleNamespace(
+        prepare_batch=lambda *a, **k: [],
+        compute_advantages=lambda *a, **k: a[0],
+        ppo_update=lambda *a, **k: None,
+    )
+    trainer.critic = SimpleNamespace(ppo_update=lambda *a, **k: None)
+    trainer._save_training_state = lambda **kwargs: None
+    trainer.stats_logger = SimpleNamespace(
+        commit=lambda *args: commits.append(args),
+    )
+    trainer._save_perf_tracer = lambda step: None
+    trainer.rollout = SimpleNamespace(
+        pause=lambda: None,
+        resume=lambda: None,
+        get_version=lambda: 101,
+    )
+
+    install_audit_hooks(trainer, tmp_path)
+    metrics = _metrics(count=51)
+    metrics["ppo_actor/explicit_termination"] = 1
+    trainer.stats_logger.commit(0, 100, 100, metrics)
+
+    assert commits
 
 
 def test_joint_update_rejects_nonfinite_loss():

@@ -110,6 +110,7 @@ def main(args: list[str]) -> None:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--allow-base-critic", action="store_true")
     parser.add_argument("--check-config", action="store_true")
+    parser.add_argument("--startup-checkpoint-step", type=int, default=0)
     options, remaining = parser.parse_known_args(args)
     config, _ = load_expr_config(remaining, SaoPPOConfig)
     validate_sao_recipe(config, allow_base_critic=options.allow_base_critic)
@@ -152,6 +153,25 @@ def main(args: list[str]) -> None:
     with AsyncEvalPPOTrainer(
         config, train_dataset=train, valid_dataset=valid
     ) as trainer:
+        trainer._snapshot_evidence = (
+            workflow == "areal.workflow.sao_math.AuditedMathWorkflow"
+        )
+        save_training_state = trainer._save_training_state
+
+        def save_with_startup_probe(*, epoch, epoch_step, global_step, force=False):
+            probe = global_step + 1 == options.startup_checkpoint_step
+            save_training_state(
+                epoch=epoch,
+                epoch_step=epoch_step,
+                global_step=global_step,
+                force=force or probe,
+            )
+            if probe:
+                (evidence / "startup-checkpoint.json").write_text(
+                    json.dumps({"step": global_step + 1, "saved": True}) + "\n"
+                )
+
+        trainer._save_training_state = save_with_startup_probe
         commit = trainer.stats_logger.commit
 
         def commit_with_evidence(epoch, step, global_step, data):

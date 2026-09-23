@@ -223,6 +223,28 @@ def test_recover_info_loads_legacy_checkpoint_without_trainer_state(tmp_path):
     assert loaded.rollout_input_state is None
 
 
+def test_recover_dump_force_writes_without_configured_cadence(tmp_path):
+    handler = _handler(tmp_path)
+    step_info = StepInfo(epoch=0, epoch_step=0, global_step=0, steps_per_epoch=4)
+
+    handler.dump(
+        {"default": _FakeEngine(), "critic": _FakeEngine()},
+        step_info,
+        _Stateful({"saver": "state"}),
+        _Stateful({"evaluator": "state"}),
+        _Stateful({"stats": "state"}),
+        _DataLoader({"loader": "state"}),
+        trainer_state={"policy_version": 1},
+        force=True,
+    )
+
+    loaded = RecoverInfo.load(
+        RecoverHandler.recover_info_path("exp", "trial", str(tmp_path))
+    )
+    assert loaded.last_step_info.global_step == 0
+    assert loaded.trainer_state == {"policy_version": 1}
+
+
 def test_recover_load_rejects_warmup_config_mismatch(tmp_path):
     handler = _write_recover_tree(
         tmp_path,
@@ -416,3 +438,36 @@ def test_input_recovery_roundtrips_in_single_controller_process_group(tmp_path):
         _assert_state_equal(loaded.dataloader_info, source.dataloader_info)
     finally:
         dist.destroy_process_group()
+
+
+@pytest.mark.parametrize(
+    ("saved_policy", "expected_policy"),
+    [
+        ("replay_raw_inputs_discard_generated_trajectories", 0),
+        (0, "replay_raw_inputs_discard_generated_trajectories"),
+    ],
+)
+def test_recover_rejects_sao_ppo_policy_switch_before_loading_weights(
+    tmp_path, saved_policy, expected_policy
+):
+    handler = _write_recover_tree(
+        tmp_path,
+        trainer_state={
+            "num_critic_only_steps": 0,
+            "rollout_recovery_policy": saved_policy,
+        },
+        global_step=2,
+        roles=("default", "critic"),
+    )
+    with pytest.raises(ValueError, match="rollout_recovery_policy"):
+        handler.load(
+            {"default": _FakeEngine(), "critic": _FakeEngine()},
+            _Stateful(),
+            _Stateful(),
+            _Stateful(),
+            _DataLoader(),
+            expected_trainer_state={
+                "num_critic_only_steps": 0,
+                "rollout_recovery_policy": expected_policy,
+            },
+        )
