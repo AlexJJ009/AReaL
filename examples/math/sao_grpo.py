@@ -153,6 +153,38 @@ def validate_contract(config: SaoGRPOConfig, *, preflight: bool = False) -> None
         raise ValueError("Miles recipe disables extra batch-level adv_norm")
 
 
+def _as_finite_float(data: dict, key: str) -> float | None:
+    value = data.get(key)
+    if value is None:
+        return None
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _legal_zero_advantage_update(data: dict) -> dict | None:
+    adv_min = _as_finite_float(data, "ppo_actor/advantages/min")
+    adv_max = _as_finite_float(data, "ppo_actor/advantages/max")
+    valid_tokens = _as_finite_float(data, "ppo_actor/update/n_valid_tokens")
+    if valid_tokens is None:
+        valid_tokens = _as_finite_float(data, "ppo_actor/n_valid_tokens")
+    if (
+        adv_min == 0.0
+        and adv_max == 0.0
+        and valid_tokens is not None
+        and valid_tokens > 0
+    ):
+        return {
+            "reason": "zero_advantage",
+            "advantages_min": adv_min,
+            "advantages_max": adv_max,
+            "n_valid_tokens": valid_tokens,
+        }
+    return None
+
+
 def _check_actor_step_metrics(
     data: dict, completed_step: int, updates_since_init: int | None = None
 ) -> dict:
@@ -161,10 +193,6 @@ def _check_actor_step_metrics(
     counts = {k: v for k, v in data.items() if k.endswith("optimizer_steps_since_init")}
     if not grads or not successes or not counts:
         raise RuntimeError(f"Missing actor optimizer evidence at step {completed_step}")
-    if any(not math.isfinite(float(v)) or float(v) <= 0 for v in grads.values()):
-        raise RuntimeError(
-            f"Actor has a non-finite/zero gradient at step {completed_step}"
-        )
     if any(float(v) != 1 for v in successes.values()):
         raise RuntimeError(
             f"Actor skipped an optimizer update at step {completed_step}"
@@ -176,6 +204,18 @@ def _check_actor_step_metrics(
         raise RuntimeError(
             f"Actor optimizer count mismatch: {counts}, expected {expected_count}"
         )
+    grad_values = [float(v) for v in grads.values()]
+    if any(not math.isfinite(v) for v in grad_values):
+        raise RuntimeError(
+            f"Actor has a non-finite/zero gradient at step {completed_step}"
+        )
+    zero_gradient_allowed = None
+    if any(v <= 0 for v in grad_values):
+        zero_gradient_allowed = _legal_zero_advantage_update(data)
+        if not (zero_gradient_allowed is not None and all(v == 0 for v in grad_values)):
+            raise RuntimeError(
+                f"Actor has a non-finite/zero gradient at step {completed_step}"
+            )
     for key, value in data.items():
         if (
             "loss" in key
@@ -183,11 +223,14 @@ def _check_actor_step_metrics(
             and not math.isfinite(value)
         ):
             raise RuntimeError(f"Non-finite metric {key} at step {completed_step}")
-    return {
+    payload = {
         "grad_norm": grads,
         "update_successful": successes,
         "optimizer_steps": counts,
     }
+    if zero_gradient_allowed is not None:
+        payload["zero_gradient_allowed"] = zero_gradient_allowed
+    return payload
 
 
 def write_step_count_evidence(

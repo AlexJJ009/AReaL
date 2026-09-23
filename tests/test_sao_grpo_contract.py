@@ -12,7 +12,11 @@ import torch
 from datasets import Dataset, DatasetDict
 from omegaconf import OmegaConf
 
-from examples.math.sao_grpo import validate_contract, write_step_count_evidence
+from examples.math.sao_grpo import (
+    _check_actor_step_metrics,
+    validate_contract,
+    write_step_count_evidence,
+)
 from scripts.sao.async_eval import SaoGRPOConfig
 
 from areal.api.cli_args import GRPOConfig, parse_cli_args, to_structured_cfg
@@ -45,6 +49,59 @@ def _set_nested(obj: Any, dotted_path: str, value: Any) -> None:
     for part in parts[:-1]:
         target = getattr(target, part)
     setattr(target, parts[-1], value)
+
+
+def _actor_metrics(
+    *, grad_norm: float, adv_min: float, adv_max: float, valid_tokens: float = 8.0
+) -> dict[str, float]:
+    return {
+        "ppo_actor/update/grad_norm": grad_norm,
+        "ppo_actor/update/update_successful": 1.0,
+        "ppo_actor/update/optimizer_steps_since_init": 2.0,
+        "ppo_actor/advantages/min": adv_min,
+        "ppo_actor/advantages/max": adv_max,
+        "ppo_actor/update/n_valid_tokens": valid_tokens,
+        "ppo_actor/update/actor_loss/avg": 0.0,
+    }
+
+
+def test_actor_metric_guard_accepts_zero_gradient_only_for_zero_advantage() -> None:
+    payload = _check_actor_step_metrics(
+        _actor_metrics(grad_norm=0.0, adv_min=0.0, adv_max=0.0),
+        completed_step=2,
+    )
+
+    assert payload["zero_gradient_allowed"] == {
+        "reason": "zero_advantage",
+        "advantages_min": 0.0,
+        "advantages_max": 0.0,
+        "n_valid_tokens": 8.0,
+    }
+
+
+def test_actor_metric_guard_rejects_unqualified_zero_gradient() -> None:
+    with pytest.raises(RuntimeError, match="zero gradient"):
+        _check_actor_step_metrics(
+            _actor_metrics(grad_norm=0.0, adv_min=-1.0, adv_max=1.0),
+            completed_step=2,
+        )
+    with pytest.raises(RuntimeError, match="zero gradient"):
+        _check_actor_step_metrics(
+            _actor_metrics(grad_norm=0.0, adv_min=0.0, adv_max=0.0, valid_tokens=0.0),
+            completed_step=2,
+        )
+
+
+def test_actor_metric_guard_still_rejects_nan_and_skipped_updates() -> None:
+    with pytest.raises(RuntimeError, match="zero gradient"):
+        _check_actor_step_metrics(
+            _actor_metrics(grad_norm=float("nan"), adv_min=0.0, adv_max=0.0),
+            completed_step=2,
+        )
+    data = _actor_metrics(grad_norm=0.0, adv_min=0.0, adv_max=0.0)
+    data["ppo_actor/update/update_successful"] = 0.0
+    with pytest.raises(RuntimeError, match="skipped"):
+        _check_actor_step_metrics(data, completed_step=2)
 
 
 def test_sao_yaml_applies_miles_grpo_knobs(
