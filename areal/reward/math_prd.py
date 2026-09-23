@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import multiprocessing
 import queue
@@ -31,6 +32,10 @@ MATH_VERIFY_TIMEOUT_SECONDS = 30.0
 MATH_VERIFY_TERMINATE_GRACE_SECONDS = 1.0
 MATH_VERIFY_PARSE_TIMEOUT_SECONDS = 5
 MATH_VERIFY_VERIFY_TIMEOUT_SECONDS = 5
+MATH_VERIFY_RETRY_TIMEOUT_SECONDS = 60.0
+MATH_VERIFY_RETRY_PARSE_TIMEOUT_SECONDS = 15
+MATH_VERIFY_RETRY_VERIFY_TIMEOUT_SECONDS = 15
+MATH_VERIFY_DIAGNOSTIC_PREVIEW_CHARS = 160
 
 _BOX_COMMANDS = ("\\boxed", "\\fbox")
 _BASE_SUBSCRIPT_RE = re.compile(r"(?<![A-Za-z\\])\d+_\{?\d+\}?")
@@ -354,9 +359,41 @@ def _multiprocessing_context():
         return multiprocessing.get_context()
 
 
-def _math_verify_equiv(ground_truth: str, answer: str) -> bool:
-    if find_spec("math_verify") is None:
-        raise MathPRDRewardError("math_verify is required for PRD semantic math reward")
+def _semantic_verify_diagnostic(ground_truth: str, answer: str) -> str:
+    ground_truth_boxed = _boxed(ground_truth)
+    answer_boxed = _boxed(answer)
+    return (
+        f"gold_len={len(ground_truth_boxed)} "
+        f"pred_len={len(answer_boxed)} "
+        f"gold_sha256={hashlib.sha256(ground_truth_boxed.encode()).hexdigest()} "
+        f"pred_sha256={hashlib.sha256(answer_boxed.encode()).hexdigest()} "
+        f"gold_preview={ground_truth_boxed[:MATH_VERIFY_DIAGNOSTIC_PREVIEW_CHARS]!r} "
+        f"pred_preview={answer_boxed[:MATH_VERIFY_DIAGNOSTIC_PREVIEW_CHARS]!r}"
+    )
+
+
+def _with_semantic_verify_diagnostic(
+    message: str, ground_truth: str, answer: str
+) -> str:
+    return f"{message}; {_semantic_verify_diagnostic(ground_truth, answer)}"
+
+
+def _is_math_verify_timeout_payload(payload: Any) -> bool:
+    return (
+        isinstance(payload, dict)
+        and payload.get("module") == "math_verify.errors"
+        and payload.get("type") == "TimeoutException"
+    )
+
+
+def _run_math_verify_equiv_once(
+    ground_truth: str,
+    answer: str,
+    *,
+    parse_timeout: int,
+    verify_timeout: int,
+    process_timeout: float,
+) -> bool:
     ctx = _multiprocessing_context()
     result_queue = ctx.Queue(maxsize=1)
     process = ctx.Process(
@@ -365,12 +402,12 @@ def _math_verify_equiv(ground_truth: str, answer: str) -> bool:
             result_queue,
             _boxed(ground_truth),
             _boxed(answer),
-            MATH_VERIFY_PARSE_TIMEOUT_SECONDS,
-            MATH_VERIFY_VERIFY_TIMEOUT_SECONDS,
+            parse_timeout,
+            verify_timeout,
         ),
     )
     process.start()
-    process.join(MATH_VERIFY_TIMEOUT_SECONDS)
+    process.join(process_timeout)
     if process.is_alive():
         process.terminate()
         process.join(MATH_VERIFY_TERMINATE_GRACE_SECONDS)
@@ -380,7 +417,7 @@ def _math_verify_equiv(ground_truth: str, answer: str) -> bool:
         result_queue.close()
         result_queue.join_thread()
         raise MathPRDTimeoutError(
-            f"MATH PRD semantic reward timed out after {MATH_VERIFY_TIMEOUT_SECONDS} seconds"
+            f"MATH PRD semantic reward timed out after {process_timeout} seconds"
         )
 
     queue_closed = False
@@ -391,7 +428,8 @@ def _math_verify_equiv(ground_truth: str, answer: str) -> bool:
         result_queue.join_thread()
         queue_closed = True
         raise MathPRDRewardError(
-            f"MATH PRD semantic reward subprocess exited without a result: exitcode={process.exitcode}"
+            "MATH PRD semantic reward subprocess exited without a result: "
+            f"exitcode={process.exitcode}"
         ) from exc
     finally:
         if not queue_closed:
@@ -400,17 +438,57 @@ def _math_verify_equiv(ground_truth: str, answer: str) -> bool:
 
     if status == "ok":
         return bool(payload)
-    if (
-        isinstance(payload, dict)
-        and payload.get("module") == "math_verify.errors"
-        and payload.get("type") == "TimeoutException"
-    ):
+    if _is_math_verify_timeout_payload(payload):
         raise MathPRDTimeoutError(
             "MATH PRD semantic reward timed out inside math_verify"
         )
     raise MathPRDRewardError(
         f"MATH PRD semantic reward failed inside subprocess: {payload}"
     )
+
+
+def _math_verify_equiv(ground_truth: str, answer: str) -> bool:
+    if find_spec("math_verify") is None:
+        raise MathPRDRewardError("math_verify is required for PRD semantic math reward")
+    try:
+        return _run_math_verify_equiv_once(
+            ground_truth,
+            answer,
+            parse_timeout=MATH_VERIFY_PARSE_TIMEOUT_SECONDS,
+            verify_timeout=MATH_VERIFY_VERIFY_TIMEOUT_SECONDS,
+            process_timeout=MATH_VERIFY_TIMEOUT_SECONDS,
+        )
+    except MathPRDTimeoutError as first_timeout:
+        try:
+            return _run_math_verify_equiv_once(
+                ground_truth,
+                answer,
+                parse_timeout=MATH_VERIFY_RETRY_PARSE_TIMEOUT_SECONDS,
+                verify_timeout=MATH_VERIFY_RETRY_VERIFY_TIMEOUT_SECONDS,
+                process_timeout=MATH_VERIFY_RETRY_TIMEOUT_SECONDS,
+            )
+        except MathPRDTimeoutError as retry_timeout:
+            raise MathPRDTimeoutError(
+                _with_semantic_verify_diagnostic(
+                    "MATH PRD semantic reward timed out after retry "
+                    f"(first={first_timeout}; retry={retry_timeout})",
+                    ground_truth,
+                    answer,
+                )
+            ) from retry_timeout
+        except MathPRDRewardError as retry_error:
+            raise MathPRDRewardError(
+                _with_semantic_verify_diagnostic(
+                    "MATH PRD semantic reward failed after timeout retry: "
+                    f"{retry_error}",
+                    ground_truth,
+                    answer,
+                )
+            ) from retry_error
+    except MathPRDRewardError as exc:
+        raise MathPRDRewardError(
+            _with_semantic_verify_diagnostic(str(exc), ground_truth, answer)
+        ) from exc
 
 
 def score_math_prd(completion: str, answer: str) -> float:

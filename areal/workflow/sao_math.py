@@ -79,6 +79,8 @@ class AuditedMathWorkflow(RLVRWorkflow):
     ) -> tuple[ModelResponse, float]:
         context = workflow_context.get()
         started_ns = time.time_ns()
+        resp = None
+        generated_ns = None
         try:
             async with atrace_session_phase("generate"):
                 resp = await engine.agenerate(req)
@@ -89,6 +91,18 @@ class AuditedMathWorkflow(RLVRWorkflow):
                 {
                     "request_id": req.rid,
                     "source_id": task_data["source_id"],
+                    "task_id": context.task_id,
+                    "sample_idx": context.sample_idx,
+                    "benchmark": task_data.get(
+                        "benchmark", task_data.get("data_source")
+                    ),
+                    "answer": task_data.get("answer"),
+                    "completion": (
+                        self.tokenizer.decode(resp.output_tokens)
+                        if resp is not None
+                        else None
+                    ),
+                    "generation_completed_ns": generated_ns,
                     "is_eval": context.is_eval,
                     "started_ns": started_ns,
                     "failed_ns": time.time_ns(),

@@ -15,6 +15,11 @@ import sys
 import time
 from pathlib import Path
 
+from scripts.sao.gpu_admission import (
+    admission_config_from_env,
+    wait_for_scoped_gpus_free,
+)
+
 ROOT = Path(os.environ["SAO_LAUNCH_DIR"]).resolve()
 REPO = Path.cwd()
 MANIFEST = ROOT / "manifest.json"
@@ -151,12 +156,18 @@ def evaluation_versions(run):
     return tuple(sorted(set(versions)))
 
 
+def wait_for_gpu_admission(stage_name):
+    config = admission_config_from_env()
+    report = wait_for_scoped_gpus_free(config)
+    (ROOT / f"gpu-admission-{stage_name}.json").write_text(
+        json.dumps(report, indent=2) + "\n"
+    )
+    return report
+
+
 def run_stage(name, dataset, preflight, expected_config_hash=None):
     check_frozen()
-    if subprocess.check_output(
-        ["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"]
-    ).strip():
-        raise RuntimeError("GPUs not free before stage launch")
+    wait_for_gpu_admission("preflight" if preflight else "formal")
     run = (
         Path(os.environ["SAO_RUN_ROOT"])
         if not preflight
@@ -256,12 +267,7 @@ def main():
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, interrupted)
     manifest = check_frozen()
-    if subprocess.check_output(
-        ["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"]
-    ).strip():
-        raise RuntimeError(
-            "GPU processes still active; refusing to overlap another experiment"
-        )
+    wait_for_gpu_admission("initial")
     with (ROOT / "started.json").open("x") as stream:
         json.dump({"pid": os.getpid(), "started_ns": time.time_ns()}, stream)
     probe = run_stage(

@@ -1474,8 +1474,7 @@ class PPOTrainer:
             },
             rollout_input_state=(
                 self.rollout.get_input_recovery_state()
-                if self.config.num_critic_only_steps
-                and is_single_controller()
+                if is_single_controller()
                 and hasattr(self.rollout, "get_input_recovery_state")
                 else None
             ),

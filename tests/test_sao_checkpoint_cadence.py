@@ -9,6 +9,28 @@ from areal.trainer.rl_trainer import PPOTrainer
 from areal.utils.saver import Saver
 
 
+def test_joint_ppo_checkpoint_preserves_outstanding_inputs(monkeypatch):
+    monkeypatch.setattr("areal.trainer.rl_trainer.is_single_controller", lambda: True)
+    pending = {"outstanding": [{"source_id": "prefetched"}], "buffer": []}
+    captured = {}
+    trainer = PPOTrainer.__new__(PPOTrainer)
+    trainer.actor = object()
+    trainer.critic = object()
+    trainer.config = SimpleNamespace(num_critic_only_steps=0)
+    trainer.train_dataloader = [None] * 100
+    trainer.rollout = SimpleNamespace(get_input_recovery_state=lambda: pending)
+    trainer.recover_handler = SimpleNamespace(
+        dump=lambda *args, **kwargs: captured.update(kwargs)
+    )
+    trainer.saver = trainer.evaluator = trainer.stats_logger = None
+    trainer.tokenizer = trainer.processor = None
+
+    trainer._save_recover_checkpoint(epoch=0, epoch_step=49, global_step=49)
+
+    assert captured["rollout_input_state"] == pending
+    assert captured["trainer_state"]["policy_version"] == 50
+
+
 def test_actor_and_critic_save_together_every_twenty_steps_and_at_tail(
     tmp_path, monkeypatch
 ):
