@@ -978,6 +978,11 @@ class FSDPEngine(TrainEngine):
                 reduce_group=self.data_parallel_group,
             )
 
+    def _release_unused_cuda_cache(self) -> None:
+        gc.collect()
+        current_platform.empty_cache()
+        gc.collect()
+
     def offload(self) -> None:
         """Offload model memory to CPU using torch_memory_saver.
 

@@ -648,6 +648,17 @@ class PPOTrainer:
         if self._should_offload_actor:
             self._offload_model(self.actor, role="actor")
 
+    def _release_unused_cuda_cache(self, engine, role: str) -> None:
+        backend = str(getattr(getattr(engine, "config", None), "backend", ""))
+        if not backend.startswith("fsdp"):
+            return
+        if hasattr(engine, "_custom_function_call"):
+            engine._custom_function_call("_release_unused_cuda_cache")
+        elif hasattr(engine, "_release_unused_cuda_cache"):
+            engine._release_unused_cuda_cache()
+        else:
+            logger.debug("%s engine does not expose unused CUDA cache release", role)
+
     def _apply_initial_step_policy_version(self, initial_step: int) -> None:
         if initial_step <= 0:
             return
@@ -773,6 +784,7 @@ class PPOTrainer:
                     for traj, v in zip(rollout_batch, values):
                         traj["values"] = v
                     self.critic.get_device_stats().log("critic values")
+                    self._release_unused_cuda_cache(self.critic, role="critic")
                 # Critic stays onloaded — offloaded after ppo_update below
 
             if self.ref is not None:
@@ -876,6 +888,9 @@ class PPOTrainer:
                     self.actor.ppo_update(adv_batch)
                     self.actor.step_lr_scheduler()
                     self.actor.get_device_stats().log("ppo update")
+                    if self.critic is not None:
+                        # Other role processes cannot reuse this allocator's cache.
+                        self._release_unused_cuda_cache(self.actor, role="actor")
 
             if (
                 config.memory_profiler is not None
