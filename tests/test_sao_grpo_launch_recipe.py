@@ -21,6 +21,11 @@ def _write(path, value):
     path.write_text(json.dumps(value))
 
 
+def _write_jsonl(path, values):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("".join(json.dumps(value) + "\n" for value in values))
+
+
 def test_launch_audit_accepts_n8_and_rejects_incomplete_group(monkeypatch, tmp_path):
     launcher = _launcher(monkeypatch, tmp_path)
     evidence = tmp_path / "evidence"
@@ -79,3 +84,22 @@ def test_launch_eval_schedule_includes_new_epoch_end(monkeypatch, tmp_path):
         },
     )
     assert launcher.evaluation_versions(tmp_path) == (0, *range(20, 537, 20), 536)
+
+
+def test_launch_preflight_eval_uses_resolved_eval_n_samples(monkeypatch, tmp_path):
+    launcher = _launcher(monkeypatch, tmp_path)
+    evidence = tmp_path / "evidence"
+    _write(evidence / "resolved-config.json", {"eval_gconfig": {"n_samples": 2}})
+    records = [
+        {"source_id": f"test:{source}", "sample_idx": sample_idx}
+        for source in range(5)
+        for sample_idx in range(2)
+    ]
+    _write_jsonl(evidence / "samples/eval-1.jsonl", records)
+
+    launcher.verify_preflight_evaluation(tmp_path)
+    assert launcher.eval_n_samples(tmp_path) == 2
+
+    _write_jsonl(evidence / "samples/eval-1.jsonl", records[:-1])
+    with pytest.raises(RuntimeError, match="Preflight evaluation incomplete"):
+        launcher.verify_preflight_evaluation(tmp_path)

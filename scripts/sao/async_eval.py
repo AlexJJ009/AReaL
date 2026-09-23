@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Dedicated async evaluation controller for the SAO GRPO run."""
+"""Dedicated async evaluation controller for SAO math training."""
 
 from __future__ import annotations
 
@@ -16,7 +16,12 @@ from typing import Any
 from areal import PPOTrainer
 from areal.api import WeightUpdateMeta
 from areal.api.alloc_mode import ModelAllocation
-from areal.api.cli_args import GRPOConfig, InferenceEngineConfig, SGLangConfig
+from areal.api.cli_args import (
+    GRPOConfig,
+    InferenceEngineConfig,
+    PPOConfig,
+    SGLangConfig,
+)
 from areal.engine import RemoteSGLangEngine
 from areal.utils import name_resolve, names
 from areal.utils.saver import Saver
@@ -25,6 +30,15 @@ from areal.utils.saver import Saver
 @dataclasses.dataclass
 class SaoGRPOConfig(GRPOConfig):
     """SAO GRPO config with a separate rollout engine for eval."""
+
+    evaluation_rollout: InferenceEngineConfig = dataclasses.field(
+        default_factory=lambda: InferenceEngineConfig(backend="sglang:d1p1t1")
+    )
+
+
+@dataclasses.dataclass
+class SaoPPOConfig(PPOConfig):
+    """SAO PPO config with a separate rollout engine for eval."""
 
     evaluation_rollout: InferenceEngineConfig = dataclasses.field(
         default_factory=lambda: InferenceEngineConfig(backend="sglang:d1p1t1")
@@ -47,7 +61,7 @@ class AsyncEvalGRPOTrainer(PPOTrainer):
             self._write_gpu_allocation()
 
     @staticmethod
-    def _validate_save_eval_sync(config: SaoGRPOConfig) -> None:
+    def _validate_save_eval_sync(config: SaoGRPOConfig | SaoPPOConfig) -> None:
         saver = config.saver
         evaluator = config.evaluator
         fields = ("freq_steps", "freq_epochs", "freq_secs")
@@ -256,6 +270,7 @@ class AsyncEvalGRPOTrainer(PPOTrainer):
                     Path(self.config.train_dataset.path),
                     version,
                     allowed_versions=(version,),
+                    n_samples=self.config.eval_gconfig.n_samples,
                 )
             self._write_eval_status(
                 version,
@@ -399,3 +414,7 @@ class AsyncEvalGRPOTrainer(PPOTrainer):
                     first_error = exc
         if first_error is not None:
             raise first_error
+
+
+# The dedicated evaluator only uses actor snapshots; PPO retains its critic.
+AsyncEvalPPOTrainer = AsyncEvalGRPOTrainer

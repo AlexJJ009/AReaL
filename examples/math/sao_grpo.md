@@ -37,7 +37,7 @@ future explicit recipe change; this script never changes LR based on observed re
 - Use 4 FSDP training GPUs + 3 SGLang rollout GPUs + 1 dedicated evaluation GPU. The
   example adapter reuses native controllers. Training publishes XCCL weights to its
   three rollout servers; evaluation loads saved HF checkpoints separately.
-- Keep the existing 700-problem validation, 4 answers per problem, 8192 response limit,
+- Keep the existing 700-problem validation, 2 answers per problem, 8192 response limit,
   evaluation every 20 updates and at epoch end. This differs from Miles's AIME
   evaluation, 8 samples, 16384 response limit and interval 5. Evaluation runs in a
   serial background worker on its own GPU. Training can progress meanwhile; run

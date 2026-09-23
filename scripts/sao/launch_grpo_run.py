@@ -156,6 +156,30 @@ def evaluation_versions(run):
     return tuple(sorted(set(versions)))
 
 
+def eval_n_samples(run):
+    config = read(run / "evidence/resolved-config.json")
+    n_samples = config["eval_gconfig"]["n_samples"]
+    if not isinstance(n_samples, int) or isinstance(n_samples, bool) or n_samples <= 0:
+        raise RuntimeError("Resolved eval_gconfig.n_samples must be a positive integer")
+    return n_samples
+
+
+def verify_preflight_evaluation(run):
+    n_samples = eval_n_samples(run)
+    records = [
+        json.loads(line)
+        for path in (run / "evidence/samples").glob("eval-*.jsonl")
+        for line in path.read_text().splitlines()
+        if line
+    ]
+    if (
+        len(records) != 5 * n_samples
+        or len({row["source_id"] for row in records}) != 5
+        or any("error" in row for row in records)
+    ):
+        raise RuntimeError("Preflight evaluation incomplete")
+
+
 def wait_for_gpu_admission(stage_name):
     config = admission_config_from_env()
     report = wait_for_scoped_gpus_free(config)
@@ -231,22 +255,12 @@ def run_stage(name, dataset, preflight, expected_config_hash=None):
     cleanup()
     report = verify_steps(run)
     if preflight:
-        records = [
-            json.loads(line)
-            for path in (run / "evidence/samples").glob("eval-*.jsonl")
-            for line in path.read_text().splitlines()
-            if line
-        ]
-        if (
-            len(records) != 20
-            or len({row["source_id"] for row in records}) != 5
-            or any("error" in row for row in records)
-        ):
-            raise RuntimeError("Preflight evaluation incomplete")
+        verify_preflight_evaluation(run)
     else:
         from scripts.sao.snapshot_eval import snapshot_eval
 
         versions = evaluation_versions(run)
+        n_samples = eval_n_samples(run)
         for version in versions:
             completion = run / "evidence" / "async-eval" / f"{version}.json"
             if not completion.exists() or read(completion).get("status") != "completed":
@@ -258,6 +272,7 @@ def run_stage(name, dataset, preflight, expected_config_hash=None):
                 dataset,
                 version,
                 allowed_versions=versions,
+                n_samples=n_samples,
             )
     (run / "acceptance.json").write_text(json.dumps(report, indent=2))
     return run

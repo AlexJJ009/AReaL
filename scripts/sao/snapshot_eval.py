@@ -199,9 +199,17 @@ def _response_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _validate_version(
-    records: list[dict[str, Any]], *, expected_sources: set[str], version: int
+    records: list[dict[str, Any]],
+    *,
+    expected_sources: set[str],
+    version: int,
+    expected_n: int,
 ) -> dict[str, Any]:
-    report = aggregate_eval(records, expected_source_ids=expected_sources)
+    report = aggregate_eval(
+        records, expected_source_ids=expected_sources, expected_n=expected_n
+    )
+    macro_mean_key = f"macro_mean@{expected_n}"
+    macro_pass_key = f"macro_pass@{expected_n}"
     errors: list[Any] = list(report["sample_errors"])
     version_report = report["versions"].get(str(version))
     if set(report["versions"]) - {str(version)}:
@@ -214,11 +222,11 @@ def _validate_version(
     if version_report is None:
         errors.append({"version": version, "error": "missing_target_version"})
     else:
-        if version_report["records"] != EXPECTED_EVAL_TOTAL * EXPECTED_N:
+        if version_report["records"] != EXPECTED_EVAL_TOTAL * expected_n:
             errors.append(
                 {
                     "version": version,
-                    "error": "expected_2800_eval_records",
+                    "error": f"expected_{EXPECTED_EVAL_TOTAL * expected_n}_eval_records",
                     "records": version_report["records"],
                 }
             )
@@ -257,8 +265,8 @@ def _validate_version(
                     }
                 )
         if (
-            version_report["macro_mean@4"] is None
-            or version_report["macro_pass@4"] is None
+            version_report[macro_mean_key] is None
+            or version_report[macro_pass_key] is None
         ):
             errors.append({"version": version, "error": "incomplete_macro_metrics"})
     if errors:
@@ -286,6 +294,7 @@ def _verify_existing(
     *,
     source_digest: str,
     version: int,
+    expected_n: int,
     version_report: dict[str, Any],
     stats: dict[str, Any],
 ) -> dict[str, Any]:
@@ -302,6 +311,10 @@ def _verify_existing(
     if summary.get("version") != version or summary.get("passed") is not True:
         raise SnapshotError(
             f"existing snapshot summary conflicts with requested version: {target}"
+        )
+    if summary.get("expected_n", EXPECTED_N) != expected_n:
+        raise SnapshotError(
+            f"existing snapshot summary sample count conflicts with requested n={expected_n}: {target}"
         )
     if summary.get("matching_records_sha256") != source_digest:
         raise SnapshotError(
@@ -325,8 +338,11 @@ def snapshot_eval(
     version: int,
     *,
     allowed_versions: tuple[int, ...] = ALLOWED_EVAL_VERSIONS,
+    n_samples: int = EXPECTED_N,
 ) -> dict[str, Any]:
     """Preserve an evaluated version from the caller's explicit run schedule."""
+    if not isinstance(n_samples, int) or isinstance(n_samples, bool) or n_samples <= 0:
+        raise SnapshotError("n_samples must be a positive integer")
     if version not in allowed_versions or version < 0:
         raise SnapshotError(
             f"version must be one of {list(allowed_versions)} and non-negative"
@@ -344,7 +360,10 @@ def snapshot_eval(
     records, raw_lines, source_bindings = _read_eval_sources(evidence_dir, version)
     matching_digest = hashlib.sha256(b"".join(raw_lines)).hexdigest()
     version_report = _validate_version(
-        records, expected_sources=expected_sources, version=version
+        records,
+        expected_sources=expected_sources,
+        version=version,
+        expected_n=n_samples,
     )
     stats = _response_stats(records)
 
@@ -356,6 +375,7 @@ def snapshot_eval(
             target,
             source_digest=matching_digest,
             version=version,
+            expected_n=n_samples,
             version_report=version_report,
             stats=stats,
         )
@@ -373,8 +393,9 @@ def snapshot_eval(
         "evidence_dir": str(evidence_dir),
         "dataset": str(dataset),
         "version": version,
+        "expected_n": n_samples,
         "expected_sources": EXPECTED_EVAL_TOTAL,
-        "expected_responses": EXPECTED_EVAL_TOTAL * EXPECTED_N,
+        "expected_responses": EXPECTED_EVAL_TOTAL * n_samples,
         "matching_records_sha256": matching_digest,
         "eval": {str(version): version_report},
         **stats,

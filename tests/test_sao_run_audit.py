@@ -70,7 +70,7 @@ def _sample(
     }
 
 
-def _eval_records(versions=(0,)):
+def _eval_records(versions=(0,), *, n_samples: int = 4):
     return [
         _sample(
             source_id=f"{benchmark}:{source}",
@@ -83,7 +83,7 @@ def _eval_records(versions=(0,)):
         for version in versions
         for benchmark, count in EXPECTED_EVAL_ROWS.items()
         for source in range(count)
-        for index in range(4)
+        for index in range(n_samples)
     ]
 
 
@@ -256,6 +256,48 @@ def test_eval_macro_distinct_from_weighted_and_version_groups():
     assert version["macro_pass@4"] == pytest.approx(0.6)
     assert version["weighted_overall_mean@4"] == pytest.approx(570 / 700)
     assert version["weighted_overall_pass@4"] == pytest.approx(570 / 700)
+
+
+def test_eval_aggregates_n2_with_dynamic_metric_keys():
+    records = _eval_records((0, 20), n_samples=2)
+    for record in records:
+        record["reward"] = float(record["sample_idx"] == 0)
+    expected = {record["source_id"] for record in records}
+    report = aggregate_eval(records, expected_source_ids=expected, expected_n=2)
+
+    assert not report["sample_errors"]
+    version = report["versions"]["20"]
+    assert version["records"] == 1400
+    assert version["macro_mean@2"] == 0.5
+    assert version["macro_pass@2"] == 1
+    assert version["weighted_overall_mean@2"] == 0.5
+    assert version["weighted_overall_pass@2"] == 1
+    assert version["per_set"]["aime24"]["mean@2"] == 0.5
+    assert "macro_mean@4" not in version
+
+
+@pytest.mark.parametrize("expected_n", [0, -1, True])
+def test_eval_rejects_non_positive_expected_n(expected_n):
+    with pytest.raises(ValueError, match="expected_n must be a positive integer"):
+        aggregate_eval(_eval_records(n_samples=2), expected_n=expected_n)
+
+
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "wrong_count"])
+def test_eval_n2_rejects_missing_duplicate_and_wrong_sample_count(mutation):
+    records = _eval_records(n_samples=2)
+    if mutation == "missing":
+        records.pop(0)
+    elif mutation == "duplicate":
+        records[1] = dict(records[0])
+    else:
+        records = _eval_records(n_samples=4)
+
+    report = aggregate_eval(records, expected_n=2)
+    if mutation == "wrong_count":
+        assert report["sample_errors"]
+    else:
+        assert report["versions"]["0"]["bad_sample_sets"]
+        assert report["versions"]["0"]["macro_mean@2"] is None
 
 
 @pytest.mark.parametrize(

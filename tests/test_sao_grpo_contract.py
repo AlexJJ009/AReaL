@@ -150,7 +150,7 @@ def test_sao_yaml_applies_miles_grpo_knobs(
     assert sao.train_dataset.batch_size == 32
     assert sao.gconfig.max_new_tokens == 8192
     assert sao.gconfig.max_tokens == 9216
-    assert sao.eval_gconfig.n_samples == 4
+    assert sao.eval_gconfig.n_samples == 2
     assert sao.eval_gconfig.max_new_tokens == 8192
     assert sao.rollout.max_head_offpolicyness == 2
 
@@ -191,6 +191,7 @@ def test_validate_contract_accepts_composed_sao_grpo_yaml(
         ("actor.optimizer_dtype", "bfloat16", "actor.optimizer_dtype"),
         ("train_dataset.batch_size", 128, "train_dataset.batch_size"),
         ("gconfig.n_samples", 4, "gconfig.n_samples"),
+        ("eval_gconfig.n_samples", 4, "eval_gconfig.n_samples"),
     ],
 )
 def test_validate_contract_rejects_official_recipe_drift(

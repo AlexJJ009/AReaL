@@ -313,24 +313,26 @@ def test_eval_jobs_load_checkpoints_without_deleting_and_pin_versions(
     )
 
 
-def test_snapshot_uses_exact_version_whitelist(monkeypatch, tmp_path):
+@pytest.mark.parametrize("n_samples", [2, 4])
+def test_snapshot_uses_exact_version_whitelist(monkeypatch, tmp_path, n_samples):
     """Snapshot validation accepts baseline/final versions queued by the adapter."""
     import scripts.sao.snapshot_eval as snapshot_module
 
     calls = []
     trainer = _trainer(tmp_path, _FakeController())
+    trainer.config.eval_gconfig.n_samples = n_samples
     _record_checkpoint_ready(monkeypatch)
     monkeypatch.setattr(
         snapshot_module,
         "snapshot_eval",
-        lambda evidence, dataset, version, *, allowed_versions: calls.append(
-            (evidence, dataset, version, allowed_versions)
+        lambda evidence, dataset, version, *, allowed_versions, n_samples: calls.append(
+            (evidence, dataset, version, allowed_versions, n_samples)
         ),
     )
 
     trainer._run_eval_job(0, trainer.config.actor.path, "workflow", {}, True)
 
-    assert calls[0][2:] == (0, (0,))
+    assert calls[0][2:] == (0, (0,), n_samples)
 
 
 def test_async_queue_does_not_change_version_during_running_eval(monkeypatch, tmp_path):

@@ -18,7 +18,8 @@ import torch
 from datasets import load_from_disk
 from omegaconf import OmegaConf
 
-from areal import PPOTrainer
+from scripts.sao.async_eval import AsyncEvalPPOTrainer, SaoPPOConfig
+
 from areal.api.cli_args import (
     PPOConfig,
     load_expr_config,
@@ -108,8 +109,22 @@ def validate_hf_checkpoint_paths(config: PPOConfig) -> None:
         )
 
 
-def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
+def validate_contract(config: SaoPPOConfig, *, preflight: bool = False) -> None:
+    AsyncEvalPPOTrainer._validate_save_eval_sync(config)
     expected = {
+        "actor.backend": (config.actor.backend, "fsdp:d4p1t1"),
+        "critic.backend": (
+            config.critic.backend if config.critic else None,
+            "fsdp:d4p1t1",
+        ),
+        "rollout.backend": (config.rollout.backend, "sglang:d3p1t1"),
+        "evaluation_rollout.backend": (
+            config.evaluation_rollout.backend,
+            "sglang:d1p1t1",
+        ),
+        "scheduler.type": (config.scheduler.type, "local"),
+        "cluster.n_nodes": (config.cluster.n_nodes, 1),
+        "cluster.n_gpus_per_node": (config.cluster.n_gpus_per_node, 8),
         "actor.discount": (config.actor.discount, 1.0),
         "actor.loss_reduction": (config.actor.loss_reduction, "sequence_mean"),
         "actor.gae_lambda": (config.actor.gae_lambda, 0.95),
@@ -148,13 +163,13 @@ def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
                 "gconfig.n_samples": (config.gconfig.n_samples, 8),
                 "eval_gconfig.n_samples": (config.eval_gconfig.n_samples, 2),
                 "train_dataset.batch_size": (config.train_dataset.batch_size, 16),
-                "saver.freq_steps": (config.saver.freq_steps, 50),
-                "recover.freq_steps": (config.recover.freq_steps, 50),
+                "saver.freq_steps": (config.saver.freq_steps, 20),
+                "recover.freq_steps": (config.recover.freq_steps, 20),
                 "evaluator.eval_before_train": (
                     config.evaluator.eval_before_train,
                     True,
                 ),
-                "evaluator.freq_steps": (config.evaluator.freq_steps, 50),
+                "evaluator.freq_steps": (config.evaluator.freq_steps, 20),
             }
         )
     mismatches = {
@@ -162,8 +177,21 @@ def validate_contract(config: PPOConfig, *, preflight: bool = False) -> None:
     }
     if mismatches:
         raise ValueError(f"PPO contract mismatch (observed, expected): {mismatches}")
+    for role in ("actor", "rollout", "evaluation_rollout"):
+        role_config = getattr(config, role)
+        if role_config.scheduling_strategy.type != "separation":
+            raise ValueError(f"{role} must use separate GPU workers")
+        if not role_config.scheduling_spec or any(
+            spec.gpu != 1 for spec in role_config.scheduling_spec
+        ):
+            raise ValueError(f"{role} workers must reserve one GPU each")
     if config.critic is None or not config.critic.is_critic:
         raise ValueError("A trainable scalar critic is required")
+    if (
+        config.critic.scheduling_strategy.type != "colocation"
+        or config.critic.scheduling_strategy.target != "actor"
+    ):
+        raise ValueError("critic must colocate with actor on the four training GPUs")
     if config.critic.loss_reduction != "sequence_mean":
         raise ValueError("critic.loss_reduction must be sequence_mean")
     if config.critic.path == config.actor.path:
@@ -699,6 +727,7 @@ def install_audit_hooks(
     original_commit = trainer.stats_logger.commit
 
     def commit(epoch, step, global_step, data):
+        trainer.check_evaluation()
         completed_step = global_step + 1
         roles = check_step_metrics(
             data, completed_step, completed_step - optimizer_steps_base
@@ -780,11 +809,11 @@ def main(args: list[str]) -> None:
     args = [x for x in args if x != "--check-config"]
     if config_only:
         cfg, _ = parse_cli_args(args)
-        cfg = to_structured_cfg(cfg, PPOConfig)
+        cfg = to_structured_cfg(cfg, SaoPPOConfig)
         config = OmegaConf.to_object(cfg)
-        assert isinstance(config, PPOConfig)
+        assert isinstance(config, SaoPPOConfig)
     else:
-        config, _ = load_expr_config(args, PPOConfig)
+        config, _ = load_expr_config(args, SaoPPOConfig)
     preflight = os.environ.get("SAO_PREFLIGHT", "0") == "1"
     validate_contract(config, preflight=preflight)
     validate_hf_checkpoint_paths(config)
@@ -818,7 +847,7 @@ def main(args: list[str]) -> None:
     }
     eval_kwargs = {**workflow_kwargs, "gconfig": config.eval_gconfig}
 
-    with PPOTrainer(
+    with AsyncEvalPPOTrainer(
         config, train_dataset=train_dataset, valid_dataset=valid_dataset
     ) as trainer:
         weight_only_initial_step = weight_only_start_step_from_env()

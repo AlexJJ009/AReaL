@@ -102,7 +102,7 @@ def validate_contract(config: SaoGRPOConfig, *, preflight: bool = False) -> None
                 "gconfig.max_new_tokens": (config.gconfig.max_new_tokens, 8192),
                 "gconfig.max_tokens": (config.gconfig.max_tokens, 9216),
                 "gconfig.n_samples": (config.gconfig.n_samples, 8),
-                "eval_gconfig.n_samples": (config.eval_gconfig.n_samples, 4),
+                "eval_gconfig.n_samples": (config.eval_gconfig.n_samples, 2),
                 "saver.freq_steps": (config.saver.freq_steps, 20),
                 "evaluator.freq_steps": (config.evaluator.freq_steps, 20),
                 "evaluator.eval_before_train": (

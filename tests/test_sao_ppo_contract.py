@@ -8,18 +8,31 @@ contract without copying the implementation's wrappers.
 
 from __future__ import annotations
 
+import copy
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
+from omegaconf import OmegaConf
 
-from areal.api.cli_args import PPOActorConfig, PPOConfig
+from examples.math.sao_ppo import validate_contract
+from scripts.sao.async_eval import AsyncEvalPPOTrainer, SaoPPOConfig
+
+from areal.api.cli_args import (
+    PPOActorConfig,
+    PPOConfig,
+    parse_cli_args,
+    to_structured_cfg,
+)
 from areal.trainer.ppo.actor import PPOActor
 from areal.trainer.ppo.critic import ppo_loss_fn as critic_ppo_loss_fn
 from areal.trainer.ppo.gae import _compute_token_level_gae
 from areal.trainer.ppo.lambda_fn import resolve_gae_lambda_fn
 from areal.utils.data import KLEstimator
 from areal.utils.functional import ppo_actor_loss_fn, ppo_critic_loss_fn
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _manual_ppo_actor_loss(
@@ -109,6 +122,77 @@ def _make_contract_actor() -> PPOActor:
     actor.mask_no_eos_with_zero = False
     actor.m2_threshold = None
     return actor
+
+
+def _load_sao_ppo_config(monkeypatch, tmp_path) -> SaoPPOConfig:
+    monkeypatch.setenv("SAO_TRIAL_NAME", "unit-test")
+    monkeypatch.setenv("SAO_RUN_ROOT", str(tmp_path / "run"))
+    monkeypatch.setenv("SAO_MODEL_PATH", str(tmp_path / "actor"))
+    monkeypatch.setenv("SAO_CRITIC_PATH", str(tmp_path / "critic"))
+    monkeypatch.setenv("SAO_DATA_PATH", str(tmp_path / "dataset"))
+
+    cfg, _ = parse_cli_args(["--config", str(REPO_ROOT / "examples/math/sao_ppo.yaml")])
+    cfg = to_structured_cfg(cfg, SaoPPOConfig)
+    config = OmegaConf.to_object(cfg)
+
+    assert isinstance(config, SaoPPOConfig)
+    return config
+
+
+def test_sao_ppo_config_parses_dedicated_eval_and_colocated_critic(
+    monkeypatch, tmp_path
+):
+    config = _load_sao_ppo_config(monkeypatch, tmp_path)
+
+    validate_contract(config)
+
+    assert AsyncEvalPPOTrainer is not None
+    assert config.actor.backend == "fsdp:d4p1t1"
+    assert config.critic.backend == "fsdp:d4p1t1"
+    assert config.rollout.backend == "sglang:d3p1t1"
+    assert config.evaluation_rollout.backend == "sglang:d1p1t1"
+    assert config.critic.scheduling_strategy.type == "colocation"
+    assert config.critic.scheduling_strategy.target == "actor"
+    assert config.evaluation_rollout.scheduling_strategy.type == "separation"
+    assert config.evaluation_rollout.max_concurrent_rollouts == 32
+    assert config.evaluation_rollout.queue_size == 64
+    assert config.eval_gconfig.n_samples == 2
+    assert config.saver.freq_steps == 20
+    assert config.recover.freq_steps == 20
+    assert config.evaluator.freq_steps == 20
+
+
+@pytest.mark.parametrize(
+    ("mutate", "match"),
+    [
+        (
+            lambda config: setattr(config.rollout, "backend", "sglang:d4p1t1"),
+            "rollout.backend",
+        ),
+        (
+            lambda config: setattr(
+                config.critic.scheduling_strategy, "type", "separation"
+            ),
+            "critic must colocate with actor",
+        ),
+        (
+            lambda config: setattr(config.evaluator, "freq_steps", 25),
+            "saver and evaluator frequencies to match",
+        ),
+        (
+            lambda config: setattr(config.evaluation_rollout, "scheduling_spec", ()),
+            "evaluation_rollout workers must reserve one GPU each",
+        ),
+    ],
+)
+def test_sao_ppo_contract_rejects_invalid_allocation_and_eval_sync(
+    monkeypatch, tmp_path, mutate, match
+):
+    config = copy.deepcopy(_load_sao_ppo_config(monkeypatch, tmp_path))
+    mutate(config)
+
+    with pytest.raises(ValueError, match=match):
+        validate_contract(config)
 
 
 def test_standard_clipped_ppo_matches_independent_oracle_with_behavior_denominator():

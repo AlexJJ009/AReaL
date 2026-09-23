@@ -52,14 +52,14 @@ def _sample(*, benchmark: str, source: int, sample_idx: int, version: int = 20):
     }
 
 
-def _records(version: int = 20):
+def _records(version: int = 20, *, n_samples: int = 4):
     return [
         _sample(
             benchmark=benchmark, source=source, sample_idx=sample_idx, version=version
         )
         for benchmark, count in EXPECTED_EVAL_ROWS.items()
         for source in range(count)
-        for sample_idx in range(4)
+        for sample_idx in range(n_samples)
     ]
 
 
@@ -108,6 +108,56 @@ def test_snapshot_eval_writes_raw_records_summary_and_is_idempotent(tmp_path):
     second = snapshot_eval.snapshot_eval(evidence, dataset, 20)
     assert second["status"] == "exists"
     assert second["matching_records_sha256"] == report["matching_records_sha256"]
+
+
+def test_snapshot_eval_accepts_n2_and_uses_n2_metric_keys(tmp_path):
+    evidence, dataset = _fixture(tmp_path, _records(n_samples=2))
+    report = snapshot_eval.snapshot_eval(evidence, dataset, 20, n_samples=2)
+    version = report["eval"]["20"]
+
+    assert report["passed"] is True
+    assert report["expected_n"] == 2
+    assert report["expected_responses"] == 1400
+    assert report["response_count"] == 1400
+    assert version["macro_mean@2"] == 0.5
+    assert version["macro_pass@2"] == 1.0
+    assert "macro_mean@4" not in version
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("missing", "expected_1400_eval_records"),
+        ("duplicate", "duplicate_sources|bad_sample_sets"),
+        ("wrong_count", "invalid_sample_idx|expected_1400_eval_records"),
+    ],
+)
+def test_snapshot_eval_n2_rejects_missing_duplicate_and_wrong_sample_count(
+    tmp_path, mutation, message
+):
+    records = _records(n_samples=2)
+    if mutation == "missing":
+        records.pop(0)
+    elif mutation == "duplicate":
+        records[1] = dict(records[0])
+    else:
+        records = _records(n_samples=4)
+    evidence, dataset = _fixture(tmp_path, records)
+
+    with pytest.raises(SnapshotError, match=message):
+        snapshot_eval.snapshot_eval(evidence, dataset, 20, n_samples=2)
+
+
+def test_snapshot_eval_existing_summary_binds_n_samples(tmp_path):
+    evidence, dataset = _fixture(tmp_path, _records(n_samples=2))
+    snapshot_eval.snapshot_eval(evidence, dataset, 20, n_samples=2)
+    summary_path = evidence / "eval-snapshots" / "version20" / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["expected_n"] = 4
+    _write_json(summary_path, summary)
+
+    with pytest.raises(SnapshotError, match="sample count conflicts"):
+        snapshot_eval.snapshot_eval(evidence, dataset, 20, n_samples=2)
 
 
 @pytest.mark.parametrize(
