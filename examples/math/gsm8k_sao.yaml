@@ -124,6 +124,7 @@ sglang:
   disable_radix_cache: true
   chunked_prefill_size: -1
 train_dataset:
+  scheduling_spec: null
   batch_size: 128
   shuffle: true
   pin_memory: true
@@ -132,6 +133,7 @@ train_dataset:
   type: rl
   max_length: 1024
 valid_dataset:
+  scheduling_spec: null
   path: ${train_dataset.path}
   split: test
   type: rl

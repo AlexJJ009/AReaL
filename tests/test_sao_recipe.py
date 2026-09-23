@@ -60,6 +60,8 @@ def test_dedicated_validation_recipe(recipe):
     assert recipe.evaluation_rollout.backend == "sglang:d1p1t1"
     assert recipe.eval_gconfig.n_samples == 2
     assert recipe.valid_dataset.split == "test"
+    assert recipe.train_dataset.scheduling_spec is None
+    assert recipe.valid_dataset.scheduling_spec is None
     assert recipe.saver.freq_steps == recipe.evaluator.freq_steps == 20
     AsyncEvalPPOTrainer._validate_save_eval_sync(recipe)
     recipe.evaluator.freq_steps = 21
