@@ -1,10 +1,11 @@
 # Dense GSM8K SAO
 
-`gsm8k_sao.py` uses the production `PPOTrainer` with FSDP and SGLang. The example uses
-FlashInfer for SGLang inference and FA2/FLA for FSDP training. It selects Direct DIS,
-action-length actor lambda with alpha 1.5, critic lambda 1, two complete critic updates
-followed by refreshed values and one actor update. It uses one answer per prompt and a
-logical batch of 128. Online learning rates are actor `1e-6` and critic `5e-6`.
+`gsm8k_sao.py` uses the production `PPOTrainer` through the dedicated async evaluation
+adapter, with FSDP and SGLang. The example uses FlashInfer for SGLang inference and
+FA2/FLA for FSDP training. It selects Direct DIS, action-length actor lambda with alpha
+1.5, critic lambda 1, two complete critic updates followed by refreshed values and one
+actor update. It uses one answer per prompt and a logical batch of 128. Online learning
+rates are actor `1e-6` and critic `5e-6`.
 
 The approved engineering choices are gamma 1, raw rewards and advantages, plain critic
 MSE, constant learning rates without warmup, and a DIS mean over original action tokens.
@@ -16,32 +17,40 @@ are outside this implementation.
 ## Configuration
 
 Set `SAO_MODEL_PATH` to the selected dense policy checkpoint and `SAO_RUN_ROOT` to an
-external artifact directory. Use the existing AReaL runtime. The YAML's four training
-GPUs plus four rollout GPUs are an example allocation; actor and critic share the
-training allocation. Validate the resolved resource layout and sequence lengths before a
-training run.
+external artifact directory. Use the existing AReaL runtime. The YAML reserves four GPUs
+shared by actor and critic, three for training rollouts, and one for validation. Every
+20 training steps it saves an HF checkpoint and queues validation against that
+checkpoint on the dedicated GPU. Validation samples two answers per prompt; training
+still samples one. Epoch/time triggers are disabled. Validation uses the test split of
+the configured training dataset. Raw validation trajectories use AReaL's standard dump
+mechanism, not the PPO experiment's custom 700-question sample ledger.
 
-The user-authorized interim mode initializes a scalar head on the same Base backbone as
-the actor:
+Set `SAO_ARTIFACT_ROOT` for runtime caches and use `scripts/sao/run_sao.sh` in an
+activated AReaL environment. This thin wrapper calls `run_ppo.sh`, sharing runtime setup
+and logging while selecting SAO's entry point and configuration. Calling `run_ppo.sh`
+directly still selects PPO. Append `--check-config` to validate and print the resolved
+configuration without starting workers. This resource layout still requires a GPU
+preflight before a formal training run.
 
-```bash
-python examples/math/gsm8k_sao.py --config examples/math/gsm8k_sao.yaml \
-  --allow-base-critic
-```
+The default launcher selects the same pretrained critic as PPO via `SAO_CRITIC_PATH`,
+defaulting to `${SAO_ARTIFACT_ROOT}/models/critic-dapo-step50-hf`. The existing HF
+export is validated against `export-manifest.json`, including weight hashes, scalar
+head, backbone dimensions and token-ID compatibility. It loads through the native
+Qwen3.5 critic adapter; no synthetic `value_manifest.json` is generated and shared model
+files are never rewritten. The selected export's validation metrics are provenance, not
+a new qualification of SAO learning effectiveness.
 
-This mode is an untrained critic cold start. It is useful for integration checks and is
-not a pretrained critic or a learning-quality acceptance result. No extra online
-critic-only warmup is inserted into SAO.
+Response length is 8192 and total context is 9216, matching the PPO/critic-pretraining
+recipe. Validation inherits these limits. The 1024-token dataset filter applies to
+prompts, not generated responses.
 
-For the independently trained critic, set `SAO_VALUE_PATH` and provide
-`critic.value_contract` in a run-specific YAML. The contract contains `identity`
-(backbone/tokenizer IDs), `protocol` (discount, horizon, thinking, reward, termination,
-scorer/split/template digests and freeze policy), and `require_pretrained: true`. The
-artifact must contain `value_manifest.json`, the complete backbone and scalar head,
-tokenizer files and the hashed report from the separate pretraining workflow. Run
-without `--allow-base-critic`. Missing weights, identity/protocol mismatches and
-unqualified artifacts are rejected. Reuse the critic pretraining team's metrics and
-evaluation report; this entry does not implement another value-quality evaluator.
+A sealed artifact may alternatively supply `critic.value_contract`. Base-critic cold
+start remains available only by explicitly overriding `critic.path` to the actor
+checkpoint and passing `--allow-base-critic`; it is not the default.
+
+Actor LR stays at `1e-6` and critic LR at `5e-6`, with no LR warmup or critic-only
+training stage, per the user's latest decision. The pretrained critic continues to
+update twice per batch. This differs from the paper's reported 10-step value warmup.
 
 ## Verification scope
 

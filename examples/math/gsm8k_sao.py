@@ -3,12 +3,22 @@
 """Dense math SAO recipe, using the production PPO trainer and RLVR workflow."""
 
 import argparse
+import dataclasses
+import json
 import sys
+import time
+from pathlib import Path
 
-from areal import PPOTrainer
+from omegaconf import OmegaConf
+
+from scripts.sao.async_eval import AsyncEvalPPOTrainer, SaoPPOConfig
+
 from areal.api.cli_args import PPOConfig, load_expr_config
 from areal.dataset import get_custom_dataset
-from areal.trainer.ppo.value_checkpoint import validate_value_artifact
+from areal.trainer.ppo.value_checkpoint import (
+    validate_ppo_value_export,
+    validate_value_artifact,
+)
 from areal.utils.hf_utils import load_hf_tokenizer
 
 
@@ -43,7 +53,7 @@ def validate_sao_recipe(config: PPOConfig, *, allow_base_critic: bool = False) -
         or getattr(config, "num_critic_only_steps", 0)
     ):
         raise ValueError(
-            "SAO recipe requires raw rewards, gamma=1, MSE and no online warmup"
+            "SAO recipe requires raw rewards, gamma=1, MSE and no critic-only stage"
         )
     for role, engine, lr in (("actor", actor, 1e-6), ("critic", critic, 5e-6)):
         opt = engine.optimizer
@@ -56,13 +66,19 @@ def validate_sao_recipe(config: PPOConfig, *, allow_base_critic: bool = False) -
             or engine.ppo_n_minibatches != 1
         ):
             raise ValueError(
-                f"SAO {role} requires paper LR, constant schedule, no warmup and one train batch"
+                f"SAO {role} requires paper LR, constant schedule, "
+                "no LR warmup and one train batch"
             )
     contract = critic.value_contract
     if contract is None:
+        if Path(critic.path, "export-manifest.json").is_file():
+            if critic.init_from_scratch or critic.use_lora:
+                raise ValueError("PPO critic export requires full pretrained loading")
+            validate_ppo_value_export(critic.path, actor.path)
+            return
         if not allow_base_critic or critic.path != actor.path:
             raise ValueError(
-                "Supply a pretrained value_contract or explicitly allow the actor's Base checkpoint as critic"
+                "Supply a pretrained value_contract or PPO export, or explicitly allow the actor's Base checkpoint as critic"
             )
         return
     if contract.get("require_pretrained") is not True:
@@ -93,9 +109,19 @@ def validate_sao_recipe(config: PPOConfig, *, allow_base_critic: bool = False) -
 def main(args: list[str]) -> None:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--allow-base-critic", action="store_true")
+    parser.add_argument("--check-config", action="store_true")
     options, remaining = parser.parse_known_args(args)
-    config, _ = load_expr_config(remaining, PPOConfig)
+    config, _ = load_expr_config(remaining, SaoPPOConfig)
     validate_sao_recipe(config, allow_base_critic=options.allow_base_critic)
+    AsyncEvalPPOTrainer._validate_save_eval_sync(config)
+    if options.check_config:
+        sys.stdout.write(OmegaConf.to_yaml(OmegaConf.structured(config), resolve=True))
+        return
+    evidence = Path(config.cluster.fileroot) / "evidence"
+    evidence.mkdir(parents=True, exist_ok=True)
+    (evidence / "resolved-config.json").write_text(
+        json.dumps(dataclasses.asdict(config), indent=2) + "\n"
+    )
     tokenizer = load_hf_tokenizer(config.tokenizer_path)
     train = get_custom_dataset(
         split=config.train_dataset.split,
@@ -116,13 +142,42 @@ def main(args: list[str]) -> None:
         enable_thinking=False,
         length_stop_is_terminal=True,
     )
-    with PPOTrainer(config, train_dataset=train, valid_dataset=valid) as trainer:
+    workflow = "areal.workflow.rlvr.RLVRWorkflow"
+    if "source_id" in train.column_names:
+        workflow = "areal.workflow.sao_math.AuditedMathWorkflow"
+        kwargs.update(
+            reward_fn="areal.reward.math_prd.math_prd_reward_fn",
+            audit_dir=str(evidence / "samples"),
+        )
+    with AsyncEvalPPOTrainer(
+        config, train_dataset=train, valid_dataset=valid
+    ) as trainer:
+        commit = trainer.stats_logger.commit
+
+        def commit_with_evidence(epoch, step, global_step, data):
+            result = commit(epoch, step, global_step, data)
+            step_dir = evidence / "steps"
+            step_dir.mkdir(exist_ok=True)
+            path = step_dir / f"{global_step + 1}.json"
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(
+                    {
+                        "step": global_step + 1,
+                        "completed_ns": time.time_ns(),
+                        "metrics": data,
+                    }
+                )
+                + "\n"
+            )
+            temporary.replace(path)
+            return result
+
+        trainer.stats_logger.commit = commit_with_evidence
         trainer.train(
-            workflow="areal.workflow.rlvr.RLVRWorkflow",
+            workflow=workflow,
             workflow_kwargs=kwargs,
-            eval_workflow="areal.workflow.rlvr.RLVRWorkflow"
-            if valid is not None
-            else None,
+            eval_workflow=workflow if valid is not None else None,
             eval_workflow_kwargs={**kwargs, "gconfig": config.eval_gconfig},
         )
 

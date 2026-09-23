@@ -1,4 +1,4 @@
-# Paper mechanisms and approved engineering defaults; resource layout is an example.
+# Paper mechanisms; 4 shared actor/critic GPUs + 3 rollout + 1 validation GPU.
 # Base critic requires --allow-base-critic. A pretrained critic requires value_contract.
 experiment_name: gsm8k-sao
 trial_name: trial0
@@ -16,7 +16,7 @@ cluster:
 scheduler:
   type: local
 rollout:
-  backend: sglang:d4p1t1
+  backend: sglang:d3p1t1
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   max_concurrent_rollouts: 128
@@ -28,11 +28,32 @@ rollout:
   fileroot: ${cluster.fileroot}
   tokenizer_path: ${tokenizer_path}
   dump_to_file: false
+evaluation_rollout:
+  backend: sglang:d1p1t1
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  fileroot: ${cluster.fileroot}
+  tokenizer_path: ${tokenizer_path}
+  consumer_batch_size: ${valid_dataset.batch_size}
+  max_concurrent_rollouts: 32
+  queue_size: 64
+  dump_to_file: true
+  scheduling_strategy:
+    type: separation
+  scheduling_spec: ${actor.scheduling_spec}
+eval_gconfig:
+  n_samples: 2
+  min_new_tokens: ${gconfig.min_new_tokens}
+  max_new_tokens: ${gconfig.max_new_tokens}
+  max_tokens: ${gconfig.max_tokens}
+  greedy: false
+  temperature: ${gconfig.temperature}
+  reward_normalization: false
 gconfig:
   n_samples: 1
   min_new_tokens: 0
-  max_new_tokens: 1024
-  max_tokens: 2048
+  max_new_tokens: 8192
+  max_tokens: 9216
   greedy: false
   temperature: 1.0
 actor:
@@ -46,7 +67,7 @@ actor:
   dtype: bfloat16
   mb_spec:
     n_mbs: 2
-    max_tokens_per_mb: 2048
+    max_tokens_per_mb: ${gconfig.max_tokens}
   optimizer:
     type: adam
     lr: 1.0e-06
@@ -94,24 +115,36 @@ sglang:
   random_seed: ${seed}
   skip_tokenizer_init: true
   dtype: ${actor.dtype}
-  max_running_requests: null
-  context_length: 2048
-  mem_fraction_static: 0.8
+  max_running_requests: 64
+  context_length: ${gconfig.max_tokens}
+  mem_fraction_static: 0.75
+  disable_cuda_graph: false
+  disable_overlap_schedule: false
+  disable_radix_cache: true
+  chunked_prefill_size: -1
 train_dataset:
   batch_size: 128
   shuffle: true
   pin_memory: true
   num_workers: 0
-  path: openai/gsm8k
+  path: ${oc.env:SAO_DATA_PATH,openai/gsm8k}
   type: rl
   max_length: 1024
-valid_dataset: null
+valid_dataset:
+  path: ${train_dataset.path}
+  split: test
+  type: rl
+  batch_size: 32
+  shuffle: false
+  drop_last: false
+  num_workers: 0
 saver:
+  mode: sync
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
-  freq_epochs: 1
-  freq_steps: null
+  freq_epochs: null
+  freq_steps: 20
   freq_secs: null
 recover:
   mode: disabled
@@ -125,8 +158,8 @@ evaluator:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
-  freq_epochs: 1
-  freq_steps: null
+  freq_epochs: null
+  freq_steps: 20
   freq_secs: null
 stats_logger:
   experiment_name: ${experiment_name}
@@ -146,7 +179,7 @@ critic:
   backend: ${actor.backend}
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
-  path: ${oc.env:SAO_VALUE_PATH,${actor.path}}
+  path: ${oc.env:SAO_CRITIC_PATH}
   is_critic: true
   value_contract: null
   dtype: ${actor.dtype}

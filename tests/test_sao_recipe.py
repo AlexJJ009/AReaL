@@ -8,17 +8,18 @@ import pytest
 from omegaconf import OmegaConf
 
 from examples.math.gsm8k_sao import validate_sao_recipe
+from scripts.sao.async_eval import SaoPPOConfig
 
-from areal.api.cli_args import PPOConfig, to_structured_cfg
+from areal.api.cli_args import to_structured_cfg
 
 
 @pytest.fixture
 def recipe(monkeypatch, tmp_path):
     monkeypatch.setenv("SAO_MODEL_PATH", "Qwen/Qwen3.5-4B-Base")
     monkeypatch.setenv("SAO_RUN_ROOT", str(tmp_path))
-    monkeypatch.delenv("SAO_VALUE_PATH", raising=False)
+    monkeypatch.setenv("SAO_CRITIC_PATH", "Qwen/Qwen3.5-4B-Base")
     path = Path(__file__).parents[1] / "examples/math/gsm8k_sao.yaml"
-    return OmegaConf.to_object(to_structured_cfg(OmegaConf.load(path), PPOConfig))
+    return OmegaConf.to_object(to_structured_cfg(OmegaConf.load(path), SaoPPOConfig))
 
 
 def test_resolved_recipe_uses_paper_mechanisms_and_explicit_base_critic(recipe):
@@ -46,4 +47,37 @@ def test_recipe_rejects_synthetic_artifact_as_pretrained(recipe):
 def test_recipe_rejects_clipped_value_loss(recipe):
     recipe.critic.eps_clip = 0.5
     with pytest.raises(ValueError, match="MSE"):
+        validate_sao_recipe(recipe, allow_base_critic=True)
+
+
+def test_dedicated_validation_recipe(recipe):
+    from scripts.sao.async_eval import AsyncEvalPPOTrainer
+
+    assert recipe.actor.backend == "fsdp:d4p1t1"
+    assert recipe.critic.backend == recipe.actor.backend
+    assert recipe.critic.scheduling_strategy.target == "actor"
+    assert recipe.rollout.backend == "sglang:d3p1t1"
+    assert recipe.evaluation_rollout.backend == "sglang:d1p1t1"
+    assert recipe.eval_gconfig.n_samples == 2
+    assert recipe.valid_dataset.split == "test"
+    assert recipe.saver.freq_steps == recipe.evaluator.freq_steps == 20
+    AsyncEvalPPOTrainer._validate_save_eval_sync(recipe)
+    recipe.evaluator.freq_steps = 21
+    with pytest.raises(ValueError, match="frequencies"):
+        AsyncEvalPPOTrainer._validate_save_eval_sync(recipe)
+
+
+def test_recipe_uses_8k_generation_with_consistent_budgets(recipe):
+    assert recipe.gconfig.max_new_tokens == recipe.eval_gconfig.max_new_tokens == 8192
+    assert recipe.gconfig.max_tokens == recipe.sglang.context_length == 9216
+    assert recipe.actor.mb_spec.max_tokens_per_mb == 9216
+    assert recipe.critic.mb_spec.max_tokens_per_mb == 9216
+
+
+def test_recipe_requires_no_warmup_or_critic_only_stage(recipe):
+    assert recipe.critic.optimizer.warmup_steps == 0
+    assert recipe.actor.optimizer.warmup_steps == 0
+    assert recipe.num_critic_only_steps == 0
+    recipe.critic.optimizer.warmup_steps = 10
+    with pytest.raises(ValueError, match="warmup"):
         validate_sao_recipe(recipe, allow_base_critic=True)

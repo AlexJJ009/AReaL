@@ -9,7 +9,7 @@ from typing import Any
 
 from safetensors import safe_open
 from safetensors.torch import load_file
-from transformers import AutoConfig, AutoModelForTokenClassification
+from transformers import AutoConfig, AutoModelForTokenClassification, AutoTokenizer
 
 from areal.models.transformers.scalar_value import Qwen35ScalarValueModel
 
@@ -35,6 +35,69 @@ def file_digest(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def validate_ppo_value_export(path: str | Path, actor_path: str | Path) -> dict:
+    """Validate the existing PPO HF export without inventing a value protocol.
+
+    This format carries pretraining provenance and file hashes, but does not
+    certify that its target horizon/termination matches a new SAO run.
+    """
+    root, actor = Path(path), Path(actor_path)
+    manifest = json.loads((root / "export-manifest.json").read_text())
+    if not manifest.get("source") or manifest.get("source_step", 0) <= 0:
+        raise ValueError("PPO critic export requires pretraining provenance")
+    if not manifest.get("selection_metrics"):
+        raise ValueError("PPO critic export requires recorded validation metrics")
+    entries = manifest.get("files", [])
+    files = {entry["name"]: entry for entry in entries}
+    if len(files) != len(entries):
+        raise ValueError("Duplicate PPO critic export file entries")
+    required = {"config.json", "tokenizer.json", "tokenizer_config.json"}
+    weights = {p.name for p in root.glob("*.safetensors")}
+    if (
+        not required <= files.keys()
+        or not weights
+        or weights != {name for name in files if name.endswith(".safetensors")}
+    ):
+        raise ValueError("PPO critic export requires complete HF files")
+    for name, entry in files.items():
+        if Path(name).name != name or len(entry.get("sha256", "")) != 64:
+            raise ValueError("Invalid PPO critic export file entry")
+        if file_digest(root / name) != entry["sha256"]:
+            raise ValueError(f"PPO critic export hash mismatch: {name}")
+
+    # save_pretrained can change tokenizer serialization and added-token flags.
+    # The critic consumes the actor's token IDs: compare the complete ID mapping.
+    def vocabulary(directory):
+        return AutoTokenizer.from_pretrained(
+            directory, local_files_only=True
+        ).get_vocab()
+
+    actor_vocab, critic_vocab = vocabulary(actor), vocabulary(root)
+    if not actor_vocab or actor_vocab != critic_vocab:
+        raise ValueError("PPO critic tokenizer differs from actor: token IDs")
+    config = json.loads((root / "config.json").read_text())
+    actor_config = json.loads((actor / "config.json").read_text())
+    if config.get("model_type") != actor_config.get("model_type"):
+        raise ValueError("PPO critic backbone type differs from actor")
+    text = config.get("text_config", config)
+    actor_text = actor_config.get("text_config", actor_config)
+    for key in ("hidden_size", "num_hidden_layers", "vocab_size"):
+        if text.get(key) != actor_text.get(key):
+            raise ValueError(f"PPO critic backbone differs from actor: {key}")
+    shapes = {}
+    for name in sorted(weights):
+        with safe_open(root / name, framework="pt", device="cpu") as shard:
+            for key in shard.keys():
+                if key in shapes:
+                    raise ValueError("Duplicate PPO critic weight keys")
+                shapes[key] = tuple(shard.get_slice(key).get_shape())
+    if shapes.get("score.weight") != (1, text.get("hidden_size")):
+        raise ValueError("PPO critic export requires a matching scalar score.weight")
+    if not any(key.startswith("model.") for key in shapes):
+        raise ValueError("PPO critic export is missing its backbone")
+    return manifest
 
 
 def write_value_manifest(
