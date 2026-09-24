@@ -149,6 +149,8 @@ def test_sao_ppo_config_parses_dedicated_eval_and_colocated_critic(
     assert AsyncEvalPPOTrainer is not None
     assert config.actor.backend == "fsdp:d4p1t1"
     assert config.critic.backend == "fsdp:d4p1t1"
+    assert config.actor.loss_reduction == "token_mean"
+    assert config.critic.loss_reduction == "token_mean"
     assert config.rollout.backend == "sglang:d3p1t1"
     assert config.evaluation_rollout.backend == "sglang:d1p1t1"
     assert config.critic.scheduling_strategy.type == "colocation"
@@ -182,6 +184,14 @@ def test_sao_ppo_config_parses_dedicated_eval_and_colocated_critic(
         (
             lambda config: setattr(config.evaluation_rollout, "scheduling_spec", ()),
             "evaluation_rollout workers must reserve one GPU each",
+        ),
+        (
+            lambda config: setattr(config.actor, "loss_reduction", "sequence_mean"),
+            "actor.loss_reduction",
+        ),
+        (
+            lambda config: setattr(config.critic, "loss_reduction", "sequence_mean"),
+            "critic.loss_reduction must be token_mean",
         ),
     ],
 )

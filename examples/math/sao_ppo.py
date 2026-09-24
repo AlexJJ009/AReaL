@@ -126,7 +126,7 @@ def validate_contract(config: SaoPPOConfig, *, preflight: bool = False) -> None:
         "cluster.n_nodes": (config.cluster.n_nodes, 1),
         "cluster.n_gpus_per_node": (config.cluster.n_gpus_per_node, 8),
         "actor.discount": (config.actor.discount, 1.0),
-        "actor.loss_reduction": (config.actor.loss_reduction, "sequence_mean"),
+        "actor.loss_reduction": (config.actor.loss_reduction, "token_mean"),
         "actor.gae_lambda": (config.actor.gae_lambda, 0.95),
         "actor.critic_gae_lambda": (config.actor.critic_gae_lambda, 1.0),
         "actor.gae_timestep_unit": (config.actor.gae_timestep_unit, "token"),
@@ -192,8 +192,8 @@ def validate_contract(config: SaoPPOConfig, *, preflight: bool = False) -> None:
         or config.critic.scheduling_strategy.target != "actor"
     ):
         raise ValueError("critic must colocate with actor on the four training GPUs")
-    if config.critic.loss_reduction != "sequence_mean":
-        raise ValueError("critic.loss_reduction must be sequence_mean")
+    if config.critic.loss_reduction != "token_mean":
+        raise ValueError("critic.loss_reduction must be token_mean")
     if config.critic.path == config.actor.path:
         raise ValueError("Actor Base and pretrained critic checkpoints must differ")
     if config.critic.init_from_scratch:

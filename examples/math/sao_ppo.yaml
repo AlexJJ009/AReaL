@@ -97,7 +97,7 @@ actor:
     warmup_steps: 0
     warmup_steps_proportion: 0.0
   ppo_n_minibatches: 1
-  loss_reduction: sequence_mean
+  loss_reduction: token_mean
   eps_clip: 0.2
   eps_clip_higher: 0.28
   c_clip: null
@@ -148,7 +148,7 @@ critic:
   mask_no_eos_with_zero: false
   eps_clip: 0.2
   ppo_n_minibatches: 1
-  loss_reduction: sequence_mean
+  loss_reduction: token_mean
   mb_spec:
     max_tokens_per_mb: 9216
     granularity: 1
@@ -230,7 +230,7 @@ stats_logger:
     mode: online
     entity: ${oc.env:SAO_WANDB_ENTITY,null}
     project: ${oc.env:SAO_WANDB_PROJECT,areal-math-ppo}
-    tags: [async-ppo, dapo, qwen35-4b-base, pretrained-critic, sequence-mean]
+    tags: [async-ppo, dapo, qwen35-4b-base, pretrained-critic, token-mean]
     notes: Base actor and pretrained Step50 critic; raw binary rewards; zero terminal bootstrap.
   swanlab:
     mode: disabled
