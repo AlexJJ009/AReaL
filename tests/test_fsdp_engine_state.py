@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -86,6 +87,7 @@ def _engine_with_scheduler() -> FSDPEngine:
         optimizer, step_size=1, gamma=0.5
     )
     engine.optimizer_steps_since_init = 3
+    engine._critic_freeze_manifest = {"enabled": False, "frozen_parameters": []}
     engine._initialized = True
     engine._cpu_group = None
     engine.logger = type("_Logger", (), {"warning": lambda *_args, **_kwargs: None})()
@@ -114,6 +116,23 @@ def test_fsdp_engine_training_state_round_trip_restores_scheduler_and_counter(
     assert restored.optimizer_steps_since_init == 7
     assert restored.lr_scheduler.state_dict() == source.lr_scheduler.state_dict()
     assert restored.lr_scheduler.get_last_lr() == source.lr_scheduler.get_last_lr()
+    state = torch.load(tmp_path / "fsdp_engine_state.pt", weights_only=True)
+    assert state["critic_freeze"] == source._critic_freeze_manifest
+
+
+def test_optimizer_resume_rejects_freeze_change_before_loading_weights(tmp_path):
+    engine = _engine_with_scheduler()
+    engine._critic_freeze_manifest = {
+        "enabled": True,
+        "frozen_parameters": ["model.self_attn.weight"],
+    }
+    engine._offload_aware_context = nullcontext
+    # No sidecar: this is a legacy full-parameter checkpoint. The rejection
+    # must precede DCP loading, even though no weight files exist here.
+    with pytest.raises(ValueError):
+        engine.load(
+            SimpleNamespace(path=str(tmp_path), with_optim=True, weight_format="dcp")
+        )
 
 
 def test_fsdp_engine_training_state_load_keeps_legacy_checkpoint_compatible(

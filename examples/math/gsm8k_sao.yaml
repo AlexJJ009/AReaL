@@ -184,6 +184,7 @@ critic:
   trial_name: ${trial_name}
   path: ${oc.env:SAO_CRITIC_PATH}
   is_critic: true
+  freeze_critic_attention: false
   value_contract: null
   dtype: ${actor.dtype}
   optimizer_dtype: ${actor.optimizer_dtype}

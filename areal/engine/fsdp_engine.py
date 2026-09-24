@@ -87,6 +87,10 @@ from areal.engine.fsdp_utils import (
     get_cosine_schedule_with_warmup,
 )
 from areal.engine.fsdp_utils.checkpoint import DCPState
+from areal.engine.fsdp_utils.critic_freeze import (
+    apply_critic_attention_freeze,
+    validate_critic_freeze_manifest,
+)
 from areal.engine.fsdp_utils.grad import fsdp2_clip_grad_norm
 from areal.engine.fsdp_utils.optimizer import AnyPrecisionAdamW, PerLayerOptimWrapper
 from areal.engine.fsdp_utils.parallel import ParallelHelper, parallelize_model
@@ -527,6 +531,16 @@ class FSDPEngine(TrainEngine):
             else:
                 full_state = {}
 
+        self._critic_freeze_manifest = apply_critic_attention_freeze(
+            self.model,
+            enabled=self.config.freeze_critic_attention,
+            is_critic=self.config.is_critic,
+        )
+        if self.config.freeze_critic_attention:
+            self.logger.info(
+                "Critic attention freeze: %s", self._critic_freeze_manifest
+            )
+
         # NOTE: This applies FSDP2 with N-D parallelism (DP+SP+TP)
         parallelize_model(
             self.model,
@@ -736,6 +750,17 @@ class FSDPEngine(TrainEngine):
 
     def load(self, meta: SaveLoadMeta):
         with self._offload_aware_context():
+            # Reject incompatible optimizer topology before modifying model state.
+            if meta.with_optim:
+                state_path = os.path.join(meta.path, "fsdp_engine_state.pt")
+                state = (
+                    torch.load(state_path, map_location="cpu", weights_only=True)
+                    if os.path.exists(state_path)
+                    else {}
+                )
+                validate_critic_freeze_manifest(
+                    self._critic_freeze_manifest, state.get("critic_freeze")
+                )
             if meta.weight_format == "hf":
                 self._load_model_from_hf(meta.path)
             elif meta.weight_format == "dcp":
@@ -1361,9 +1386,10 @@ class FSDPEngine(TrainEngine):
         beta1 = self.optimizer_config.beta1
         beta2 = self.optimizer_config.beta2
         eps = self.optimizer_config.eps
+        parameters = [p for p in self.model.parameters() if p.requires_grad]
         if self.optimizer_config.type == "adam":
             self.optimizer = torch.optim.AdamW(
-                self.model.parameters(),
+                parameters,
                 lr=lr,
                 weight_decay=weight_decay,
                 betas=(beta1, beta2),
@@ -1373,7 +1399,7 @@ class FSDPEngine(TrainEngine):
             )
         elif self.optimizer_config.type == "adam_bf16":
             self.optimizer = AnyPrecisionAdamW(
-                self.model.parameters(),
+                parameters,
                 lr=lr,
                 weight_decay=weight_decay,
                 betas=(beta1, beta2),
@@ -1383,7 +1409,7 @@ class FSDPEngine(TrainEngine):
             )
         else:
             self.optimizer = torch.optim.SGD(
-                self.model.parameters(),
+                parameters,
                 lr=lr,
                 weight_decay=weight_decay,
             )
@@ -2106,6 +2132,7 @@ class FSDPEngine(TrainEngine):
         state = {
             "lr_scheduler": self.lr_scheduler.state_dict(),
             "optimizer_steps_since_init": self.optimizer_steps_since_init,
+            "critic_freeze": self._critic_freeze_manifest,
         }
         if dist.get_rank() == 0:
             torch.save(state, os.path.join(path, "fsdp_engine_state.pt"))

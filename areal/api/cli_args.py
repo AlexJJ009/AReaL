@@ -1274,6 +1274,13 @@ class TrainEngineConfig:
         default=False,
         metadata={"help": "Whether to use a critic/reward model"},
     )
+    freeze_critic_attention: bool = field(
+        default=False,
+        metadata={
+            "help": "Freeze self_attn and linear_attn modules of a hybrid critic. "
+            "Supported only by the FSDP backend; actor use is rejected."
+        },
+    )
     temperature: float = field(
         default=1.0, metadata={"help": "Temperature during generation."}
     )
@@ -1458,6 +1465,14 @@ class TrainEngineConfig:
 
     def __post_init__(self):
         """Validate scheduling_spec length and config combinations."""
+        if self.freeze_critic_attention and (
+            not self.is_critic
+            or self.backend.split(":", 1)[0] != "fsdp"
+            or self.use_lora
+        ):
+            raise ValueError(
+                "freeze_critic_attention requires an FSDP critic without LoRA"
+            )
         if self.logprobs_chunk_size <= 0:
             raise ValueError(
                 f"logprobs_chunk_size must be positive, got {self.logprobs_chunk_size}"

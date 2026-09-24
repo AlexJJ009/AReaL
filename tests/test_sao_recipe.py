@@ -44,6 +44,14 @@ def test_recipe_rejects_synthetic_artifact_as_pretrained(recipe):
         validate_sao_recipe(recipe)
 
 
+def test_recipe_allows_opt_in_critic_attention_freeze(recipe):
+    assert not recipe.critic.freeze_critic_attention
+    assert not recipe.actor.freeze_critic_attention
+    recipe.critic.freeze_critic_attention = True
+    recipe.critic.__post_init__()
+    validate_sao_recipe(recipe, allow_base_critic=True)
+
+
 def test_recipe_rejects_clipped_value_loss(recipe):
     recipe.critic.eps_clip = 0.5
     with pytest.raises(ValueError, match="MSE"):
