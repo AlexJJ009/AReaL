@@ -55,9 +55,14 @@ def _validation_steps(config: PPOConfig, profile: str) -> tuple[int, ...]:
 
 
 def _cadence_steps(total_steps: int | None, freq_steps: int | None) -> tuple[int, ...]:
-    if total_steps is None or total_steps <= 0 or freq_steps is None or freq_steps <= 0:
+    if total_steps is None or total_steps <= 0:
         return ()
-    return tuple(range(freq_steps, total_steps + 1, freq_steps))
+    regular = (
+        range(freq_steps, total_steps + 1, freq_steps)
+        if freq_steps and freq_steps > 0
+        else ()
+    )
+    return tuple(sorted({total_steps, *regular}))
 
 
 def _expected_split_counter(
@@ -495,6 +500,13 @@ def install_tau2_validation_hook(
     def commit(epoch: int, step: int, global_step: int, data: dict[str, Any]) -> None:
         nonlocal best
         completed = global_step + 1
+        if completed == trainer.config.total_train_steps and (
+            not trainer.config.saver.freq_steps
+            or completed % trainer.config.saver.freq_steps
+        ):
+            trainer._save_training_state(
+                epoch=epoch, epoch_step=step, global_step=global_step, force=True
+            )
         actor_metrics = actor_update_metrics(data)
         if actor_metrics:
             raise RuntimeError(

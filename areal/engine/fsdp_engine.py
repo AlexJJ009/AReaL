@@ -2713,6 +2713,9 @@ class FSDPPPOCritic(FSDPEngine):
     def ppo_update(self, *args, **kwargs):
         return self.critic.ppo_update(*args, **kwargs)
 
+    def grad_norm(self, *args, **kwargs):
+        return self.critic.grad_norm(*args, **kwargs)
+
     @classmethod
     def as_controller(cls, config: PPOCriticConfig, scheduler: Scheduler):
         if config._version == "v2":

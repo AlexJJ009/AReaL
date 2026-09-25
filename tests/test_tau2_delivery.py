@@ -236,3 +236,38 @@ def test_tau2_eval_wait_none_writes_failed_status_not_completed(tmp_path):
 
     assert json.loads(json.dumps(statuses[-1]))["status"] == "failed"
     assert all(status["status"] != "completed" for status in statuses)
+
+
+@pytest.mark.parametrize("global_step,forced", [(44, False), (45, True)])
+def test_final_grpo_checkpoint_is_forced_off_regular_cadence(
+    monkeypatch, global_step, forced
+):
+    from scripts.sao.async_eval import AsyncEvalPPOTrainer
+
+    calls = []
+    monkeypatch.setattr(
+        AsyncEvalPPOTrainer,
+        "_save_training_state",
+        lambda self, **kwargs: calls.append(kwargs),
+    )
+    trainer = object.__new__(Tau2AsyncEvalTrainer)
+    trainer.config = SimpleNamespace(total_train_steps=46)
+    trainer._save_training_state(epoch=1, epoch_step=22, global_step=global_step)
+    assert calls[0]["force"] is forced
+
+
+def test_final_grpo_evaluation_uses_final_checkpoint_once(tmp_path):
+    trainer = object.__new__(Tau2AsyncEvalTrainer)
+    trainer.config = SimpleNamespace(
+        total_train_steps=46,
+        experiment_name="tau2",
+        trial_name="test",
+        cluster=SimpleNamespace(fileroot=str(tmp_path)),
+    )
+    trainer.valid_dataloader = [object()]
+    calls = []
+    trainer._enqueue_eval = lambda **kwargs: calls.append(kwargs)
+    trainer._evaluate("workflow", {}, epoch=1, epoch_step=22, global_step=45)
+    assert len(calls) == 1
+    assert calls[0]["version"] == 46
+    assert calls[0]["checkpoint_path"].endswith("epoch1epochstep22globalstep45")

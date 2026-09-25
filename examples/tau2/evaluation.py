@@ -14,6 +14,42 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
 
     _snapshot_evidence = False
 
+    def _save_training_state(self, *, epoch, epoch_step, global_step, force=False):
+        super()._save_training_state(
+            epoch=epoch,
+            epoch_step=epoch_step,
+            global_step=global_step,
+            force=force or global_step + 1 == self.config.total_train_steps,
+        )
+
+    def _evaluate(
+        self, eval_workflow, eval_workflow_kwargs, epoch, epoch_step, global_step
+    ):
+        if (
+            global_step + 1 == self.config.total_train_steps
+            and self.valid_dataloader is not None
+        ):
+            from areal.utils.saver import Saver
+
+            self._enqueue_eval(
+                version=global_step + 1,
+                checkpoint_path=Saver.get_model_save_path(
+                    self.config.experiment_name,
+                    self.config.trial_name,
+                    self.config.cluster.fileroot,
+                    epoch,
+                    epoch_step,
+                    global_step,
+                ),
+                eval_workflow=eval_workflow,
+                eval_workflow_kwargs=eval_workflow_kwargs,
+                snapshot=False,
+            )
+        else:
+            super()._evaluate(
+                eval_workflow, eval_workflow_kwargs, epoch, epoch_step, global_step
+            )
+
     def _init_dedicated_eval_rollout(self):
         super()._init_dedicated_eval_rollout()
         self._async_eval_rollout.start_proxy()

@@ -250,3 +250,23 @@ def test_check_config_does_not_resolve_model_snapshot(monkeypatch, tmp_path, cap
 
     captured = capsys.readouterr()
     assert "model_snapshot_resolution: 0" in captured.out
+
+
+def test_critic_cadence_includes_final_step_between_regular_saves():
+    assert train_critic._cadence_steps(18, 5) == (5, 10, 15, 18)
+    assert train_critic._cadence_steps(20, 5) == (5, 10, 15, 20)
+
+
+def test_fsdp_worker_exposes_critic_gradient_diagnostic():
+    from types import SimpleNamespace
+
+    from areal.engine.fsdp_engine import FSDPPPOCritic
+
+    engine = object.__new__(FSDPPPOCritic)
+    calls = []
+    engine.critic = SimpleNamespace(
+        grad_norm=lambda data: calls.append(data) or {"grad_norm": 3.0}
+    )
+    batch = [{"input_ids": [1, 2]}]
+    assert engine.grad_norm(batch) == {"grad_norm": 3.0}
+    assert calls == [batch]
