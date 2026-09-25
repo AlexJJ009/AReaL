@@ -550,7 +550,7 @@ def install_tau2_validation_hook(
 def main(argv: list[str]) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--episodes", required=True, nargs="+")
+    parser.add_argument("--episodes", required=True, action="append")
     parser.add_argument("--require-full-coverage", action="store_true")
     parser.add_argument("--critic-dev-fraction", type=float, default=0.2)
     parser.add_argument("--check-config", action="store_true")

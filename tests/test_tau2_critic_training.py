@@ -239,12 +239,12 @@ def test_check_config_does_not_resolve_model_snapshot(monkeypatch, tmp_path, cap
             "examples/tau2/config_critic_production.yaml",
             "--episodes",
             str(data_path),
-            "--check-config",
             "total_train_steps=1",
             "num_critic_only_steps=1",
             "total_train_epochs=1",
             "train_dataset.batch_size=3",
             "valid_dataset.batch_size=3",
+            "--check-config",
         ]
     )
 
