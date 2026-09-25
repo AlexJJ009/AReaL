@@ -136,7 +136,11 @@ from areal.utils.hf_utils import load_hf_processor_and_tokenizer, load_hf_tokeni
 from areal.utils.lock import DistributedLock
 from areal.utils.lr_scheduler import get_num_warmup_steps
 from areal.utils.network import find_free_ports, format_host_for_url, gethostip
-from areal.utils.offload import is_tms_enabled, torch_memory_saver
+from areal.utils.offload import (
+    is_tms_enabled,
+    normalize_tms_worker_preload,
+    torch_memory_saver,
+)
 from areal.utils.perf_tracer import trace_perf, trace_scope
 from areal.utils.seeding import get_seed
 from areal.v2.weight_update.awex.delta_config import DTERuntimeConfig
@@ -456,6 +460,7 @@ class MegatronEngine(TrainEngine):
         self._normalize_adam_bf16_config()
 
         if is_tms_enabled():
+            normalize_tms_worker_preload()
             torch_memory_saver.hook_mode = "preload"
 
         current_platform.set_device(int(os.environ["LOCAL_RANK"]))

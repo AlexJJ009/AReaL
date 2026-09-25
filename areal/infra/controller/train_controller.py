@@ -431,6 +431,7 @@ class TrainController:
                             worker_id=worker.id,
                             method="destroy",
                             engine_name=self._engine_name(rank),
+                            rpc_meta={"broadcast": False},
                         )
                         for rank, worker in enumerate(self.workers)
                     ]
@@ -597,6 +598,35 @@ class TrainController:
             return _merge_tensors(results, group_indices)
         return results[0]
 
+    def _replicated_function_call(self, method: str, *args, **kwargs):
+        """Send the same non-tensor payload directly to every train rank.
+
+        The ordinary dispatch path sends scalar payloads only to DP heads and
+        relies on an engine-side device broadcast for the remaining model-
+        parallel ranks.  TMS-offloaded workers cannot allocate the CUDA
+        metadata needed by that broadcast.  Lifecycle-adjacent scalar/config
+        calls use direct full-rank fanout instead, preserving rank coverage
+        without touching the paused accelerator.
+        """
+
+        async def _call_all_workers():
+            return await asyncio.gather(
+                *[
+                    self.scheduler.async_call_engine(
+                        worker.id,
+                        method,
+                        self._engine_name(rank),
+                        *args,
+                        rpc_meta={"broadcast": False},
+                        **kwargs,
+                    )
+                    for rank, worker in enumerate(self.workers)
+                ]
+            )
+
+        results = run_async_task(_call_all_workers)
+        return self._collect_results(results, group_indices=None)
+
     def connect_engine(self, rollout: RolloutController, meta: WeightUpdateMeta):
         if self.rollout is not None and self.rollout != rollout:
             logger.warning(
@@ -624,7 +654,7 @@ class TrainController:
         # Statistics have been aggregated and synchronized across workers
         # All results should be identical, so return the first one
         stats = stats_tracker.export_all()
-        stats.update(self._custom_function_call("export_stats"))
+        stats.update(self._replicated_function_call("export_stats"))
         return stats
 
     # ==================== ENGINE RPC WRAPPERS ====================
@@ -668,7 +698,7 @@ class TrainController:
         version : int
             The weight version number to set
         """
-        self._custom_function_call("set_version", version)
+        self._replicated_function_call("set_version", version)
 
     def get_version(self) -> int:
         """Get the current weight version in the training engine.
@@ -678,7 +708,7 @@ class TrainController:
         int
             The current weight version number
         """
-        return self._custom_function_call("get_version")
+        return self._replicated_function_call("get_version")
 
     def get_lora_adapter_info(self) -> dict[str, list[int]]:
         """Get LoRA adapter parameter names and shapes from worker rank 0."""
@@ -695,7 +725,7 @@ class TrainController:
         meta : SaveLoadMeta
             Metadata containing information about where and how to save
         """
-        self._custom_function_call("save", meta)
+        self._replicated_function_call("save", meta)
 
     def load(self, meta: SaveLoadMeta):
         """Load model weights and optimizer states from a file.
@@ -728,11 +758,14 @@ class TrainController:
 
     def offload(self) -> None:
         """Offload model parameters to CPU across all train workers."""
-        self._custom_function_call("offload")
+        self._custom_function_call("offload", rpc_meta={"broadcast": False})
 
     def onload(self) -> None:
         """Onload model parameters to GPU across all train workers."""
-        self._custom_function_call("onload")
+        # An offloaded TMS worker cannot allocate CUDA memory for the default
+        # RPC payload broadcast before its engine has resumed. This call has no
+        # payload, so direct per-worker dispatch is sufficient.
+        self._custom_function_call("onload", rpc_meta={"broadcast": False})
 
     def get_device_stats(self):
         return self._custom_function_call("get_device_stats")
@@ -761,7 +794,7 @@ class TrainController:
         run_async_task(_call)
 
     def save_perf_tracer(self, step: int | None = None, force: bool = False) -> None:
-        self._custom_function_call("save_perf_tracer", step=step, force=force)
+        self._replicated_function_call("save_perf_tracer", step=step, force=force)
 
     def prepare_batch(
         self,

@@ -129,6 +129,7 @@ from areal.utils.data import (
     MicroBatchList,
     amend_position_ids,
     concat_batch,
+    drop_non_model_forward_metadata,
     is_multi_modal_key,
     pack_tensor_dict,
     pad_mb_list,
@@ -140,7 +141,11 @@ from areal.utils.functional import gather_logprobs, gather_logprobs_entropy
 from areal.utils.hf_utils import load_hf_processor_and_tokenizer, load_hf_tokenizer
 from areal.utils.lr_scheduler import get_num_warmup_steps
 from areal.utils.network import find_free_ports, format_host_for_url, gethostip
-from areal.utils.offload import is_tms_enabled, torch_memory_saver
+from areal.utils.offload import (
+    is_tms_enabled,
+    normalize_tms_worker_preload,
+    torch_memory_saver,
+)
 from areal.utils.perf_tracer import trace_perf, trace_scope
 from areal.utils.save_load import get_state_dict_from_repo_id_or_path
 
@@ -452,6 +457,7 @@ class FSDPEngine(TrainEngine):
             raise RuntimeError("areal only supports FSDP2, which requires torch>=2.4.0")
 
         if is_tms_enabled():
+            normalize_tms_worker_preload()
             torch_memory_saver.hook_mode = "preload"
 
         # Create device model
@@ -844,6 +850,54 @@ class FSDPEngine(TrainEngine):
             grad_norm=float(grad_norm) if grad_norm is not None else float("nan"),
             lr=current_lr,
         )
+
+    def grad_norm_batch(
+        self,
+        input_: list[dict[str, Any]] | dict[str, Any],
+        loss_fn: Callable[..., torch.Tensor],
+        loss_weight_fn: Callable[[dict[str, Any]], torch.Tensor],
+    ) -> dict[str, float]:
+        """Run forward/backward and report the distributed grad norm without stepping."""
+
+        self._ensure_ready()
+        self.optimizer_zero_grad()
+
+        input_batched, _ = self._normalize_batch_input(input_)
+        mb_list = self._prepare_mb_list(input_batched).to(self.device)
+        total_loss_weight = compute_total_loss_weight(
+            mb_list, loss_weight_fn, self.dp_group
+        )
+
+        def process_output(
+            logits: torch.Tensor, ctx_dict: dict[str, Any]
+        ) -> torch.Tensor:
+            ctx = FSDPTrainContext(**ctx_dict)
+            return self._compute_logprobs_and_loss(
+                logits,
+                ctx,
+                loss_fn,
+                loss_weight_fn,
+                total_loss_weight,
+                loss_multiplier=self.parallel_helper.dp_size,
+            )
+
+        try:
+            self.forward_backward_batch(mb_list, process_output, forward_only=False)
+            grad_norm = fsdp2_clip_grad_norm(
+                list(self.model.parameters()),
+                max_norm=float("inf"),
+                fsdp_group=self.world_mesh["dp_sp"].get_group(),
+                tp_group=self.world_mesh["tp"].get_group(),
+                offload_params=self.config.fsdp.offload_params,
+            )
+            return {
+                "grad_norm": float(grad_norm),
+                "lr": float(self.optimizer.param_groups[0]["lr"]),
+                "num_micro_batches": float(len(mb_list.mbs)),
+                "optimizer_step": 0.0,
+            }
+        finally:
+            self.optimizer_zero_grad()
 
     def lr_scheduler_step(self):
         assert self.lr_scheduler is not None
@@ -2348,7 +2402,7 @@ class FSDPEngine(TrainEngine):
             trie_node = inputs.pop("trie_node", None)
             ulysses_pad_size = 0
 
-        inputs.pop("turn_ids", None)
+        drop_non_model_forward_metadata(inputs)
 
         ctx = FSDPTrainContext(
             model_inputs=inputs,

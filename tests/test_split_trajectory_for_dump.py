@@ -1,6 +1,7 @@
 """Tests for WorkflowExecutor._split_trajectory_for_dump and _compute_output_versions."""
 
 import pytest
+import torch
 
 from areal.infra.workflow_executor import WorkflowExecutor
 
@@ -117,3 +118,66 @@ class TestComputeOutputVersions:
         assert head == 5
         assert tail == 6
         assert rle == [[5, 2], [6, 2]]
+
+
+class TestTrajectoryReplayFields:
+    def test_preserves_behavior_and_episode_metadata(self):
+        trajectory = {
+            "action_origin_mask": torch.tensor([[0, 1, 0, 1]]),
+            "logprobs": torch.tensor([[0.0, -0.1, 0.0, -0.2]]),
+            "versions": torch.tensor([[-1, 3, -1, 4]]),
+            "turn_ids": torch.tensor([[-1, 0, -1, 1]], dtype=torch.int32),
+            "terminated": torch.tensor([True]),
+            "truncated": torch.tensor([False]),
+            "bootstrap_mask": torch.tensor([False]),
+            "episode_ids": torch.full((1, 4), 17, dtype=torch.int64),
+        }
+
+        result = WorkflowExecutor._trajectory_replay_fields(
+            trajectory,
+            row=0,
+            seqlen=4,
+            ids=[1, 2, 3, 4],
+            mask=[0, 1, 0, 1],
+        )
+
+        assert result == {
+            "input_ids": [1, 2, 3, 4],
+            "attention_mask": [1, 1, 1, 1],
+            "loss_mask": [0, 1, 0, 1],
+            "action_origin_mask": [0, 1, 0, 1],
+            "token_roles": ["prompt", "assistant", "observation", "assistant"],
+            "behavior_logprobs": [0.0, pytest.approx(-0.1), 0.0, pytest.approx(-0.2)],
+            "versions": [-1, 3, -1, 4],
+            "turn_ids": [-1, 0, -1, 1],
+            "terminated": True,
+            "truncated": False,
+            "bootstrap_mask": False,
+            "episode_id": 17,
+            "episode_tensor_id": 17,
+        }
+
+    def test_rejects_packed_episode_identity(self):
+        with pytest.raises(ValueError, match="multiple episode IDs"):
+            WorkflowExecutor._trajectory_replay_fields(
+                {
+                    "action_origin_mask": torch.tensor([[0, 1, 1]]),
+                    "episode_ids": torch.tensor([[17, 17, 18]]),
+                },
+                row=0,
+                seqlen=3,
+                ids=[1, 2, 3],
+                mask=[0, 1, 1],
+            )
+
+    def test_generic_dump_remains_backward_compatible_without_provenance(self):
+        result = WorkflowExecutor._trajectory_replay_fields(
+            {},
+            row=0,
+            seqlen=2,
+            ids=[1, 2],
+            mask=[0, 1],
+        )
+
+        assert "action_origin_mask" not in result
+        assert result["token_roles"] == ["context", "assistant"]

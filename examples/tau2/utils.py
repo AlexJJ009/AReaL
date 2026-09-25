@@ -13,7 +13,15 @@ from tau2.data_model.message import Message
 from tau2.data_model.simulation import RewardInfo
 from tau2.data_model.tasks import Task
 
-from areal.api.cli_args import PPOConfig
+from scripts.sao.async_eval import SaoPPOConfig
+
+_POLICY_SESSION_KEY_ENV_NAMES = frozenset(
+    {
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "AREAL_PROXY_SESSION_API_KEY",
+    }
+)
 
 
 @dataclass
@@ -21,7 +29,7 @@ class Tau2EnvConfig:
     """Environment configuration for Tau2 benchmark."""
 
     domain: str = field(
-        default="telecom",
+        default="airline",
         metadata={
             "help": "The tau2 domain name, e.g., 'retail', 'airline', 'telecom'."
         },
@@ -31,6 +39,18 @@ class Tau2EnvConfig:
     )
     add_thinking_tool: bool = field(
         default=False, metadata={"help": "Whether to add a thinking tool."}
+    )
+    enable_thinking: bool = field(
+        default=False,
+        metadata={"help": "Whether the policy chat template enables thinking."},
+    )
+    context_window_tokens: int = field(
+        default=32768,
+        metadata={"help": "Total rendered prompt plus completion token budget."},
+    )
+    max_completion_tokens: int = field(
+        default=4096,
+        metadata={"help": "Maximum tokens for one assistant response."},
     )
     solo_mode: bool = field(
         default=False, metadata={"help": "Whether to use solo mode."}
@@ -43,8 +63,16 @@ class Tau2EnvConfig:
         default=None,
         metadata={"help": "The user LLM to use, default to the gpt-4.1 model."},
     )
+    user_llm_api_key_env: str = field(
+        default="DEEPSEEK_API_KEY",
+        metadata={"help": "Environment variable containing the user LLM API key."},
+    )
     user_llm_args: dict | None = field(
         default=None, metadata={"help": "The arguments for the user LLM."}
+    )
+    user_llm_num_retries: int = field(
+        default=3,
+        metadata={"help": "Maximum retries for one user-simulator request."},
     )
     turn_discount: float = field(
         default=1.0, metadata={"help": "Discount factor for turn-based learning."}
@@ -53,12 +81,56 @@ class Tau2EnvConfig:
         default=0.1, metadata={"help": "Penalty for invalid format in completions."}
     )
 
+    def __post_init__(self) -> None:
+        if self.domain not in ("airline", "retail", "telecom", "mixed"):
+            raise ValueError(f"Unsupported τ² domain: {self.domain}")
+        if self.max_steps <= 0:
+            raise ValueError("max_steps must be positive")
+        if self.context_window_tokens != 32768:
+            raise ValueError("The τ² SAO experiment requires a 32768-token context")
+        if not 0 < self.max_completion_tokens <= 4096:
+            raise ValueError("max_completion_tokens must be in [1, 4096]")
+        if self.enable_thinking:
+            raise ValueError("The τ² SAO experiment requires enable_thinking=false")
+        if self.user_llm_api_key_env in _POLICY_SESSION_KEY_ENV_NAMES:
+            raise ValueError(
+                "user_llm_api_key_env must not alias a policy proxy session key"
+            )
+        if self.user_llm_num_retries < 0:
+            raise ValueError("user_llm_num_retries must be non-negative")
+
 
 @dataclass
-class Tau2PPOConfig(PPOConfig):
+class Tau2PPOConfig(SaoPPOConfig):
     """PPO configuration with Tau2-specific settings."""
 
     econfig: Tau2EnvConfig = field(default_factory=Tau2EnvConfig)
+    # OmegaConf structured configs cannot materialize ``Literal`` annotations
+    # in the AReaL version used by the launcher, so validate the enum here.
+    algorithm: str = "grpo"
+    domains: list[str] = field(default_factory=lambda: ["airline"])
+    train_batch_episodes: int | None = None
+    effective_episodes: int | None = None
+    domain_effective_episodes: dict[str, int] = field(default_factory=dict)
+    dynamic_group_filter: bool = False
+    episode_timeout_seconds: float = 600.0
+    experiment_mode: str = "qualification"
+    critic_dev_fraction: float = 0.2
+    critic_tasks_per_domain: int | None = None
+    critic_rollouts_per_task: int = 1
+    infra_retries: int = 1
+    task_limit: int | None = None
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.algorithm not in ("collect", "grpo", "sao"):
+            raise ValueError(f"Unsupported τ² algorithm: {self.algorithm}")
+        if self.episode_timeout_seconds <= 0:
+            raise ValueError("episode_timeout_seconds must be positive")
+        if self.experiment_mode not in ("qualification", "tune", "formal"):
+            raise ValueError("experiment_mode must be qualification, tune or formal")
+        if self.infra_retries < 0 or self.critic_rollouts_per_task < 1:
+            raise ValueError("infra_retries must be non-negative and rollouts positive")
 
 
 # Configure loguru logger for tau2-bench package
@@ -102,6 +174,10 @@ class Tau2RunInfo(BaseModel):
     task: Task
     reward_info: RewardInfo | None = None
     error: str | None = None
+    error_type: str | None = None
+    terminated: bool = True
+    truncated: bool = False
+    stop_reason: str | None = None
 
     def __str__(self):
         s = f"[REWARD]: {self.reward}\n\n"

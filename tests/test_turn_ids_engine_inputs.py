@@ -12,6 +12,13 @@ def _make_microbatch() -> MicroBatchItem:
         "input_ids": torch.tensor([[1, 2, 3]], dtype=torch.long),
         "attention_mask": torch.ones(1, 3, dtype=torch.bool),
         "turn_ids": torch.tensor([[-1, 0, 0]], dtype=torch.int32),
+        "action_origin_mask": torch.tensor([[0, 1, 1]], dtype=torch.bool),
+        "episode_ids": torch.full((1, 3), 17, dtype=torch.int64),
+        "terminated": torch.tensor([True]),
+        "truncated": torch.tensor([False]),
+        "bootstrap_mask": torch.tensor([False]),
+        "official_scores": torch.tensor([1.0]),
+        "task_budget_failure": torch.tensor([False]),
     }
     return MicroBatchItem(
         orig_mb=data,
@@ -28,8 +35,18 @@ def test_fsdp_prepare_inputs_strips_turn_ids_without_mutating_context():
 
     inputs, context = engine._prepare_mb_inputs(_make_microbatch())
 
-    assert "turn_ids" not in inputs
-    assert "turn_ids" in context.mb_input
+    for key in (
+        "turn_ids",
+        "action_origin_mask",
+        "episode_ids",
+        "terminated",
+        "truncated",
+        "bootstrap_mask",
+        "official_scores",
+        "task_budget_failure",
+    ):
+        assert key not in inputs
+        assert key in context.mb_input
 
 
 def test_archon_prepare_inputs_strips_turn_ids_without_mutating_context():
@@ -43,5 +60,15 @@ def test_archon_prepare_inputs_strips_turn_ids_without_mutating_context():
 
     inputs, context = engine._prepare_mb_inputs(_make_microbatch())
 
-    assert "turn_ids" not in inputs
-    assert "turn_ids" in context.mb_input
+    for key in (
+        "turn_ids",
+        "action_origin_mask",
+        "episode_ids",
+        "terminated",
+        "truncated",
+        "bootstrap_mask",
+        "official_scores",
+        "task_budget_failure",
+    ):
+        assert key not in inputs
+        assert key in context.mb_input

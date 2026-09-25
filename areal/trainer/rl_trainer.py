@@ -672,6 +672,27 @@ class PPOTrainer:
         else:
             logger.debug("%s engine does not expose unused CUDA cache release", role)
 
+    def _begin_critic_finalize_memory_window(self, critic_only: bool) -> bool:
+        """Temporarily offload the actor while finalizing an offloaded critic.
+
+        Critic-first SAO offloads the colocated critic before the actor update.
+        Post-update saves and stats onload one engine internally, so keeping the
+        actor resident would recreate the colocated peak that TMS is avoiding.
+        """
+        should_offload = (
+            not critic_only
+            and self.critic is not None
+            and self._should_offload_critic
+            and not self._should_offload_actor
+        )
+        if should_offload:
+            self._offload_model(self.actor, role="actor")
+        return should_offload
+
+    def _end_critic_finalize_memory_window(self, actor_was_offloaded: bool) -> None:
+        if actor_was_offloaded:
+            self._onload_model(self.actor, role="actor")
+
     def _apply_initial_step_policy_version(self, initial_step: int) -> None:
         if initial_step <= 0:
             return
@@ -906,6 +927,11 @@ class PPOTrainer:
                         rollout_batch,
                         adv_batch,
                         config.critic_updates_before_actor,
+                        before_actor_update=(
+                            (lambda: self._offload_model(self.critic, role="critic"))
+                            if self._should_offload_critic
+                            else None
+                        ),
                     )
                     stats_tracker.scalar(
                         critic_updates_before_actor=float(len(update_report["critic"]))
@@ -951,9 +977,6 @@ class PPOTrainer:
                     self.critic.get_device_stats().log("ppo critic update")
                 if self._should_offload_critic:
                     self._offload_model(self.critic, role="critic")
-
-            if config.critic_updates_before_actor and self._should_offload_critic:
-                self._offload_model(self.critic, role="critic")
 
             # Save BEFORE update_weights. In AWEX colocate mode the
             # transfer ends with actor weights offloaded, so saving afterwards
@@ -1004,6 +1027,12 @@ class PPOTrainer:
                         sm = self.rollout.workflow_executor.staleness_manager
                         if sm is not None:
                             sm.on_batch_consumed_without_update()
+
+            actor_finalize_offloaded = (
+                False
+                if self._is_v1_awex_colocate(config)
+                else self._begin_critic_finalize_memory_window(critic_only)
+            )
 
             if not self._is_v1_awex_colocate(config):
                 self._save_training_state(
@@ -1072,6 +1101,8 @@ class PPOTrainer:
 
             self._save_perf_tracer(step=global_step)
 
+            self._end_critic_finalize_memory_window(actor_finalize_offloaded)
+
             # Flush step evidence while submission is still paused. Specialized
             # trainers may perform a supervision check in the trace-save hook.
             self.rollout.resume()
@@ -1115,25 +1146,33 @@ class PPOTrainer:
             )
 
     def close(self):
-        self.saver.finalize()
-        if hasattr(self, "_train_rdataset") and self._train_rdataset is not None:
-            self._train_rdataset.close()
-        if hasattr(self, "_valid_rdataset") and self._valid_rdataset is not None:
-            self._valid_rdataset.close()
-        if hasattr(self, "data_controller") and self.data_controller is not None:
-            self.data_controller.destroy()
-        self.stats_logger.close()
-        if self.eval_rollout is not None:
-            self.eval_rollout.destroy()
-        self.rollout.destroy()
-        if self.teacher is not None:
-            self.teacher.destroy()
-        if self.ref is not None:
-            self.ref.destroy()
-        if self.critic is not None:
-            self.critic.destroy()
-        self.actor.destroy()
+        if getattr(self, "_closed", False):
+            return
+
+        self._close_component("saver", "finalize")
+        self._close_component("_train_rdataset", "close")
+        self._close_component("_valid_rdataset", "close")
+        self._close_component("data_controller", "destroy")
+        self._close_component("stats_logger", "close")
+        self._close_component("eval_rollout", "destroy")
+        self._close_component("rollout", "destroy")
+        self._close_component("teacher", "destroy")
+        self._close_component("ref", "destroy")
+        self._close_component("critic", "destroy")
+        self._close_component("actor", "destroy")
+        scheduler = getattr(self, "scheduler", None)
+        if scheduler is not None:
+            scheduler.delete_workers(role=None, reverse_order=True)
+            self.scheduler = None
         perf_tracer.save(force=True)
+        self._closed = True
+
+    def _close_component(self, attr_name: str, method_name: str) -> None:
+        component = getattr(self, attr_name, None)
+        if component is None:
+            return
+        getattr(component, method_name)()
+        setattr(self, attr_name, None)
 
     def _config_perf_tracer(self):
         rank = int(os.getenv("RANK", "0"))

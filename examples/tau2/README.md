@@ -1,5 +1,92 @@
 # Customer Service Agent Training with Tau2 Benchmark
 
+The scripts reuse AReaL's PPO trainer, official tau2 environment/evaluator, existing
+dedicated evaluation controller, and ordinary Pueue. No separate launcher registry or
+runtime manifest is required.
+
+## Training entrypoints
+
+| Entry                                                                  | Purpose                                                                                |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `scripts/tau2/train_mixed.sh`                                          | Async GRPO on all three official train domains                                         |
+| `scripts/tau2/train_airline.sh`, `train_retail.sh`, `train_telecom.sh` | The same GRPO recipe restricted to one domain                                          |
+| `scripts/tau2/collect_critic.sh`                                       | One frozen-policy episode per official train task, with task-disjoint train/dev labels |
+| `scripts/tau2/train_critic.sh`                                         | Offline mixed critic fitting from collected JSONL                                      |
+| `scripts/tau2/run.sh qualification mixed`                              | Historical three-episode SAO integration recipe                                        |
+
+GRPO uses 4 training GPUs, 3 rollout GPUs, and 1 dedicated checkpoint-evaluation GPU. A
+full training batch is 8 prompts x 8 trajectories = 64 episodes. The last epoch batch
+may be smaller but always retains complete groups of eight. The default is two passes
+over all 178 official train tasks (46 updates). It uses non-thinking, 32768 total
+context, at most4096 tokens per response, policy temperature1, staleness2, recomputed
+logprobs, decoupled loss, group reward normalization and the existing token ratio mask
+above5. It does not load a critic. Save/recovery/evaluation cadence is20 steps plus
+final, as in the previous math GRPO recipe.
+
+`experiment_mode=tune` selects142train/36dev, stratified by task and domain with seed42.
+`experiment_mode=formal` trains on178officialtrain and evaluates 100officialtest tasks
+with fixed settings; test results never select a checkpoint. The dedicated evaluator
+reports per-domain coverage and rewards, and rejects missing/infra-failed episodes
+instead of reporting a partial mean.
+
+Critic collection defaults to one episode for each of178tasks:24/59/59train
+and6/15/15dev. It mixes domains and retains valid model failures. Offline fit uses two
+epochs, global batch16 including the tail (18 updates), validation at 0/5/10/15/18 and
+checkpoints every5steps and final. Qwen3.5-4B initializes a fresh scalar head; attention
+remains frozen. LR5e-6, token-mean plain MSE and optimizer settings match the latest SAO
+recipe. Dev reports contain overall and per-domain MSE, explained variance, and
+distributed gradient norm from a backward-only diagnostic (no optimizer step). The live
+training gradient norm is reported separately. EV is undefined for constant targets.
+
+## Runtime and configuration
+
+```bash
+export SAO_ARTIFACT_ROOT=/path/to/existing/areal-artifacts
+export TAU2_RUN_ROOT=/path/to/a-unique-run
+export TAU2_TRIAL_NAME=tau2-grpo-run
+export HF_HUB_CACHE=/path/to/huggingface/hub
+export TAU2_DATA_DIR=/path/to/pinned-tau2/data
+export TAU2_DEEPSEEK_ENV_FILE=/path/to/deepseek.env
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+
+scripts/tau2/train_mixed.sh --check-config
+scripts/tau2/train_mixed.sh
+```
+
+`--check-config` uses the official task loader but starts no GPU worker, resolves no
+model snapshot and loads no provider credential. Ordinary overrides are forwarded to the
+existing config parser. Run directories are stable so `recover.mode=auto` can resume the
+same run. Qualification mode explicitly creates a new temporary attempt directory.
+
+Set `TAU2_EPISODES` to the checked JSONL for critic fitting. The production critic
+always starts from the pinned actor backbone rather than an old math critic. Use
+`scripts/tau2/critic_data.py` to check/combine dumps, and `--require-full-coverage` on
+fitting when enforcing the whole official pool. Collection and fit are separate Pueue
+jobs; offline fit never calls DeepSeek or replays tools. Existing AReaL initialization
+still reserves rollout workers for the replay workflow; this is a reuse tradeoff, not a
+critic throughput optimum.
+
+The runner sources `scripts/sao/runtime_env.sh` and the existing `.venv`. Do not run
+`uv run` in this qualified environment: lock synchronization would replace the installed
+tau2-compatible LiteLLM/Uvicorn overrides. It uses the trusted-host
+`AREAL_ALLOW_DEFAULT_ADMIN_KEY=1`; the internal proxy key remains separate from
+`DEEPSEEK_API_KEY`, loaded only from a mode0600 env file.
+
+Transient provider failures get at most one fresh-session episode retry by default
+(`infra_retries`). Request-level provider retries remain separate. Scored task failures
+are not retried. Deterministic code/config failures do not become reward0. An
+unrecovered failed group aborts fixed-dataset training rather than silently shrinking
+coverage. Each retry resets both the environment and the proxy session, so abandoned
+interactions cannot enter successful exports.
+
+## Evidence boundary
+
+The historical Pueue159 run qualified3episodes/oneSAOstep at actual sequence
+lengths10K–20K. It did not qualify full32K batches, batch64GRPO throughput or critic
+learning quality. Current delivery evidence and queued job identities are recorded in
+`docs/plans/tau2-sao/training-delivery.md`. `eval_matrix.py` plans/verifies matrix
+coverage; it does not run a scientific comparison.
+
 ## Overview
 
 This example demonstrates how to train customer service agents using the
@@ -27,15 +114,21 @@ with user's request by both using agent tools and guiding users using their tool
 Please make sure AReaL is setup and working following the
 [installation guide](https://areal-project.github.io/AReaL/en/tutorial/installation.html).
 
-1. Install the (forked) tau2-bench package:
+1. Install the pinned official tau2-bench revision. The index below keeps PyPI package
+   traffic on the Tsinghua mirror; GitHub traffic should use the operator-approved proxy
+   route:
 
 ```bash
-pip install git+https://github.com/dhh1995/tau2-bench.git@dhh/async-and-custom-completion
+pip install \
+  --index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+  'tau2 @ git+https://github.com/sierra-research/tau2-bench.git@b7ea9074c1cba482b30687fecdb5c8425fd6f619'
 ```
 
-Note that the training relies on the async version of the agent and user simulator in
-the [tau2-bench package](https://github.com/dhh1995/tau-bench). These changes will be
-merged into the original tau2-bench repository later.
+The workflow uses the official synchronous orchestrator and runs one complete episode on
+a worker thread so the AReaL async workflow loop stays non-blocking. Do not install the
+old `dhh/async-and-custom-completion` fork: its custom completion hooks and async
+orchestrator API are not part of the pinned official package. The policy proxy session
+key and user-simulator provider key are required and routed independently.
 
 1. Setup the `TAU2_DATA_DIR` environment variable:
 
@@ -81,6 +174,11 @@ NOTE: Following commands should be executed from root directory of this reposito
 
 #### Single Node (1.7B Model)
 
+The commands in this legacy section document the upstream generic example. These YAMLs
+do not supply the pinned actor and explicit episode-budget fields now required by
+`train.py`, so they cannot be run unchanged with this adapter. Use the qualification
+wrappers above for the verified host runtime path.
+
 On a single 8x GPU node with our official image
 (ghcr.io/areal-project/areal-runtime:latest), run:
 
@@ -111,7 +209,7 @@ python3 examples/tau2/train.py \
 
 | Option                           | Default   | Description                                                                     |
 | -------------------------------- | --------- | ------------------------------------------------------------------------------- |
-| `econfig.domain`                 | `telecom` | Tau2 domain: `airline`, `retail`, or `telecom`                                  |
+| `econfig.domain`                 | `airline` | Tau2 domain: `airline`, `retail`, `telecom`, or the shared launcher's `mixed`   |
 | `econfig.max_steps`              | `100`     | Maximum number of steps per trajectory                                          |
 | `econfig.add_thinking_tool`      | `false`   | Whether to use thinking as a tool for the agent                                 |
 | `econfig.solo_mode`              | `false`   | If true, agent handles both agent and user roles (no user simulator needed)     |

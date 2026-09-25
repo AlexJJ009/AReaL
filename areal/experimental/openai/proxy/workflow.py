@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import hashlib
 import os
 import threading
 from concurrent.futures import ProcessPoolExecutor
@@ -23,6 +24,8 @@ if TYPE_CHECKING:
     from ..client import TRolloutEngine
     from ..types import InteractionWithTokenLogpReward
     from .proxy_gateway import CompletedSessionInfo
+
+from ..types import AgentWorkflowResult
 
 logger = logging.getLogger("OpenAIProxyWorkflow")
 
@@ -136,6 +139,7 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
                 "OPENAI_API_KEY": session_api_key,
                 "ANTHROPIC_BASE_URL": self.proxy_addr,
                 "ANTHROPIC_API_KEY": session_api_key,
+                "AREAL_PROXY_SESSION_API_KEY": session_api_key,
             }
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(
@@ -162,8 +166,36 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
         async with session.post(url, headers=headers) as resp:
             resp.raise_for_status()
 
+    @staticmethod
+    def _episode_tensor_id(identity: str) -> int:
+        raw = hashlib.sha256(identity.encode("utf-8")).digest()[:8]
+        return int.from_bytes(raw, "big") & ((1 << 63) - 1)
+
     @session_context()
     async def arun_episode(
+        self, engine: TRolloutEngine, data: dict[str, Any]
+    ) -> dict[str, InteractionWithTokenLogpReward] | None:
+        # Each retry owns a fresh proxy session as well as a fresh environment.
+        # Retrying inside agent.run would otherwise mix abandoned interactions
+        # into the successful episode's concat export.
+        retries = getattr(self.agent, "infra_retries", 0)
+        should_retry = getattr(self.agent, "should_retry_episode", None)
+        for attempt in range(retries + 1):
+            try:
+                return await self._arun_episode(engine, data)
+            except Exception as exc:
+                if attempt == retries or should_retry is None or not should_retry(exc):
+                    raise
+                logger.warning(
+                    "Retrying episode from a fresh session after transient failure (%d/%d)",
+                    attempt + 1,
+                    retries,
+                )
+                stats_tracker.get(workflow_context.stat_scope()).scalar(infra_retries=1)
+                await asyncio.sleep(min(2**attempt, 8))
+        raise AssertionError("Unreachable retry state")
+
+    async def _arun_episode(
         self, engine: TRolloutEngine, data: dict[str, Any]
     ) -> dict[str, InteractionWithTokenLogpReward] | None:
         context = workflow_context.get()
@@ -231,6 +263,7 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
             task_id=proxy_task_id,
             admin_api_key=self._admin_api_key,
         )
+        episode_result: AgentWorkflowResult | None = None
         async with proxy_client:
             # Run the user code.
             try:
@@ -243,6 +276,10 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
                     exc_info=True,
                 )
                 raise
+
+            if isinstance(rewards, AgentWorkflowResult):
+                episode_result = rewards
+                rewards = rewards.reward
 
             # Assign rewards back according to user code output
             if isinstance(rewards, dict):
@@ -259,6 +296,15 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
             style=self.export_style,
             drop_retry_orphans=self.drop_retry_orphans,
         )
+        if episode_result is not None:
+            episode_id = self._episode_tensor_id(
+                f"{proxy_task_id}:{proxy_client.session_id}"
+            )
+            for interaction in interactions.values():
+                interaction.apply_episode_result(
+                    episode_result,
+                    episode_id=episode_id,
+                )
 
         # Record stats
         last_id = list(interactions.keys())[-1] if interactions else None

@@ -277,6 +277,23 @@ class TestTrainControllerDestroy:
             getattr(train_controller.scheduler, "delete_reverse_order", False) is True
         )
 
+    def test_destroy_skips_worker_payload_broadcast(self, train_controller, ft_spec):
+        train_controller.initialize(role="train_worker", ft_spec=ft_spec)
+        train_controller.scheduler.engine_calls = []
+
+        train_controller.destroy()
+
+        destroy_calls = [
+            call
+            for call in train_controller.scheduler.engine_calls
+            if call[1] == "destroy"
+        ]
+        assert destroy_calls
+        assert all(
+            kwargs["rpc_meta"] == {"broadcast": False}
+            for _, _, _, kwargs in destroy_calls
+        )
+
 
 class TestTrainControllerMergeResults:
     """Tests for result merging via _merge_tensors."""
@@ -350,22 +367,47 @@ class TestTrainControllerRPCWrappers:
         engine_calls = [call[1] for call in train_controller.scheduler.engine_calls]
         assert "step_lr_scheduler" in engine_calls
 
+    @pytest.mark.parametrize("method", ["offload", "onload"])
+    def test_memory_lifecycle_skips_worker_payload_broadcast(
+        self, train_controller, ft_spec, method
+    ):
+        train_controller.initialize(role="train_worker", ft_spec=ft_spec)
+        train_controller.scheduler.engine_calls = []
+
+        getattr(train_controller, method)()
+
+        assert train_controller.scheduler.engine_calls
+        for rank, (_, called_method, args, kwargs) in enumerate(
+            train_controller.scheduler.engine_calls
+        ):
+            assert called_method == method
+            assert args == (train_controller._engine_name(rank),)
+            assert kwargs["rpc_meta"] == {"broadcast": False}
+
 
 class TestTrainControllerWeightManagement:
     """Tests for weight management operations."""
 
-    def test_set_version(self, train_controller, ft_spec):
-        """Test set_version() method."""
+    def test_set_version_replicates_scalar_without_worker_payload_broadcast(
+        self, train_controller, ft_spec
+    ):
         train_controller.initialize(
             role="train_worker",
             ft_spec=ft_spec,
         )
+        train_controller.scheduler.engine_calls = []
 
         train_controller.set_version(42)
 
-        # Verify set_version was called on engines
-        engine_calls = [call[1] for call in train_controller.scheduler.engine_calls]
-        assert "set_version" in engine_calls
+        assert len(train_controller.scheduler.engine_calls) == len(
+            train_controller.workers
+        )
+        for rank, (_, method, args, kwargs) in enumerate(
+            train_controller.scheduler.engine_calls
+        ):
+            assert method == "set_version"
+            assert args == (train_controller._engine_name(rank), 42)
+            assert kwargs["rpc_meta"] == {"broadcast": False}
 
     def test_get_version(self, train_controller, ft_spec):
         """Test get_version() method."""
@@ -393,11 +435,18 @@ class TestTrainControllerWeightManagement:
         meta = SaveLoadMeta(
             path="/tmp/checkpoint", weight_format="safetensors", with_optim=True
         )
+        train_controller.scheduler.engine_calls = []
         train_controller.save(meta)
 
-        # Verify save was called on engines
-        engine_calls = [call[1] for call in train_controller.scheduler.engine_calls]
-        assert "save" in engine_calls
+        assert len(train_controller.scheduler.engine_calls) == len(
+            train_controller.workers
+        )
+        for rank, (_, method, args, kwargs) in enumerate(
+            train_controller.scheduler.engine_calls
+        ):
+            assert method == "save"
+            assert args == (train_controller._engine_name(rank), meta)
+            assert kwargs["rpc_meta"] == {"broadcast": False}
 
     def test_load(self, train_controller, ft_spec):
         """Test load() method."""

@@ -1,0 +1,41 @@
+defaults:
+  - config_critic_collect_qualification
+  - _self_
+
+# One frozen-policy episode per official task; task-disjoint 142/36 split.
+experiment_name: tau2-critic-collect
+experiment_mode: tune
+total_train_epochs: 1
+total_train_steps: null
+train_batch_episodes: 16
+effective_episodes: null
+domain_effective_episodes: {}
+critic_rollouts_per_task: 1
+critic_dev_fraction: 0.2
+critic_tasks_per_domain: null
+infra_retries: 1
+
+rollout:
+  max_concurrent_rollouts: 16
+  queue_size: 64
+  consumer_batch_size: 16
+  max_head_offpolicyness: 2
+
+sglang:
+  max_running_requests: 16
+
+actor:
+  mb_spec: {n_mbs: 1, max_tokens_per_mb: 32768}
+
+train_dataset:
+  batch_size: 16
+  drop_last: false
+
+saver:
+  freq_steps: 5
+  freq_epochs: null
+
+recover:
+  mode: auto
+  freq_steps: 5
+  freq_epochs: null

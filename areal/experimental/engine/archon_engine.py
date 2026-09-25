@@ -97,6 +97,7 @@ from areal.utils.data import (
     amend_position_ids,
     broadcast_tensor,
     concat_batch,
+    drop_non_model_forward_metadata,
     pack_tensor_dict,
     pad_mb_list,
     split_batch,
@@ -106,7 +107,11 @@ from areal.utils.data import (
 from areal.utils.functional import gather_logprobs, gather_logprobs_entropy
 from areal.utils.hf_utils import load_hf_tokenizer
 from areal.utils.lock import DistributedLock
-from areal.utils.offload import is_tms_enabled, torch_memory_saver
+from areal.utils.offload import (
+    is_tms_enabled,
+    normalize_tms_worker_preload,
+    torch_memory_saver,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -306,6 +311,7 @@ class ArchonEngine(TrainEngine):
         self.engine_lock = DistributedLock("train_engine_lock")
 
         if is_tms_enabled():
+            normalize_tms_worker_preload()
             torch_memory_saver.hook_mode = "preload"
 
         self._create_device_model()
@@ -978,7 +984,7 @@ class ArchonEngine(TrainEngine):
 
         # Extract trie_node for tree training (if present)
         trie_node = inputs.pop("trie_node", None)
-        inputs.pop("turn_ids", None)
+        drop_non_model_forward_metadata(inputs)
 
         # Tree training: labels are derived from trie structure, not torch.roll.
         # (Tree input_ids is 1D packed format, so roll would be wrong anyway.)

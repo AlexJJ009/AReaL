@@ -24,6 +24,27 @@ from areal.utils.seqpack import get_allocate_fn
 logger = logging.getLogger("DataUtils")
 
 
+NON_MODEL_FORWARD_METADATA_KEYS = frozenset(
+    {
+        "action_origin_mask",
+        "bootstrap_mask",
+        "episode_ids",
+        "official_scores",
+        "task_budget_failure",
+        "terminated",
+        "truncated",
+        "turn_ids",
+    }
+)
+
+
+def drop_non_model_forward_metadata(inputs: dict[str, Any]) -> None:
+    """Remove rollout/loss metadata while preserving it in the original batch."""
+
+    for key in NON_MODEL_FORWARD_METADATA_KEYS:
+        inputs.pop(key, None)
+
+
 def get_batch_size(data: dict[str, Any]) -> int:
     if not data:
         return 0

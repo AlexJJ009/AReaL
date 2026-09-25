@@ -46,6 +46,37 @@ class PPOCritic:
     def ppo_update(self, data: list[dict[str, Any]]) -> dict[str, float]:
         return batched_call(self._ppo_update, data, unpack=False)
 
+    @trace_perf("ppo_critic.grad_norm", category="compute")
+    @stats_tracker.scope_func_wrapper("critic_diagnostic")
+    def grad_norm(self, data: list[dict[str, Any]]) -> dict[str, float]:
+        return batched_call(self._grad_norm, data, unpack=False)
+
+    def _grad_norm(self, data: dict[str, Any]) -> dict[str, float]:
+        if not hasattr(self.engine, "grad_norm_batch"):
+            raise NotImplementedError(
+                "critic grad-norm diagnostics require an engine grad_norm_batch method"
+            )
+        for key in ["rewards", "tot_rewards", "kl_rewards", "versions"]:
+            data.pop(key, None)
+        self.engine.train()
+        return self.engine.grad_norm_batch(
+            data,
+            loss_fn=functools.partial(
+                ppo_loss_fn,
+                eps_clip=self.config.eps_clip,
+                loss_reduction=self.config.loss_reduction,
+            ),
+            loss_weight_fn=lambda x: (
+                x["loss_mask"].count_nonzero()
+                if self.config.eps_clip is None
+                else loss_reduction_weight(
+                    x["loss_mask"],
+                    self.config.loss_reduction,
+                    x.get("cu_seqlens"),
+                )
+            ),
+        )
+
     def _ppo_update(self, data: dict[str, Any]) -> dict[str, float]:
         ########## Logging code starts ##########
         scalars = dict(
@@ -101,6 +132,11 @@ class PPOCriticController(TrainController):
             "ppo_update", *args, rpc_meta={"broadcast": True}, **kwargs
         )
 
+    def grad_norm(self, *args, **kwargs):
+        return self._custom_function_call(
+            "grad_norm", *args, rpc_meta={"broadcast": True}, **kwargs
+        )
+
 
 class PPOCriticControllerV2(GatewayTrainController):
     def compute_values(self, *args, **kwargs):
@@ -133,7 +169,8 @@ def ppo_loss_fn(
 
     if eps_clip is None:
         errors = (value - target_value.detach()).square()
-        loss = torch.where(loss_mask, errors, 0.0).sum() / loss_mask.count_nonzero()
+        denominator = loss_mask.count_nonzero().clamp_min(1)
+        loss = torch.where(loss_mask, errors, 0.0).sum() / denominator
         stat = {"loss": errors.detach(), "clip_mask": torch.zeros_like(loss_mask)}
     else:
         loss, stat = ppo_critic_loss_fn(

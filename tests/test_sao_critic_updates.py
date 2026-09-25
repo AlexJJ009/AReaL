@@ -116,6 +116,22 @@ def test_two_critic_updates_refresh_values_before_one_actor_update():
     torch.testing.assert_close(fixed[0]["returns"], targets, rtol=0, atol=0)
 
 
+def test_critic_can_offload_after_value_refresh_before_actor_update():
+    actor, critic, raw, fixed, events = setup_batch()
+
+    update_critic_before_actor(
+        actor,
+        critic,
+        raw,
+        fixed,
+        updates=2,
+        before_actor_update=lambda: events.append("critic.offload"),
+    )
+
+    assert events.index("critic.forward.2") < events.index("critic.offload")
+    assert events.index("critic.offload") < events.index("actor.optimizer.1")
+
+
 def test_skipped_critic_update_blocks_actor_and_refresh(monkeypatch):
     actor, critic, raw, fixed, events = setup_batch()
 

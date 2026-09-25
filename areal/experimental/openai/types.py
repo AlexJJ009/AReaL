@@ -4,6 +4,7 @@ from __future__ import annotations  # noqa
 
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 import torch
 from openai.types.chat import ChatCompletion
@@ -11,9 +12,24 @@ from openai.types.responses.response import Response
 from openai.types.responses.response_input_param import ResponseInputParam
 
 from areal.api import ModelResponse
-from areal.utils import logging
 
-logger = logging.getLogger("TokenLogpReward")
+
+@dataclass(frozen=True)
+class AgentWorkflowResult:
+    """Reward plus explicit episode semantics returned by an agent workflow."""
+
+    reward: float | dict[str, float]
+    terminated: bool
+    truncated: bool
+    bootstrap_mask: bool = False
+    stop_reason: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if self.terminated == self.truncated:
+            raise ValueError("AgentWorkflowResult requires terminated XOR truncated")
+        if self.bootstrap_mask and self.terminated:
+            raise ValueError("bootstrap_mask may only be true for truncated episodes")
 
 
 class ApiType(str, Enum):
@@ -57,6 +73,16 @@ class InteractionWithTokenLogpReward:
 
     # Interaction ID cache (used for deserialization)
     _interaction_id: str | None = None
+
+    # Explicit episode metadata.  These fields are populated by the proxy
+    # workflow after the environment finishes, then materialized in the tensor
+    # payload consumed by PPO/SAO.
+    terminated: bool | None = None
+    truncated: bool | None = None
+    bootstrap_mask: bool | None = None
+    episode_id: int | None = None
+    episode_stop_reason: str | None = None
+    episode_metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def has_tensor_data(self) -> bool:
@@ -151,18 +177,28 @@ class InteractionWithTokenLogpReward:
             parent_res = self.parent.to_tensor_dict()
             parent_logprobs = parent_res["logprobs"].squeeze(0).tolist()
             parent_loss_mask = parent_res["loss_mask"].squeeze(0).tolist()
+            parent_action_origin_mask = (
+                parent_res["action_origin_mask"].squeeze(0).tolist()
+            )
             parent_versions = parent_res["versions"].squeeze(0).tolist()
             parent_turn_ids = parent_res["turn_ids"].squeeze(0).tolist()
             parent_len = len(parent_logprobs)
             assert (
                 parent_len
                 == len(parent_loss_mask)
+                == len(parent_action_origin_mask)
                 == len(parent_versions)
                 == len(parent_turn_ids)
             )
             valid_parent_turn_ids = [tid for tid in parent_turn_ids if tid >= 0]
             own_turn_id = max(valid_parent_turn_ids) + 1 if valid_parent_turn_ids else 0
             if resp.input_len > parent_len:
+                parent_tokens = parent_res["input_ids"].squeeze(0).tolist()
+                if resp.input_tokens[:parent_len] != parent_tokens:
+                    raise ValueError(
+                        "Concat child input tokens do not preserve the complete "
+                        "parent trajectory; refusing to fabricate a training prefix"
+                    )
                 logprobs = (
                     parent_logprobs
                     + [0.0] * (resp.input_len - parent_len)
@@ -170,6 +206,11 @@ class InteractionWithTokenLogpReward:
                 )
                 loss_mask = (
                     parent_loss_mask
+                    + [0] * (resp.input_len - parent_len)
+                    + [1] * resp.output_len
+                )
+                action_origin_mask = (
+                    parent_action_origin_mask
                     + [0] * (resp.input_len - parent_len)
                     + [1] * resp.output_len
                 )
@@ -184,27 +225,18 @@ class InteractionWithTokenLogpReward:
                     + [own_turn_id] * resp.output_len
                 )
             else:
-                # FIXME: Find out why this happens occasionally
                 api_type = self.api_type
                 input_name = self.input_name_for_logging
-                logger.warning(
-                    f"The input length of the child {api_type} ({resp.input_len}) is less than or "
-                    f"equal to the length of the parent {api_type} {parent_len}. "
-                    f"This should not happen if the {input_name}s are constructed properly. "
-                    f"Ignoring the parent {api_type} by masking them out. \n"
-                    f"Parent input token ids: {self.parent.model_response.input_tokens}\n"
-                    f"Parent output token ids: {self.parent.model_response.output_tokens}\n"
-                    f"Child input token ids: {resp.input_tokens}\n"
-                    f"Parent input {input_name}: {self.parent_data}\n"
-                    f"Child input {input_name}: {self.current_data}",
+                raise ValueError(
+                    f"Concat child {api_type} input length {resp.input_len} is not "
+                    f"greater than parent trajectory length {parent_len}; refusing "
+                    f"to ignore parent {api_type}. Parent {input_name} and child "
+                    f"{input_name} must form a strict trajectory prefix."
                 )
-                logprobs = [0.0] * resp.input_len + resp.output_logprobs
-                loss_mask = [0] * resp.input_len + [1] * resp.output_len
-                versions = [-1] * resp.input_len + resp.output_versions
-                turn_ids = [-1] * resp.input_len + [0] * resp.output_len
         else:
             logprobs = [0.0] * resp.input_len + resp.output_logprobs
             loss_mask = [0] * resp.input_len + [1] * resp.output_len
+            action_origin_mask = [0] * resp.input_len + [1] * resp.output_len
             versions = [-1] * resp.input_len + resp.output_versions
             turn_ids = [-1] * resp.input_len + [0] * resp.output_len
         reward = self.reward if self.reward is not None else 0.0
@@ -215,6 +247,13 @@ class InteractionWithTokenLogpReward:
             # unsqueeze to add an additional batch dimension
             input_ids=torch.tensor(seq).unsqueeze(0),
             loss_mask=torch.tensor(loss_mask).unsqueeze(0),
+            # Derived from generation boundaries, independently of the trainer
+            # loss mask.  Offline sealing compares the two so a context/tool
+            # token cannot be relabeled as an action by deriving both views
+            # from the same potentially-corrupt mask.
+            action_origin_mask=torch.tensor(
+                action_origin_mask, dtype=torch.bool
+            ).unsqueeze(0),
             logprobs=torch.tensor(logprobs).unsqueeze(0),
             versions=torch.tensor(versions).unsqueeze(0),
             turn_ids=torch.tensor(turn_ids, dtype=torch.int32).unsqueeze(0),
@@ -223,8 +262,57 @@ class InteractionWithTokenLogpReward:
             rewards=torch.tensor([float(reward)]),
             original_rewards=torch.tensor([float(original_reward)]),
         )
+        self._add_episode_tensors(result)
         self._cache = result
         return result
+
+    def _add_episode_tensors(self, result: dict[str, torch.Tensor]) -> None:
+        metadata = (self.terminated, self.truncated, self.bootstrap_mask)
+        if all(value is None for value in metadata):
+            return
+        if any(value is None for value in metadata):
+            raise ValueError("Episode termination metadata must be complete")
+        assert self.terminated is not None
+        assert self.truncated is not None
+        assert self.bootstrap_mask is not None
+        if self.terminated == self.truncated:
+            raise ValueError("Episode metadata requires terminated XOR truncated")
+        if self.bootstrap_mask and self.terminated:
+            raise ValueError("bootstrap_mask may only be true for truncated episodes")
+        result["terminated"] = torch.tensor([self.terminated], dtype=torch.bool)
+        result["truncated"] = torch.tensor([self.truncated], dtype=torch.bool)
+        result["bootstrap_mask"] = torch.tensor([self.bootstrap_mask], dtype=torch.bool)
+        if self.episode_id is not None:
+            width = int(result["input_ids"].shape[-1])
+            result["episode_ids"] = torch.full(
+                (1, width), self.episode_id, dtype=torch.int64
+            )
+        official_score = self.episode_metadata.get("official_score")
+        if isinstance(official_score, int | float):
+            result["official_scores"] = torch.tensor(
+                [float(official_score)], dtype=torch.float32
+            )
+        result["task_budget_failure"] = torch.tensor(
+            [self.episode_metadata.get("failure_class") == "task_budget"],
+            dtype=torch.bool,
+        )
+
+    def apply_episode_result(
+        self,
+        result: AgentWorkflowResult,
+        *,
+        episode_id: int,
+    ) -> None:
+        """Attach environment outcome metadata to a generated trajectory."""
+
+        self.terminated = result.terminated
+        self.truncated = result.truncated
+        self.bootstrap_mask = result.bootstrap_mask
+        self.episode_id = episode_id
+        self.episode_stop_reason = result.stop_reason
+        self.episode_metadata = dict(result.metadata)
+        if self._cache is not None:
+            self._add_episode_tensors(self._cache)
 
 
 def normalize_group_rewards(

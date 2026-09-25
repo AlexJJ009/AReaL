@@ -1039,11 +1039,69 @@ class WorkflowExecutor:
             "segments": segments,
         }
 
+    @staticmethod
+    def _trajectory_replay_fields(
+        traj: dict[str, Any],
+        *,
+        row: int,
+        seqlen: int,
+        ids: list[int],
+        mask: list[int],
+    ) -> dict[str, Any]:
+        """Extract the actual token contract needed for offline replay."""
+
+        action_origin = traj.get("action_origin_mask")
+        fields: dict[str, Any] = {
+            "input_ids": ids,
+            "attention_mask": [1] * seqlen,
+            "loss_mask": mask,
+            # Backward-compatible audit labels for workflows without explicit
+            # provenance. τ² critic sealing requires action_origin_mask below,
+            # so this fallback cannot qualify its replay data.
+            "token_roles": ["assistant" if active else "context" for active in mask],
+        }
+        if action_origin is not None:
+            origin_mask = [int(value) for value in action_origin[row, :seqlen].tolist()]
+            if len(origin_mask) != seqlen:
+                raise ValueError("trajectory action_origin_mask is not token aligned")
+            fields["action_origin_mask"] = origin_mask
+            roles: list[str] = []
+            seen_action = False
+            for active in origin_mask:
+                if active:
+                    roles.append("assistant")
+                    seen_action = True
+                else:
+                    roles.append("observation" if seen_action else "prompt")
+            fields["token_roles"] = roles
+        for tensor_key, record_key in (
+            ("logprobs", "behavior_logprobs"),
+            ("versions", "versions"),
+            ("turn_ids", "turn_ids"),
+        ):
+            tensor = traj.get(tensor_key)
+            if tensor is not None:
+                fields[record_key] = tensor[row, :seqlen].tolist()
+        for tensor_key in ("terminated", "truncated", "bootstrap_mask"):
+            tensor = traj.get(tensor_key)
+            if tensor is not None:
+                fields[tensor_key] = bool(tensor[row].item())
+        episode_ids = traj.get("episode_ids")
+        if episode_ids is not None:
+            active_episode_ids = episode_ids[row, :seqlen].unique().tolist()
+            if len(active_episode_ids) != 1:
+                raise ValueError("trajectory row contains multiple episode IDs")
+            episode_id = int(active_episode_ids[0])
+            fields["episode_id"] = episode_id
+            fields["episode_tensor_id"] = episode_id
+        return fields
+
     async def _dump_trajectory(
         self,
         traj: dict[str, Any] | None,
         task_id: int,
         is_eval: bool,
+        source_data: dict[str, Any] | None = None,
     ) -> tuple[bool, str]:
         if traj is None:
             return False, "trajectory is None"
@@ -1125,6 +1183,7 @@ class WorkflowExecutor:
 
                     record = {
                         "task_id": task_id,
+                        "rollout_task_id": task_id,
                         "sample_idx": i,
                         "seqlen": seqlen,
                         "prompt_len": split["prompt_end"],
@@ -1135,12 +1194,59 @@ class WorkflowExecutor:
                         "prompt": split["prompt_text"],
                         "completion": split["completion_text"],
                     }
+                    # Preserve a replayable token contract when the workflow
+                    # supplies it.  The decoded prompt/completion above remain
+                    # the human-readable audit view; these fields bind the
+                    # actual behavior tokens used by PPO/SAO.
+                    record.update(
+                        self._trajectory_replay_fields(
+                            traj,
+                            row=i,
+                            seqlen=seqlen,
+                            ids=ids,
+                            mask=mask,
+                        )
+                    )
+                    if source_data is not None:
+                        for key in (
+                            "domain",
+                            "task_id",
+                            "split",
+                            "source_id",
+                            "critic_split",
+                            "attempt_id",
+                            "policy_id",
+                            "policy_revision",
+                            "simulator_id",
+                        ):
+                            value = source_data.get(key)
+                            if isinstance(value, str | int | float | bool):
+                                record[key] = value
+                        source_episode_id = source_data.get("episode_id")
+                        if isinstance(source_episode_id, str | int):
+                            record["source_episode_id"] = source_episode_id
+                    record.setdefault(
+                        "episode_id",
+                        record.get("episode_tensor_id", f"rollout-{task_id}-{i}"),
+                    )
+                    record.setdefault("attempt_id", f"rollout-{task_id}-{i}")
                     if split["segments"] is not None:
                         record["segments"] = split["segments"]
 
                     original_rewards = traj.get("original_rewards")
                     if original_rewards is not None:
                         record["original_reward"] = original_rewards[i].item()
+                    official_scores = traj.get("official_scores")
+                    record["official_score"] = (
+                        official_scores[i].item()
+                        if official_scores is not None
+                        else record.get("original_reward", reward)
+                    )
+                    task_budget_failure = traj.get("task_budget_failure")
+                    if task_budget_failure is not None:
+                        record["task_budget_failure"] = bool(
+                            task_budget_failure[i].item()
+                        )
 
                     await f.write(json.dumps(record) + "\n")
             return True, ""
@@ -1362,7 +1468,10 @@ class WorkflowExecutor:
                 # Dump trajectory to file
                 if self.config.dump_to_file:
                     dump_success, dump_reason = await self._dump_trajectory(
-                        traj, task_id, pending_task.is_eval
+                        traj,
+                        task_id,
+                        pending_task.is_eval,
+                        source_data=pending_task.data,
                     )
                     if not dump_success:
                         self.logger.warning(

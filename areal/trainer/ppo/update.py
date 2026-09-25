@@ -4,6 +4,7 @@
 
 import copy
 import math
+from collections.abc import Callable
 from dataclasses import replace
 from typing import Any
 
@@ -80,6 +81,7 @@ def update_critic_before_actor(
     rollout_batch: list[dict[str, Any]],
     critic_batch: list[dict[str, Any]],
     updates: int,
+    before_actor_update: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Fit fixed pre-update targets, refresh values, then update actor once.
 
@@ -118,6 +120,8 @@ def update_critic_before_actor(
         raise RuntimeError("Actor returned the wrong number of advantage trajectories")
     for row, target in zip(actor_batch, fixed):
         row["returns"] = target["returns"]
+    if before_actor_update is not None:
+        before_actor_update()
     actor_report = actor.ppo_update(actor_batch)
     all_masked = not actor_update_completed(actor_report)
     if not all_masked:
