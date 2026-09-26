@@ -18,7 +18,7 @@ from areal.api import (
     WeightUpdateMeta,
     Worker,
 )
-from areal.api.cli_args import SchedulingSpec, TrainEngineConfig
+from areal.api.cli_args import PerfTracerConfig, SchedulingSpec, TrainEngineConfig
 from areal.infra import TrainController
 from areal.infra.controller.train_controller import _merge_tensors
 
@@ -337,6 +337,59 @@ class TestTrainControllerRPCWrappers:
         # Verify custom_function_call was invoked
         engine_calls = [call[1] for call in train_controller.scheduler.engine_calls]
         assert "train" in engine_calls
+
+    @pytest.mark.parametrize(
+        "method,args,kwargs",
+        [
+            ("train", (False,), {}),
+            ("get_lora_adapter_info", (), {}),
+            ("step_lr_scheduler", (), {}),
+            (
+                "update_weights",
+                (),
+                {"meta": WeightUpdateMeta(type="disk", path="/tmp/test")},
+            ),
+            ("get_device_stats", (), {}),
+            ("start_memory_profile", (17,), {}),
+            ("stop_memory_profile", ("/tmp/snapshot",), {}),
+            ("init_awex_adapter", (), {"meta_server_addr": "localhost:1234"}),
+        ],
+    )
+    def test_control_metadata_reaches_non_head_ranks_without_broadcast(
+        self, train_controller, ft_spec, method, args, kwargs
+    ):
+        train_controller.initialize(role="train_worker", ft_spec=ft_spec)
+        train_controller.rollout = Mock()
+        train_controller.scheduler.engine_calls = []
+
+        getattr(train_controller, method)(*args, **kwargs)
+
+        calls = train_controller.scheduler.engine_calls
+        assert len(calls) == len(train_controller.workers)
+        for rank, (_, called_method, actual_args, actual_kwargs) in enumerate(calls):
+            assert called_method == method
+            assert actual_args == (train_controller._engine_name(rank), *args)
+            assert actual_kwargs == {**kwargs, "rpc_meta": {"broadcast": False}}
+
+    def test_perf_tracer_keeps_each_rank_without_cuda_payload_broadcast(
+        self, train_controller, ft_spec
+    ):
+        train_controller.initialize(role="train_worker", ft_spec=ft_spec)
+        train_controller.scheduler.engine_calls = []
+        config = PerfTracerConfig()
+
+        train_controller.config_perf_tracer(config, role="actor")
+
+        calls = train_controller.scheduler.engine_calls
+        assert len(calls) == len(train_controller.workers)
+        for rank, (worker_id, method, args, kwargs) in enumerate(calls):
+            assert worker_id == train_controller.workers[rank].id
+            assert method == "config_perf_tracer"
+            assert kwargs["engine_name"] == train_controller._engine_name(rank)
+            assert kwargs["rank"] == rank
+            assert kwargs["role"] == "actor"
+            assert kwargs["config"] is config
+            assert kwargs["rpc_meta"] == {"broadcast": False}
 
     def test_eval_mode(self, train_controller, ft_spec):
         """Test eval() method sets evaluation mode."""

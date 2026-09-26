@@ -677,7 +677,7 @@ class TrainController:
         TrainController
             Returns self for method chaining
         """
-        self._custom_function_call("train", mode)
+        self._replicated_function_call("train", mode)
         return self
 
     def eval(self):
@@ -714,7 +714,7 @@ class TrainController:
 
     def get_lora_adapter_info(self) -> dict[str, list[int]]:
         """Get LoRA adapter parameter names and shapes from worker rank 0."""
-        results = self._custom_function_call("get_lora_adapter_info")
+        results = self._replicated_function_call("get_lora_adapter_info")
         if results:
             return results[0]
         return {}
@@ -741,7 +741,7 @@ class TrainController:
 
     def init_awex_adapter(self, meta_server_addr: str | None = None):
         """Create awex adapter early for selective memory management."""
-        self._custom_function_call(
+        self._replicated_function_call(
             "init_awex_adapter", meta_server_addr=meta_server_addr
         )
 
@@ -752,11 +752,11 @@ class TrainController:
         (e.g., once per PPO step). It is separated from train_batch to allow
         for more flexible learning rate scheduling.
         """
-        self._custom_function_call("step_lr_scheduler")
+        self._replicated_function_call("step_lr_scheduler")
 
     def update_weights(self, meta: WeightUpdateMeta):
         self._check_rollout_engine_connected()
-        self._custom_function_call("update_weights", meta=meta)
+        self._replicated_function_call("update_weights", meta=meta)
 
     def offload(self) -> None:
         """Offload model parameters to CPU across all train workers."""
@@ -770,13 +770,13 @@ class TrainController:
         self._custom_function_call("onload", rpc_meta={"broadcast": False})
 
     def get_device_stats(self):
-        return self._custom_function_call("get_device_stats")
+        return self._replicated_function_call("get_device_stats")
 
     def start_memory_profile(self, max_entries: int = 100000):
-        return self._custom_function_call("start_memory_profile", max_entries)
+        return self._replicated_function_call("start_memory_profile", max_entries)
 
     def stop_memory_profile(self, snapshot_dir: str):
-        return self._custom_function_call("stop_memory_profile", snapshot_dir)
+        return self._replicated_function_call("stop_memory_profile", snapshot_dir)
 
     def config_perf_tracer(self, config: PerfTracerConfig, role: str) -> None:
         async def _call():
@@ -785,6 +785,7 @@ class TrainController:
                     worker_id=worker.id,
                     method="config_perf_tracer",
                     engine_name=self._engine_name(rank),
+                    rpc_meta={"broadcast": False},
                     rank=rank,
                     role=role,
                     config=config,

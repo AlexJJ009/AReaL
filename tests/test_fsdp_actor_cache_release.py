@@ -13,8 +13,8 @@ class _Engine:
         self.config = type("Config", (), {"backend": backend})()
         self.calls = []
 
-    def _custom_function_call(self, name):
-        self.calls.append(name)
+    def _custom_function_call(self, name, *, rpc_meta):
+        self.calls.append((name, rpc_meta))
 
 
 def test_fsdp_engine_release_unused_cuda_cache_uses_platform(monkeypatch):
@@ -39,7 +39,7 @@ def test_trainer_releases_fsdp_actor_cache_through_existing_controller_rpc():
 
     trainer._release_unused_cuda_cache(engine, role="actor")
 
-    assert engine.calls == ["_release_unused_cuda_cache"]
+    assert engine.calls == [("_release_unused_cuda_cache", {"broadcast": False})]
 
 
 def test_trainer_skips_non_fsdp_cache_release():
@@ -53,7 +53,7 @@ def test_trainer_skips_non_fsdp_cache_release():
 
 def test_trainer_propagates_cache_release_rpc_failures():
     class FailingEngine(_Engine):
-        def _custom_function_call(self, name):
+        def _custom_function_call(self, name, *, rpc_meta):
             raise RuntimeError(f"failed {name}")
 
     trainer = PPOTrainer.__new__(PPOTrainer)

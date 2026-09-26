@@ -680,7 +680,9 @@ class PPOTrainer:
         if not backend.startswith("fsdp"):
             return
         if hasattr(engine, "_custom_function_call"):
-            engine._custom_function_call("_release_unused_cuda_cache")
+            engine._custom_function_call(
+                "_release_unused_cuda_cache", rpc_meta={"broadcast": False}
+            )
         elif hasattr(engine, "_release_unused_cuda_cache"):
             engine._release_unused_cuda_cache()
         else:
