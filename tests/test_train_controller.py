@@ -425,8 +425,11 @@ class TestTrainControllerWeightManagement:
         engine_calls = [call[1] for call in train_controller.scheduler.engine_calls]
         assert "get_version" in engine_calls
 
-    def test_save(self, train_controller, ft_spec):
-        """Test save() method."""
+    @pytest.mark.parametrize("method", ["save", "load"])
+    def test_checkpoint_metadata_reaches_every_rank_without_cuda_broadcast(
+        self, train_controller, ft_spec, method
+    ):
+        """Offloaded workers receive complete metadata without CUDA allocation."""
         train_controller.initialize(
             role="train_worker",
             ft_spec=ft_spec,
@@ -436,33 +439,17 @@ class TestTrainControllerWeightManagement:
             path="/tmp/checkpoint", weight_format="safetensors", with_optim=True
         )
         train_controller.scheduler.engine_calls = []
-        train_controller.save(meta)
+        getattr(train_controller, method)(meta)
 
         assert len(train_controller.scheduler.engine_calls) == len(
             train_controller.workers
         )
-        for rank, (_, method, args, kwargs) in enumerate(
+        for rank, (_, called_method, args, kwargs) in enumerate(
             train_controller.scheduler.engine_calls
         ):
-            assert method == "save"
+            assert called_method == method
             assert args == (train_controller._engine_name(rank), meta)
             assert kwargs["rpc_meta"] == {"broadcast": False}
-
-    def test_load(self, train_controller, ft_spec):
-        """Test load() method."""
-        train_controller.initialize(
-            role="train_worker",
-            ft_spec=ft_spec,
-        )
-
-        meta = SaveLoadMeta(
-            path="/tmp/checkpoint", weight_format="safetensors", with_optim=True
-        )
-        train_controller.load(meta)
-
-        # Verify load was called on engines
-        engine_calls = [call[1] for call in train_controller.scheduler.engine_calls]
-        assert "load" in engine_calls
 
 
 class TestTrainControllerCustomFunctionCall:
@@ -562,9 +549,18 @@ class TestTrainControllerRolloutIntegration:
         mock_rollout = Mock()
         meta = WeightUpdateMeta(type="disk", path="/tmp/test")
 
+        train_controller.scheduler.engine_calls = []
         train_controller.connect_engine(mock_rollout, meta)
 
         assert train_controller.rollout == mock_rollout
+        calls = train_controller.scheduler.engine_calls
+        assert len(calls) == len(train_controller.workers)
+        for rank, (_, method, args, kwargs) in enumerate(calls):
+            assert method == "connect_engine"
+            assert args == (train_controller._engine_name(rank),)
+            assert kwargs["engine"].controller_addr == mock_rollout.callback_addr
+            assert kwargs["meta"] == meta
+            assert kwargs["rpc_meta"] == {"broadcast": False}
 
     def test_connect_engine_warns_on_change(self, train_controller, ft_spec):
         """Test connect_engine logs warning when rollout controller changes."""
@@ -593,9 +589,18 @@ class TestTrainControllerRolloutIntegration:
         meta = WeightUpdateMeta(type="disk", path="/tmp/test")
 
         train_controller.connect_engine(mock_rollout, meta)
+        train_controller.scheduler.engine_calls = []
         train_controller.connect_engine(mock_rollout, meta)
 
         assert train_controller.rollout == mock_rollout
+        calls = train_controller.scheduler.engine_calls
+        assert len(calls) == len(train_controller.workers)
+        for rank, (_, method, args, kwargs) in enumerate(calls):
+            assert method == "connect_engine"
+            assert args == (train_controller._engine_name(rank),)
+            assert kwargs["engine"].controller_addr == mock_rollout.callback_addr
+            assert kwargs["meta"] == meta
+            assert kwargs["rpc_meta"] == {"broadcast": False}
 
     def test_check_rollout_engine_connected_raises_when_not_connected(
         self, train_controller, ft_spec

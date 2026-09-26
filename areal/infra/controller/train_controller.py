@@ -637,7 +637,9 @@ class TrainController:
         # Register a callback engine on train engines
         # RolloutCallback is a dataclass and can be serialized
         engine = RolloutCallback(controller_addr=rollout.callback_addr)
-        self._custom_function_call("connect_engine", engine=engine, meta=meta)
+        # Identical control metadata belongs on every rank, including when
+        # TMS has offloaded the engine and CUDA payload broadcasts are unavailable.
+        self._replicated_function_call("connect_engine", engine=engine, meta=meta)
 
     def export_stats(self):
         """Export training statistics from all workers.
@@ -735,7 +737,7 @@ class TrainController:
         meta : SaveLoadMeta
             Metadata containing information about where and how to load
         """
-        self._custom_function_call("load", meta)
+        self._replicated_function_call("load", meta)
 
     def init_awex_adapter(self, meta_server_addr: str | None = None):
         """Create awex adapter early for selective memory management."""
