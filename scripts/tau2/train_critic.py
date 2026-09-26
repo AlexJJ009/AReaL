@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import functools
 import json
 import math
 import os
@@ -25,6 +24,7 @@ from examples.tau2.contracts import (
     resolve_pinned_hf_snapshot,
     split_critic_tasks,
 )
+from examples.tau2.utils import FiniteEpochBatcher
 from scripts.qualification.critic_pretrain import (
     actor_update_metrics,
     aggregate_by_key,
@@ -627,9 +627,10 @@ def main(argv: list[str]) -> None:
         train_dataset=Dataset.from_list(train_rows),
         valid_dataset=Dataset.from_list(dev_rows),
     ) as trainer:
-        trainer.rollout.prepare_batch = functools.partial(
-            trainer.rollout.prepare_batch, finite_epoch=True, fail_on_rejection=True
-        )
+        epoch = trainer.recover_info.last_step_info.epoch if trainer.recover_info else 0
+        if trainer.recover_info is None:
+            trainer.train_dataloader.sampler.seed = config.seed
+        trainer.rollout.prepare_batch = FiniteEpochBatcher(trainer.rollout, epoch)
         recovered_completed = (
             trainer.recover_info.last_step_info.next().global_step
             if trainer.recover_info is not None

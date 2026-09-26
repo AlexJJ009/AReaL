@@ -2,7 +2,7 @@ defaults:
   - config_sao_qualification
   - _self_
 
-# One lr=0 optimizer step is used only to drive the normal proxy/export path.
+# Fixed-policy collection uses rollout only; no PPO update or weight sync is run.
 # The actor weights must remain byte-equivalent after collection.
 experiment_name: tau2-critic-collect-qualification
 trial_name: ${oc.env:TAU2_TRIAL_NAME,tau2-critic-collect}

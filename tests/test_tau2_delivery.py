@@ -12,7 +12,11 @@ from types import MethodType, SimpleNamespace
 import pytest
 
 from examples.tau2.evaluation import Tau2AsyncEvalTrainer
-from examples.tau2.train import get_tau2_dataset, validate_tau2_recipe
+from examples.tau2.train import (
+    get_tau2_dataset,
+    run_fixed_policy_collection,
+    validate_tau2_recipe,
+)
 from examples.tau2.utils import Tau2PPOConfig
 
 from areal.api.cli_args import load_expr_config
@@ -325,3 +329,261 @@ def test_context_error_wrapped_as_rate_limit_does_not_retry():
     failure = Tau2InfrastructureError(str(transient))
     failure.__cause__ = transient
     assert Tau2AgentWorkflow.should_retry_episode(failure)
+
+
+def test_fixed_policy_collection_rolls_finite_tail_without_updates():
+    forbidden_calls = []
+
+    class ForbiddenActor:
+        def __init__(self):
+            self.cleared = []
+
+        def compute_advantages(self, *args, **kwargs):
+            forbidden_calls.append("compute_advantages")
+            raise AssertionError("collector must not compute advantages")
+
+        def ppo_update(self, *args, **kwargs):
+            forbidden_calls.append("ppo_update")
+            raise AssertionError("collector must not update actor")
+
+        def update_weights(self, *args, **kwargs):
+            forbidden_calls.append("update_weights")
+            raise AssertionError("collector must not sync weights")
+
+        def clear_batches(self, *targets):
+            self.cleared.append(targets)
+
+    class FakeRollout:
+        def __init__(self):
+            self.calls = []
+            self.consumed_without_update = 0
+            self.versions = []
+
+        def rollout_batch(self, rows, **kwargs):
+            self.calls.append((list(rows), kwargs))
+            return [
+                {"source_id": row["source_id"], "remote": index}
+                for index, row in enumerate(rows)
+            ]
+
+        def on_batch_consumed_without_update(self):
+            self.consumed_without_update += 1
+
+        def set_version(self, version):
+            self.versions.append(version)
+
+    rows = [{"source_id": f"task-{index}"} for index in range(178)]
+    dataloader = [rows[index : index + 16] for index in range(0, len(rows), 16)]
+    rollout = FakeRollout()
+    actor = ForbiddenActor()
+    lifecycle = []
+    trainer = SimpleNamespace(
+        config=SimpleNamespace(
+            total_train_steps=12,
+            gconfig=SimpleNamespace(
+                n_samples=1,
+                reward_normalization=False,
+                drop_incomplete_group=False,
+            ),
+        ),
+        train_dataloader=dataloader,
+        rollout=rollout,
+        actor=actor,
+        _should_offload_rollout=True,
+        _requires_proxy_workflow=lambda workflow: True,
+        _ensure_proxy_started=lambda: lifecycle.append("proxy"),
+        _onload_rollout=lambda: lifecycle.append("onload"),
+        _offload_rollout=lambda: lifecycle.append("offload"),
+    )
+
+    collected = run_fixed_policy_collection(
+        trainer,
+        workflow="examples.tau2.agent.Tau2AgentWorkflow",
+        workflow_kwargs={"econfig": {}},
+    )
+
+    assert collected == 12
+    assert lifecycle == ["proxy", "onload", "offload"]
+    assert len(rollout.calls) == 12
+    assert sum(len(batch) for batch, _ in rollout.calls) == 178
+    assert len(rollout.calls[-1][0]) == 2
+    assert rollout.consumed_without_update == 12
+    assert len(actor.cleared) == 12
+    assert len(actor.cleared[-1]) == 2
+    assert rollout.versions == []
+    assert forbidden_calls == []
+    assert rollout.calls[0][1]["workflow"] == "examples.tau2.agent.Tau2AgentWorkflow"
+    assert rollout.calls[0][1]["group_size"] == 1
+
+
+def test_fixed_policy_collection_rejects_incomplete_rollout_batch_and_clears_results():
+    class FakeActor:
+        def __init__(self):
+            self.cleared = []
+
+        def clear_batches(self, *targets):
+            self.cleared.append(targets)
+
+    class RejectingRollout:
+        def __init__(self):
+            self.consumed_without_update = 0
+
+        def rollout_batch(self, rows, **kwargs):
+            return [{"source_id": rows[0]["source_id"]}]
+
+        def on_batch_consumed_without_update(self):
+            self.consumed_without_update += 1
+
+    actor = FakeActor()
+    rollout = RejectingRollout()
+    trainer = SimpleNamespace(
+        config=SimpleNamespace(
+            total_train_steps=None,
+            gconfig=SimpleNamespace(
+                n_samples=1,
+                reward_normalization=False,
+                drop_incomplete_group=False,
+            ),
+        ),
+        train_dataloader=[[{"source_id": "a"}, {"source_id": "b"}]],
+        rollout=rollout,
+        actor=actor,
+        _should_offload_rollout=False,
+        _requires_proxy_workflow=lambda workflow: False,
+        _ensure_proxy_started=lambda: None,
+    )
+
+    with pytest.raises(RuntimeError, match="incomplete rollout batch"):
+        run_fixed_policy_collection(
+            trainer,
+            workflow="examples.tau2.agent.Tau2AgentWorkflow",
+            workflow_kwargs={},
+        )
+
+    assert rollout.consumed_without_update == 0
+    assert len(actor.cleared) == 1
+    assert actor.cleared[0] == ({"source_id": "a"},)
+
+
+def test_tail_dispatch_preserves_native_token_mean_loss_and_gradient():
+    import torch
+
+    from examples.tau2.evaluation import repeat_groups_for_dispatch
+
+    from areal.infra.controller.train_controller import _dispatch_tensors
+    from areal.utils.functional import ppo_actor_loss_fn
+
+    masks = [torch.ones(8, 3, dtype=torch.bool), torch.ones(8, 3, dtype=torch.bool)]
+    masks[1][:, -1] = False
+    groups = [
+        {
+            "attention_mask": mask,
+            "loss_mask": mask,
+            "feature": torch.arange(24, dtype=torch.float64).reshape(8, 3) / 24 + value,
+        }
+        for mask, value in zip(masks, (0.5, 1.5))
+    ]
+    physical, factor = repeat_groups_for_dispatch(groups, 4)
+    assert factor == 2 and len(physical) == 4
+    assert physical[0] is not physical[2]
+    assert physical[0]["feature"] is physical[2]["feature"]
+    shards, _ = _dispatch_tensors(physical, dp_size=4)
+    assert [len(shard) for shard in shards] == [1, 1, 1, 1]
+    weight = torch.tensor(0.1, dtype=torch.float64, requires_grad=True)
+
+    def loss(rows):
+        features = torch.cat([row["feature"] for row in rows])
+        mask = torch.cat([row["loss_mask"] for row in rows])
+        logp = weight * features - 1.0
+        advantage = (
+            torch.arange(8, dtype=torch.float64)
+            .sub(3.5)[:, None]
+            .expand(8, 3)
+            .repeat(len(rows), 1)
+        )
+        value, _ = ppo_actor_loss_fn(
+            logprobs=logp,
+            proximal_logprobs=torch.full_like(logp, -1.0),
+            old_logprobs=torch.full_like(logp, -1.1),
+            advantages=advantage,
+            eps_clip=0.2,
+            eps_clip_higher=0.28,
+            loss_mask=mask,
+        )
+        return value
+
+    expected = loss(groups)
+    total_tokens = sum(row["loss_mask"].sum() for row in physical)
+    # FSDP scales by world size / global token weight, then averages gradients.
+    actual = (
+        sum(
+            loss(shard) * shard[0]["loss_mask"].sum() / total_tokens * 4
+            for shard in shards
+        )
+        / 4
+    )
+    expected_grad = torch.autograd.grad(expected, weight, retain_graph=True)[0]
+    actual_grad = torch.autograd.grad(actual, weight)[0]
+    assert expected_grad.abs() > 1e-8
+    torch.testing.assert_close(actual, expected, rtol=1e-6, atol=1e-7)
+    torch.testing.assert_close(actual_grad, expected_grad, rtol=1e-6, atol=1e-7)
+
+
+def test_grpo_and_critic_recipes_disable_warmup(grpo_config, monkeypatch, tmp_path):
+    from areal.api.cli_args import PPOConfig
+
+    monkeypatch.setenv("TAU2_ACTOR_PATH", "Qwen/Qwen3.5-4B")
+    monkeypatch.setenv("TAU2_CRITIC_INIT_PATH", "Qwen/Qwen3.5-4B")
+    monkeypatch.setenv("TAU2_RUN_ROOT", str(tmp_path))
+    critic, _ = load_expr_config(
+        ["--config", "examples/tau2/config_critic_production.yaml"], PPOConfig
+    )
+    for optimizer in (grpo_config.actor.optimizer, critic.critic.optimizer):
+        assert optimizer.warmup_steps == 0
+        assert optimizer.warmup_steps_proportion == 0.0
+        assert optimizer.lr_scheduler_type == "constant"
+
+
+def test_finite_rollout_restarts_for_second_epoch_without_resampling_tail():
+    from collections import deque
+
+    from torch.utils.data import DistributedSampler
+    from torchdata.stateful_dataloader import StatefulDataLoader
+
+    from examples.tau2.utils import FiniteEpochBatcher
+
+    from areal.infra.workflow_executor import _RecoveryInputGenerator
+
+    rows = [{"id": i} for i in range(5)]
+    sampler = DistributedSampler(rows, num_replicas=1, rank=0, shuffle=False)
+    loader = StatefulDataLoader(
+        rows, batch_size=3, sampler=sampler, collate_fn=lambda x: x
+    )
+
+    class Rollout:
+        def prepare_batch(self, dataloader, **kwargs):
+            assert kwargs == {"finite_epoch": True, "fail_on_rejection": True}
+            if not hasattr(self, "data_generator"):
+                self.data_generator = _RecoveryInputGenerator(
+                    dataloader,
+                    True,
+                    deque(),
+                    lambda row: SimpleNamespace(task_id=row["id"], data=row),
+                )
+            batch = []
+            for _ in range(dataloader.batch_size):
+                try:
+                    item = next(self.data_generator)
+                except StopIteration:
+                    break
+                batch.append(item.data)
+                self.data_generator.acknowledge_submission(item)
+            return batch
+
+    prepare = FiniteEpochBatcher(Rollout())
+    batches = [prepare(dataloader=loader) for _ in range(4)]
+    assert [len(batch) for batch in batches] == [3, 2, 3, 2]
+    assert [
+        [row["id"] for batch in batches[i : i + 2] for row in batch] for i in (0, 2)
+    ] == [list(range(5)), list(range(5))]
+    assert sampler.epoch == 1

@@ -1,7 +1,6 @@
 """Training script for Tau2 benchmark with AReaL proxy mode."""
 
 import argparse
-import functools
 import math
 import random
 import sys
@@ -31,6 +30,73 @@ from areal.api.cli_args import load_expr_config
 from areal.utils import logging
 
 logger = logging.getLogger("Tau2Train")
+
+
+def _batch_to_rows(batch: Any) -> list[dict[str, Any]]:
+    """Normalize native PPOTrainer dataloader output to row dictionaries."""
+
+    if not isinstance(batch, list):
+        raise TypeError(
+            "Tau2 collector expects native create_dataloader list batches; "
+            f"got {type(batch).__name__}"
+        )
+    return [dict(item) for item in batch]
+
+
+def run_fixed_policy_collection(
+    trainer: PPOTrainer,
+    *,
+    workflow: str,
+    workflow_kwargs: dict[str, Any],
+) -> int:
+    """Collect fixed-policy τ² episodes without PPO update or weight sync."""
+
+    if workflow is None:
+        raise ValueError("workflow must be specified for fixed-policy collection")
+    if trainer._requires_proxy_workflow(workflow):
+        trainer._ensure_proxy_started()
+
+    total_steps = trainer.config.total_train_steps
+    collected_batches = 0
+    if trainer._should_offload_rollout:
+        trainer._onload_rollout()
+    try:
+        for batch_index, batch in enumerate(trainer.train_dataloader):
+            if total_steps is not None and collected_batches >= total_steps:
+                break
+            rows = _batch_to_rows(batch)
+            if not rows:
+                continue
+            results = trainer.rollout.rollout_batch(
+                rows,
+                workflow=workflow,
+                workflow_kwargs=workflow_kwargs,
+                group_size=trainer.config.gconfig.n_samples,
+                reward_normalization=trainer.config.gconfig.reward_normalization,
+                drop_incomplete_group=trainer.config.gconfig.drop_incomplete_group,
+            )
+            try:
+                if len(results) != len(rows):
+                    raise RuntimeError(
+                        "Fixed-policy collection received incomplete rollout batch: "
+                        f"{len(results)} results for {len(rows)} input rows"
+                    )
+                trainer.rollout.on_batch_consumed_without_update()
+                collected_batches += 1
+                logger.info(
+                    "Fixed-policy τ² collection batch %d completed: "
+                    "rows=%d no_optimizer_update=True",
+                    batch_index + 1,
+                    len(rows),
+                )
+            finally:
+                if results:
+                    trainer.actor.clear_batches(*results)
+    finally:
+        if trainer._should_offload_rollout:
+            trainer._offload_rollout()
+    logger.info("Collected %d fixed-policy τ² rollout batches", collected_batches)
+    return collected_batches
 
 
 def get_tau2_dataset(
@@ -415,21 +481,23 @@ def main(args):
         train_dataset=train_dataset,
         valid_dataset=valid_dataset,
     ) as trainer:
-        if config.algorithm == "collect":
-            trainer.rollout.prepare_batch = functools.partial(
-                trainer.rollout.prepare_batch, finite_epoch=True, fail_on_rejection=True
-            )
-        trainer.train(
-            workflow="examples.tau2.agent.Tau2AgentWorkflow",
-            workflow_kwargs=workflow_kwargs,
-            eval_workflow="examples.tau2.agent.Tau2AgentWorkflow",
-            eval_workflow_kwargs=eval_workflow_kwargs,
-            dynamic_filter_fn=(
-                "examples.tau2.train.group_filter"
-                if config.dynamic_group_filter
-                else None
-            ),
+        dynamic_filter_fn = (
+            "examples.tau2.train.group_filter" if config.dynamic_group_filter else None
         )
+        if config.algorithm == "collect":
+            run_fixed_policy_collection(
+                trainer,
+                workflow="examples.tau2.agent.Tau2AgentWorkflow",
+                workflow_kwargs=workflow_kwargs,
+            )
+        else:
+            trainer.train(
+                workflow="examples.tau2.agent.Tau2AgentWorkflow",
+                workflow_kwargs=workflow_kwargs,
+                eval_workflow="examples.tau2.agent.Tau2AgentWorkflow",
+                eval_workflow_kwargs=eval_workflow_kwargs,
+                dynamic_filter_fn=dynamic_filter_fn,
+            )
 
 
 if __name__ == "__main__":

@@ -276,3 +276,15 @@ existing generated prefix is retained.
 Critic collection and fitting use two training ranks (plus six rollout ranks), so
 batch16 and the official2/14-row tails dispatch without dropping or duplicating tasks.
 Their rollout input iterators stop at epoch boundaries.
+
+Collection now drives the existing rollout controller directly: no actor backward,
+optimizer step, or weight update runs merely to export an episode. The existing trainer
+initialization is reused, but learning starts only in offline critic fitting. Both GRPO
+and critic fitting use zero warmup steps and zero warmup proportion.
+
+GRPO consumes finite epochs. For the two-prompt tail on four training ranks, complete
+prompt groups are uniformly replicated for physical dispatch only; no extra episodes are
+sampled. This repeats both the numerator and denominator of the token-mean loss, so the
+gradient is unchanged. `tau2_batch/real_prompts` and `real_episodes` measure coverage;
+worker sequence/token counters describe physical computation. The normal batch remains
+eight prompts times eight samples, and the real tail is sixteen episodes.
