@@ -201,6 +201,10 @@ class DistributedStatsTracker:
         return default_reduce_group
 
     def _device_for_placeholder_tensor(self, group=None):
+        # Local scalar metrics need no device collective. Remote rollout workers
+        # must not compete with their inference server for CUDA context memory.
+        if group is None:
+            return "cpu"
         if group is not None:
             try:
                 backend = str(dist.get_backend(group)).lower()
