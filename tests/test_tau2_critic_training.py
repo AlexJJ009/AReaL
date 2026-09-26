@@ -547,11 +547,19 @@ def test_fixed_dev_collection_uses_eval_rollout_without_train_capacity_credit():
         def __init__(self):
             self.started = 0
             self.batches = []
+            self.pending = []
+            self.submissions = []
 
         def start_proxy(self):
             self.started += 1
 
-        def rollout_batch(self, rows, **kwargs):  # noqa: ARG002
+        def submit(self, **kwargs):
+            self.submissions.append(kwargs)
+            self.pending.append(kwargs["data"])
+
+        def wait(self, count):
+            rows, self.pending = self.pending, []
+            assert len(rows) == count
             self.batches.append([row["task_id"] for row in rows])
             return [
                 {
@@ -584,7 +592,9 @@ def test_fixed_dev_collection_uses_eval_rollout_without_train_capacity_credit():
     eval_rollout = FakeRollout()
     train_rollout = TrainRollout()
     trainer = SimpleNamespace(
-        config=SimpleNamespace(train_dataset=SimpleNamespace(batch_size=2)),
+        config=SimpleNamespace(
+            train_dataset=SimpleNamespace(batch_size=2), total_train_steps=2
+        ),
         rollout=train_rollout,
         eval_rollout=eval_rollout,
         actor=FakeActor(),
@@ -605,6 +615,8 @@ def test_fixed_dev_collection_uses_eval_rollout_without_train_capacity_credit():
     assert len(rows) == 3
     assert eval_rollout.started == 1
     assert eval_rollout.batches == [["a", "r"], ["t"]]
+    assert [s["task_id"] for s in eval_rollout.submissions] == [4, 5, 6]
+    assert all(s["is_eval"] for s in eval_rollout.submissions)
     assert train_rollout.consumed == 0
     assert trainer.actor.cleared == 3
     assert [row["task_id"] for row in rows] == ["a", "r", "t"]

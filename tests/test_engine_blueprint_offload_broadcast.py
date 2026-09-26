@@ -134,3 +134,57 @@ def test_fsdp_repeated_offload_still_requires_tms_enabled(monkeypatch):
 
     with pytest.raises(RuntimeError, match="torch_memory_saver requires"):
         FSDPEngine.offload(engine)
+
+
+@pytest.mark.parametrize("offloaded", [False, True])
+def test_destroy_resumes_tms_before_freeing_model(monkeypatch, offloaded):
+    events = []
+    engine = SimpleNamespace(
+        _initialized=True,
+        is_offload=offloaded,
+        optimizer=object(),
+        model=object(),
+        _per_layer_optim_wrapper=None,
+        own_global_group=False,
+    )
+
+    def onload():
+        assert (
+            engine._initialized
+            and hasattr(engine, "model")
+            and hasattr(engine, "optimizer")
+        )
+        events.append("resume")
+        engine.is_offload = False
+
+    engine.onload = onload
+    monkeypatch.setattr(fsdp_engine.dist, "is_initialized", lambda: False)
+    monkeypatch.setattr(fsdp_engine.gc, "collect", lambda: None)
+    monkeypatch.setattr(
+        fsdp_engine.current_platform, "empty_cache", lambda: events.append("free")
+    )
+    FSDPEngine.destroy(engine)
+    assert events == (["resume", "free"] if offloaded else ["free"])
+    assert not hasattr(engine, "model") and not hasattr(engine, "optimizer")
+    FSDPEngine.destroy(engine)
+    assert events.count("resume") == int(offloaded)
+
+
+def test_destroy_does_not_free_paused_allocations_if_resume_fails():
+    def onload():
+        raise RuntimeError("resume failed")
+
+    engine = SimpleNamespace(
+        _initialized=True,
+        is_offload=True,
+        model=object(),
+        optimizer=object(),
+        onload=onload,
+    )
+    with pytest.raises(RuntimeError, match="resume failed"):
+        FSDPEngine.destroy(engine)
+    assert (
+        engine._initialized
+        and hasattr(engine, "model")
+        and hasattr(engine, "optimizer")
+    )

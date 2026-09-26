@@ -612,6 +612,9 @@ class FSDPEngine(TrainEngine):
         return self._cpu_group
 
     def destroy(self):
+        # TMS must remap paused CUDA allocations before PyTorch frees them.
+        if getattr(self, "is_offload", False):
+            self.onload()
         self._initialized = False
         if hasattr(self, "optimizer"):
             del self.optimizer

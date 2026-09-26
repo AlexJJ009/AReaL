@@ -890,14 +890,19 @@ def collect_tau2_validation_rollouts(
     batch_size = trainer.config.train_dataset.batch_size
     for start in range(0, len(validation_rows), batch_size):
         rows = validation_rows[start : start + batch_size]
-        remote_batch = rollout.rollout_batch(
-            rows,
-            workflow=workflow,
-            workflow_kwargs=workflow_kwargs,
-            group_size=1,
-            reward_normalization=False,
-            drop_incomplete_group=False,
-        )
+        validation_task_base = int(trainer.config.total_train_steps) * batch_size
+        for offset, row in enumerate(rows):
+            rollout.submit(
+                data=row,
+                workflow=workflow,
+                workflow_kwargs=workflow_kwargs,
+                task_id=validation_task_base + start + offset,
+                is_eval=True,
+                group_size=1,
+                reward_normalization=False,
+                drop_incomplete_group=False,
+            )
+        remote_batch = rollout.wait(count=len(rows))
         try:
             if len(remote_batch) != len(rows):
                 raise RuntimeError(
