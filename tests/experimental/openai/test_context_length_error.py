@@ -148,3 +148,51 @@ async def test_concat_context_limit_preserves_completed_parent_and_no_failed_lea
     assert set(individual) == {root.id}
     assert set(leaves) == {root.id}
     assert leaves[root.id].reward == 0.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api", ["chat", "responses"])
+@pytest.mark.parametrize("prompt_len", [28914, 28995, 32766, 32767])
+async def test_actual_client_request_obeys_strict_backend_context_bound(
+    api, prompt_len
+):
+    class StrictBackend(_OneTokenEngine):
+        async def agenerate(self, req):
+            assert len(req.input_ids) + req.gconfig.max_new_tokens < 32768
+            assert req.gconfig.max_new_tokens == min(4096, 32767 - prompt_len)
+            self.calls += 1
+            tokens = [42, req.tokenizer.eos_token_id][: req.gconfig.max_new_tokens]
+            return ModelResponse(
+                input_tokens=list(req.input_ids),
+                output_tokens=tokens,
+                output_logprobs=[-0.1] * len(tokens),
+                output_versions=[0] * len(tokens),
+                tokenizer=req.tokenizer,
+                stop_reason="length" if len(tokens) == 1 else "stop",
+            )
+
+    engine = StrictBackend()
+    client = ArealOpenAI(
+        engine=engine,
+        tokenizer=_FixedPromptTokenizer(prompt_len),
+        engine_max_tokens=32768,
+    )
+
+    async def generate():
+        if api == "chat":
+            return await client.chat.completions.create(
+                messages=[{"role": "user", "content": "long history"}],
+                max_completion_tokens=4096,
+            )
+        return await client.responses.create(
+            input="long history", max_output_tokens=4096, tools=[]
+        )
+
+    if prompt_len == 32767:
+        with pytest.raises(ContextLengthExceededError):
+            await generate()
+        assert engine.calls == 0
+        assert client.export_interactions(style="individual") == {}
+    else:
+        await generate()
+        assert engine.calls == 1

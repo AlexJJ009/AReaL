@@ -24,19 +24,14 @@ from examples.tau2.contracts import (
     validate_episode_batch,
     validate_installed_tau2_revision,
 )
-from examples.tau2.critic_replay import Tau2CriticReplayWorkflow
 from examples.tau2.train import collection_provenance, validate_tau2_recipe
 from examples.tau2.utils import Tau2PPOConfig
-from scripts.tau2.critic_data import inspect_critic_data
 from scripts.tau2.eval_matrix import build_eval_plan, verify_eval_ledger
 from scripts.tau2.train_critic import (
-    _load_episode_rows,
     resolve_training_snapshots,
-    validate_tau2_critic_config,
 )
 
-from areal.api.cli_args import PPOConfig, load_expr_config
-from areal.api.workflow_api import RolloutWorkflow
+from areal.api.cli_args import load_expr_config
 from areal.experimental.openai.types import (
     AgentWorkflowResult,
     InteractionWithTokenLogpReward,
@@ -405,7 +400,6 @@ def test_thin_entrypoints_replace_manifest_and_custom_launcher():
     script_dir = Path("scripts/tau2")
     entrypoints = (
         "run.sh",
-        "collect_critic.sh",
         "train_critic.sh",
         "train_mixed.sh",
         "train_airline.sh",
@@ -461,10 +455,7 @@ def test_qualification_configs_resolve_for_all_entrypoints(monkeypatch, tmp_path
     monkeypatch.setenv("TAU2_CRITIC_INIT_PATH", actor)
     monkeypatch.setenv("TAU2_RUN_ROOT", str(tmp_path / "run"))
 
-    for config_path in (
-        "examples/tau2/config_critic_collect_qualification.yaml",
-        "examples/tau2/config_sao_qualification.yaml",
-    ):
+    for config_path in ("examples/tau2/config_sao_qualification.yaml",):
         config, _ = load_expr_config(
             ["--config", config_path],
             Tau2PPOConfig,
@@ -509,16 +500,6 @@ def test_qualification_configs_resolve_for_all_entrypoints(monkeypatch, tmp_path
         )
         assert validate_tau2_recipe(config) == (domain,)
 
-    critic_config, _ = load_expr_config(
-        ["--config", "examples/tau2/config_critic_qualification.yaml"],
-        PPOConfig,
-    )
-    validate_tau2_critic_config(critic_config)
-    assert critic_config.rollout.queue_size == 6
-    critic_config.rollout.queue_size = 5
-    with pytest.raises(ValueError, match="reserved consumer batch"):
-        validate_tau2_critic_config(critic_config)
-
 
 def _official_test_rows() -> list[dict[str, str]]:
     return [
@@ -560,65 +541,6 @@ def _critic_row(task_index: int, critic_split: str) -> dict:
     }
 
 
-def _official_train_ids() -> set[tuple[str, str]]:
-    return {
-        (
-            "airline" if index < 30 else "retail" if index < 104 else "telecom",
-            f"train-{index}",
-        )
-        for index in range(178)
-    }
-
-
-def _inspect_critic(data_path: Path) -> dict:
-    return inspect_critic_data(
-        data_path,
-        policy_id="Qwen/Qwen3.5-4B",
-        policy_revision="policy0-revision",
-        simulator_id="deepseek-pinned",
-        official_train_ids=_official_train_ids(),
-    )
-
-
-def test_critic_collection_seals_task_disjoint_cpu_replay(tmp_path):
-    """Sealing binds fixed-policy data once, without simulator or tool replay."""
-
-    data_path = tmp_path / "episodes.jsonl"
-    rows = [
-        _critic_row(0, "train"),
-        _critic_row(1, "dev"),
-    ]
-    data_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
-
-    report = _inspect_critic(data_path)
-
-    assert report["status"] == "checked"
-    assert report["episodes_by_split"] == {"dev": 1, "train": 1}
-    assert report["rows"] == 2
-
-
-def test_critic_collection_rejects_tool_tokens_in_loss(tmp_path):
-    """Observation tokens never become critic/policy actions during sealing."""
-
-    row = _critic_row(0, "train")
-    row["loss_mask"][2] = 1
-    data_path = tmp_path / "episodes.jsonl"
-    data_path.write_text(json.dumps(row) + "\n")
-
-    with pytest.raises(ValueError, match="loss_mask/action_origin_mask mismatch"):
-        _inspect_critic(data_path)
-
-
-def test_critic_collection_rejects_cli_provenance_relabel(tmp_path):
-    row = _critic_row(0, "train")
-    row["policy_revision"] = "different-policy"
-    data_path = tmp_path / "episodes.jsonl"
-    data_path.write_text(json.dumps(row) + "\n")
-
-    with pytest.raises(ValueError, match="provenance mismatch for policy_revision"):
-        _inspect_critic(data_path)
-
-
 def test_runtime_collection_provenance_is_config_derived_not_manifest_bound():
     config = SimpleNamespace(econfig=SimpleNamespace(user_llm="deepseek-pinned"))
 
@@ -631,31 +553,6 @@ def test_runtime_collection_provenance_is_config_derived_not_manifest_bound():
         "policy_revision": "b" * 40,
         "simulator_id": "deepseek-pinned",
     }
-
-
-@pytest.mark.asyncio
-async def test_critic_replay_emits_explicit_episode_without_engine_calls():
-    """Offline critic fit consumes sealed tensors and never regenerates an episode."""
-
-    row = _critic_row(0, "train")
-    row["episode_id"] = 23
-    row["episode_tensor_id"] = 23
-    workflow = Tau2CriticReplayWorkflow()
-    assert isinstance(workflow, RolloutWorkflow)
-
-    interactions = await workflow.arun_episode(object(), row)
-    tensors = interactions["23"].to_tensor_dict()
-
-    torch.testing.assert_close(
-        tensors["loss_mask"],
-        torch.tensor([[False, True, False, True]]),
-        rtol=0,
-        atol=0,
-    )
-    torch.testing.assert_close(
-        tensors["episode_ids"], torch.full((1, 4), 23), rtol=0, atol=0
-    )
-    assert tensors["terminated"].item() is True
 
 
 def test_pinned_hf_source_resolves_the_exact_revision():
@@ -679,8 +576,8 @@ def test_critic_training_resolves_all_actor_backbone_consumers(monkeypatch, tmp_
     monkeypatch.setenv("TAU2_CRITIC_INIT_PATH", source)
     monkeypatch.setenv("TAU2_RUN_ROOT", str(tmp_path / "run"))
     config, _ = load_expr_config(
-        ["--config", "examples/tau2/config_critic_qualification.yaml"],
-        PPOConfig,
+        ["--config", "examples/tau2/config_critic_production.yaml"],
+        Tau2PPOConfig,
     )
 
     snapshot = resolve_training_snapshots(
@@ -745,64 +642,6 @@ async def test_proxy_tensor_dump_seals_same_episode_identity(tmp_path):
     assert dumped["episode_id"] == dumped["episode_tensor_id"] == 23
     assert dumped["action_origin_mask"] == [0, 0, 1, 1]
     assert dumped["token_roles"] == ["prompt", "prompt", "assistant", "assistant"]
-
-    dev = {**dumped}
-    dev.update(
-        {
-            "task_id": "train-1",
-            "critic_split": "dev",
-            "episode_id": 24,
-            "episode_tensor_id": 24,
-            "attempt_id": "attempt-1",
-        }
-    )
-    sealed_input = tmp_path / "episodes.jsonl"
-    sealed_input.write_text(json.dumps(dumped) + "\n" + json.dumps(dev) + "\n")
-    report = _inspect_critic(sealed_input)
-    assert report["status"] == "checked"
-
-
-@pytest.mark.parametrize("corruption", [None, "task_overlap", "duplicate_episode"])
-def test_train_critic_loads_combined_episode_jsonl_directly(
-    monkeypatch, tmp_path, corruption
-):
-    data_path = tmp_path / "episodes.jsonl"
-    rows = [
-        _critic_row(0, "train"),
-        _critic_row(1, "dev"),
-        _critic_row(30, "train"),
-        _critic_row(31, "dev"),
-        _critic_row(104, "train"),
-        _critic_row(105, "dev"),
-    ]
-    if corruption == "task_overlap":
-        rows[1]["task_id"] = rows[0]["task_id"]
-    elif corruption == "duplicate_episode":
-        rows[1]["episode_id"] = rows[0]["episode_id"]
-        rows[1]["episode_tensor_id"] = rows[0]["episode_tensor_id"]
-    data_path.write_text("".join(json.dumps(row) + "\n" for row in rows))
-    monkeypatch.setattr(
-        "scripts.tau2.train_critic._load_official_train_ids",
-        _official_train_ids,
-    )
-
-    if corruption is not None:
-        message = (
-            "cross critic train/dev"
-            if corruption == "task_overlap"
-            else "duplicates episode_id"
-        )
-        with pytest.raises(ValueError, match=message):
-            _load_episode_rows(data_path)
-        with pytest.raises(ValueError, match=message):
-            _inspect_critic(data_path)
-        return
-
-    summary, train_rows, dev_rows = _load_episode_rows(data_path)
-
-    assert summary["status"] == "checked"
-    assert len(train_rows) == 3
-    assert len(dev_rows) == 3
 
 
 def test_eval_plan_covers_policy0_and_four_by_three_actor_matrix():

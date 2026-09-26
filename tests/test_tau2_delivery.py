@@ -14,7 +14,6 @@ import pytest
 from examples.tau2.evaluation import Tau2AsyncEvalTrainer
 from examples.tau2.train import (
     get_tau2_dataset,
-    run_fixed_policy_collection,
     validate_tau2_recipe,
 )
 from examples.tau2.utils import Tau2PPOConfig
@@ -245,6 +244,41 @@ def test_tau2_eval_wait_none_writes_failed_status_not_completed(tmp_path):
     assert all(status["status"] != "completed" for status in statuses)
 
 
+def test_tau2_eval_context_budget_result_counts_as_completed_episode(tmp_path):
+    import torch
+
+    trainer = object.__new__(Tau2AsyncEvalTrainer)
+    statuses: list[dict] = []
+    trainer.config = SimpleNamespace(
+        eval_gconfig=SimpleNamespace(n_samples=1),
+        experiment_mode="formal",
+    )
+    trainer.valid_dataloader = [[{"domain": "airline", "task_id": "44"}]]
+    trainer._async_eval_rollout = SimpleNamespace(
+        submit=lambda *args, **kwargs: None,
+        wait=lambda count, timeout=None: [
+            {
+                "rewards": torch.tensor([0.0]),
+                "terminated": torch.tensor([False]),
+                "truncated": torch.tensor([True]),
+                "task_budget_failure": torch.tensor([True]),
+            }
+        ],
+    )
+    trainer._load_eval_checkpoint = lambda checkpoint_path, version: None
+    trainer._write_eval_status = lambda version, payload: statuses.append(
+        {"version": version, **payload}
+    )
+
+    trainer._run_eval_job(5, tmp_path / "checkpoint", "workflow", {}, False)
+
+    assert statuses[-1]["status"] == "completed"
+    assert statuses[-1]["domains"]["airline"] == {
+        "episodes": 1,
+        "reward_mean": 0.0,
+    }
+
+
 @pytest.mark.parametrize("global_step,forced", [(44, False), (45, True)])
 def test_final_grpo_checkpoint_is_forced_off_regular_cadence(
     monkeypatch, global_step, forced
@@ -315,7 +349,11 @@ def test_initial_eval_consumes_trigger_without_requesting_unsaved_step1(
 def test_context_error_wrapped_as_rate_limit_does_not_retry():
     import litellm
 
-    from examples.tau2.agent import Tau2AgentWorkflow, Tau2InfrastructureError
+    from examples.tau2.agent import (
+        Tau2AgentWorkflow,
+        Tau2InfrastructureError,
+        is_context_budget_error,
+    )
 
     cause = litellm.RateLimitError(
         message="areal_context_limit: exhausted", model="dummy", llm_provider="openai"
@@ -323,146 +361,42 @@ def test_context_error_wrapped_as_rate_limit_does_not_retry():
     failure = Tau2InfrastructureError(str(cause))
     failure.__cause__ = cause
     assert not Tau2AgentWorkflow.should_retry_episode(failure)
+    backend_contract = litellm.RateLimitError(
+        message=(
+            "OpenAIException - Error code: 500 - {'detail': "
+            '"RuntimeError: Failed after 3 retries each. Payload: '
+            "{'sampling_params': {'max_new_tokens': 3773}, "
+            "'return_logprob': True}. Endpoint: /generate. Last error: "
+            "Requested token count exceeds the model's maximum context length "
+            "of 32768 tokens. You requested a total of 32768 tokens: "
+            "28995 tokens from the input messages and 3773 tokens for the "
+            'completion."}'
+        ),
+        model="dummy",
+        llm_provider="openai",
+    )
+    failure = Tau2InfrastructureError(str(backend_contract))
+    failure.__cause__ = backend_contract
+    assert is_context_budget_error(failure)
+    assert not Tau2AgentWorkflow.should_retry_episode(failure)
+    user_context = litellm.RateLimitError(
+        message=(
+            "Requested token count exceeds the model's maximum context length "
+            "of 32768 tokens. You requested a total of 32768 tokens."
+        ),
+        model="deepseek-flash",
+        llm_provider="openai",
+    )
+    failure = Tau2InfrastructureError(str(user_context))
+    failure.__cause__ = user_context
+    assert not is_context_budget_error(failure)
+    assert not Tau2AgentWorkflow.should_retry_episode(failure)
     transient = litellm.RateLimitError(
         message="Too many requests", model="dummy", llm_provider="openai"
     )
     failure = Tau2InfrastructureError(str(transient))
     failure.__cause__ = transient
     assert Tau2AgentWorkflow.should_retry_episode(failure)
-
-
-def test_fixed_policy_collection_rolls_finite_tail_without_updates():
-    forbidden_calls = []
-
-    class ForbiddenActor:
-        def __init__(self):
-            self.cleared = []
-
-        def compute_advantages(self, *args, **kwargs):
-            forbidden_calls.append("compute_advantages")
-            raise AssertionError("collector must not compute advantages")
-
-        def ppo_update(self, *args, **kwargs):
-            forbidden_calls.append("ppo_update")
-            raise AssertionError("collector must not update actor")
-
-        def update_weights(self, *args, **kwargs):
-            forbidden_calls.append("update_weights")
-            raise AssertionError("collector must not sync weights")
-
-        def clear_batches(self, *targets):
-            self.cleared.append(targets)
-
-    class FakeRollout:
-        def __init__(self):
-            self.calls = []
-            self.consumed_without_update = 0
-            self.versions = []
-
-        def rollout_batch(self, rows, **kwargs):
-            self.calls.append((list(rows), kwargs))
-            return [
-                {"source_id": row["source_id"], "remote": index}
-                for index, row in enumerate(rows)
-            ]
-
-        def on_batch_consumed_without_update(self):
-            self.consumed_without_update += 1
-
-        def set_version(self, version):
-            self.versions.append(version)
-
-    rows = [{"source_id": f"task-{index}"} for index in range(178)]
-    dataloader = [rows[index : index + 16] for index in range(0, len(rows), 16)]
-    rollout = FakeRollout()
-    actor = ForbiddenActor()
-    lifecycle = []
-    trainer = SimpleNamespace(
-        config=SimpleNamespace(
-            total_train_steps=12,
-            gconfig=SimpleNamespace(
-                n_samples=1,
-                reward_normalization=False,
-                drop_incomplete_group=False,
-            ),
-        ),
-        train_dataloader=dataloader,
-        rollout=rollout,
-        actor=actor,
-        _should_offload_rollout=True,
-        _requires_proxy_workflow=lambda workflow: True,
-        _ensure_proxy_started=lambda: lifecycle.append("proxy"),
-        _onload_rollout=lambda: lifecycle.append("onload"),
-        _offload_rollout=lambda: lifecycle.append("offload"),
-    )
-
-    collected = run_fixed_policy_collection(
-        trainer,
-        workflow="examples.tau2.agent.Tau2AgentWorkflow",
-        workflow_kwargs={"econfig": {}},
-    )
-
-    assert collected == 12
-    assert lifecycle == ["proxy", "onload", "offload"]
-    assert len(rollout.calls) == 12
-    assert sum(len(batch) for batch, _ in rollout.calls) == 178
-    assert len(rollout.calls[-1][0]) == 2
-    assert rollout.consumed_without_update == 12
-    assert len(actor.cleared) == 12
-    assert len(actor.cleared[-1]) == 2
-    assert rollout.versions == []
-    assert forbidden_calls == []
-    assert rollout.calls[0][1]["workflow"] == "examples.tau2.agent.Tau2AgentWorkflow"
-    assert rollout.calls[0][1]["group_size"] == 1
-
-
-def test_fixed_policy_collection_rejects_incomplete_rollout_batch_and_clears_results():
-    class FakeActor:
-        def __init__(self):
-            self.cleared = []
-
-        def clear_batches(self, *targets):
-            self.cleared.append(targets)
-
-    class RejectingRollout:
-        def __init__(self):
-            self.consumed_without_update = 0
-
-        def rollout_batch(self, rows, **kwargs):
-            return [{"source_id": rows[0]["source_id"]}]
-
-        def on_batch_consumed_without_update(self):
-            self.consumed_without_update += 1
-
-    actor = FakeActor()
-    rollout = RejectingRollout()
-    trainer = SimpleNamespace(
-        config=SimpleNamespace(
-            total_train_steps=None,
-            gconfig=SimpleNamespace(
-                n_samples=1,
-                reward_normalization=False,
-                drop_incomplete_group=False,
-            ),
-        ),
-        train_dataloader=[[{"source_id": "a"}, {"source_id": "b"}]],
-        rollout=rollout,
-        actor=actor,
-        _should_offload_rollout=False,
-        _requires_proxy_workflow=lambda workflow: False,
-        _ensure_proxy_started=lambda: None,
-    )
-
-    with pytest.raises(RuntimeError, match="incomplete rollout batch"):
-        run_fixed_policy_collection(
-            trainer,
-            workflow="examples.tau2.agent.Tau2AgentWorkflow",
-            workflow_kwargs={},
-        )
-
-    assert rollout.consumed_without_update == 0
-    assert len(actor.cleared) == 1
-    assert actor.cleared[0] == ({"source_id": "a"},)
 
 
 def test_tail_dispatch_preserves_native_token_mean_loss_and_gradient():
@@ -530,13 +464,11 @@ def test_tail_dispatch_preserves_native_token_mean_loss_and_gradient():
 
 
 def test_grpo_and_critic_recipes_disable_warmup(grpo_config, monkeypatch, tmp_path):
-    from areal.api.cli_args import PPOConfig
-
     monkeypatch.setenv("TAU2_ACTOR_PATH", "Qwen/Qwen3.5-4B")
     monkeypatch.setenv("TAU2_CRITIC_INIT_PATH", "Qwen/Qwen3.5-4B")
     monkeypatch.setenv("TAU2_RUN_ROOT", str(tmp_path))
     critic, _ = load_expr_config(
-        ["--config", "examples/tau2/config_critic_production.yaml"], PPOConfig
+        ["--config", "examples/tau2/config_critic_production.yaml"], Tau2PPOConfig
     )
     for optimizer in (grpo_config.actor.optimizer, critic.critic.optimizer):
         assert optimizer.warmup_steps == 0

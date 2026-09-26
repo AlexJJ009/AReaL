@@ -34,6 +34,8 @@ class _DataLoader(_Stateful):
 class _FakeEngine:
     def __init__(self, initial: float | None = None):
         self.loaded_paths = []
+        self.loaded_with_optim = []
+        self.saved_with_optim = []
         self.connected = []
         self.updated_versions = []
         self.versions = []
@@ -51,6 +53,7 @@ class _FakeEngine:
 
     def load(self, meta) -> None:
         self.loaded_paths.append(meta.path)
+        self.loaded_with_optim.append(meta.with_optim)
         state_path = Path(meta.path) / "state.pt"
         if state_path.exists():
             assert self.param is not None
@@ -58,13 +61,23 @@ class _FakeEngine:
             assert self.scheduler is not None
             state = torch.load(state_path, map_location="cpu", weights_only=True)
             self.param.data.copy_(state["param"])
-            self.optimizer.load_state_dict(state["optimizer"])
-            self.scheduler.load_state_dict(state["scheduler"])
+            if meta.with_optim:
+                self.optimizer.load_state_dict(state["optimizer"])
+                self.scheduler.load_state_dict(state["scheduler"])
 
     def save(self, meta) -> None:
+        self.saved_with_optim.append(meta.with_optim)
         Path(meta.path).mkdir(parents=True, exist_ok=True)
         if self.param is not None:
-            torch.save(self.state_dict(), Path(meta.path) / "state.pt")
+            state = {"param": self.param.detach().clone()}
+            if meta.with_optim:
+                state.update(
+                    {
+                        "optimizer": self.optimizer.state_dict(),
+                        "scheduler": self.scheduler.state_dict(),
+                    }
+                )
+            torch.save(state, Path(meta.path) / "state.pt")
 
     def connect_engine(self, inference_engine, meta: WeightUpdateMeta) -> None:
         self.connected.append((inference_engine, meta.version))
@@ -111,7 +124,12 @@ class _FakeInferenceEngine:
         self.versions.append(version)
 
 
-def _handler(tmp_path: Path, *, mode: str = "on") -> RecoverHandler:
+def _handler(
+    tmp_path: Path,
+    *,
+    mode: str = "on",
+    optimizer_roles: set[str] | None = None,
+) -> RecoverHandler:
     config = RecoverConfig(
         experiment_name="exp",
         trial_name="trial",
@@ -123,7 +141,7 @@ def _handler(tmp_path: Path, *, mode: str = "on") -> RecoverHandler:
         dataset_size=4,
         train_batch_size=1,
     )
-    return RecoverHandler(config, ft_spec)
+    return RecoverHandler(config, ft_spec, optimizer_roles=optimizer_roles)
 
 
 def _info(
@@ -158,8 +176,12 @@ def _write_recover_tree(
     global_step: int = 4,
     roles: tuple[str, ...] = ("default", "critic"),
     engine_states: dict[str, dict] | None = None,
+    optimizer_roles: set[str] | None = None,
 ) -> RecoverHandler:
-    handler = _handler(tmp_path)
+    handler = _handler(tmp_path, optimizer_roles=optimizer_roles)
+    trainer_state = dict(trainer_state or {})
+    if optimizer_roles is not None:
+        trainer_state["_recover_optimizer_roles"] = sorted(optimizer_roles)
     recover_info_path = Path(
         RecoverHandler.recover_info_path("exp", "trial", str(tmp_path))
     )
@@ -227,8 +249,10 @@ def test_recover_dump_force_writes_without_configured_cadence(tmp_path):
     handler = _handler(tmp_path)
     step_info = StepInfo(epoch=0, epoch_step=0, global_step=0, steps_per_epoch=4)
 
+    actor = _FakeEngine()
+    critic = _FakeEngine()
     handler.dump(
-        {"default": _FakeEngine(), "critic": _FakeEngine()},
+        {"default": actor, "critic": critic},
         step_info,
         _Stateful({"saver": "state"}),
         _Stateful({"evaluator": "state"}),
@@ -243,6 +267,59 @@ def test_recover_dump_force_writes_without_configured_cadence(tmp_path):
     )
     assert loaded.last_step_info.global_step == 0
     assert loaded.trainer_state == {"policy_version": 1}
+    assert actor.saved_with_optim == [True]
+    assert critic.saved_with_optim == [True]
+
+
+def test_recover_role_scoped_optimizer_saves_model_only_actor_full_critic(tmp_path):
+    handler = _handler(tmp_path, optimizer_roles={"critic"})
+    step_info = StepInfo(epoch=0, epoch_step=0, global_step=0, steps_per_epoch=4)
+    actor = _FakeEngine(initial=1.0)
+    critic = _FakeEngine(initial=2.0)
+
+    handler.dump(
+        {"default": actor, "critic": critic},
+        step_info,
+        _Stateful({"saver": "state"}),
+        _Stateful({"evaluator": "state"}),
+        _Stateful({"stats": "state"}),
+        _DataLoader({"loader": "state"}),
+        trainer_state={
+            "policy_version": 0,
+            "num_critic_only_steps": 4,
+        },
+        force=True,
+    )
+
+    actor_state = torch.load(
+        Path(
+            Saver.get_recover_checkpoint_path(
+                "exp", "trial", str(tmp_path), name="default"
+            )
+        )
+        / "state.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    critic_state = torch.load(
+        Path(
+            Saver.get_recover_checkpoint_path(
+                "exp", "trial", str(tmp_path), name="critic"
+            )
+        )
+        / "state.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+
+    assert actor.saved_with_optim == [False]
+    assert critic.saved_with_optim == [True]
+    assert actor_state.keys() == {"param"}
+    assert {"param", "optimizer", "scheduler"} <= critic_state.keys()
+    loaded = RecoverInfo.load(
+        RecoverHandler.recover_info_path("exp", "trial", str(tmp_path))
+    )
+    assert loaded.trainer_state["_recover_optimizer_roles"] == ["critic"]
 
 
 def test_recover_load_rejects_warmup_config_mismatch(tmp_path):
@@ -344,6 +421,74 @@ def test_recover_load_restores_real_torch_state_for_actor_and_critic(tmp_path):
     assert actor.versions == [3]
     assert critic.versions == [3]
     assert rollout.versions == [3]
+
+
+def test_recover_role_scoped_optimizer_loads_model_only_actor_full_critic(tmp_path):
+    source_actor = _FakeEngine(initial=1.0)
+    source_critic = _FakeEngine(initial=2.0)
+    for _ in range(2):
+        source_actor.train_step()
+    for _ in range(5):
+        source_critic.train_step()
+    handler = _write_recover_tree(
+        tmp_path,
+        trainer_state={"policy_version": 0, "num_critic_only_steps": 8},
+        global_step=4,
+        engine_states={
+            "default": source_actor.state_dict(),
+            "critic": source_critic.state_dict(),
+        },
+        optimizer_roles={"critic"},
+    )
+    actor = _FakeEngine(initial=-1.0)
+    critic = _FakeEngine(initial=-2.0)
+    actor_optimizer_before = actor.optimizer.state_dict()
+
+    handler.load(
+        {"default": actor, "critic": critic},
+        _Stateful(),
+        _Stateful(),
+        _Stateful(),
+        _DataLoader(),
+        expected_trainer_state={"num_critic_only_steps": 8},
+    )
+
+    assert actor.loaded_with_optim == [False]
+    assert critic.loaded_with_optim == [True]
+    torch.testing.assert_close(
+        actor.param.detach(), source_actor.param.detach(), rtol=0.0, atol=0.0
+    )
+    _assert_state_equal(actor.optimizer.state_dict(), actor_optimizer_before)
+    _assert_state_equal(critic.state_dict(), source_critic.state_dict())
+
+
+def test_recover_rejects_optimizer_role_policy_mismatch_before_loading_weights(
+    tmp_path,
+):
+    handler = _write_recover_tree(
+        tmp_path,
+        trainer_state={
+            "policy_version": 0,
+            "num_critic_only_steps": 8,
+            "_recover_optimizer_roles": ["critic"],
+        },
+        global_step=4,
+    )
+    actor = _FakeEngine()
+    critic = _FakeEngine()
+
+    with pytest.raises(ValueError, match="optimizer role policy mismatch"):
+        handler.load(
+            {"default": actor, "critic": critic},
+            _Stateful(),
+            _Stateful(),
+            _Stateful(),
+            _DataLoader(),
+            expected_trainer_state={"num_critic_only_steps": 8},
+        )
+
+    assert actor.loaded_paths == []
+    assert critic.loaded_paths == []
 
 
 @pytest.mark.parametrize(

@@ -147,7 +147,7 @@ class Tau2PPOConfig(SaoPPOConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if self.algorithm not in ("collect", "grpo", "sao"):
+        if self.algorithm not in ("grpo", "sao", "critic"):
             raise ValueError(f"Unsupported τ² algorithm: {self.algorithm}")
         if self.episode_timeout_seconds <= 0:
             raise ValueError("episode_timeout_seconds must be positive")

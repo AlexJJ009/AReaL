@@ -1152,6 +1152,8 @@ class FSDPEngine(TrainEngine):
             raise RuntimeError(
                 "torch_memory_saver requires `enable_offload=True` in yaml config."
             )
+        if self.is_offload:
+            return
 
         self.get_device_stats().log("before offload model")
 
@@ -1170,6 +1172,8 @@ class FSDPEngine(TrainEngine):
 
         Ref: https://github.com/THUDM/slime/blob/main/slime/backends/fsdp_utils/actor.py
         """
+        if not self.is_offload:
+            return
 
         torch_memory_saver.resume()
 

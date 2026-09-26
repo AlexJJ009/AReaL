@@ -48,15 +48,17 @@ def test_official_loader_matches_all_three_domains():
         assert len(test) == OFFICIAL_SPLIT_SNAPSHOTS[domain]["test"]
 
 
-def test_collect_schedule_marks_task_disjoint_train_and_dev_per_domain():
-    rows = get_tau2_dataset(
-        ["airline", "retail", "telecom"],
-        split="train",
-        domain_effective_episodes={"airline": 2, "retail": 2, "telecom": 2},
-        algorithm="collect",
+def test_online_task_split_is_disjoint_per_domain():
+    kwargs = dict(
+        domain=["airline", "retail", "telecom"],
+        algorithm="sao",
+        experiment_mode="tune",
+        critic_tasks_per_domain=2,
         seed=42,
     )
-
+    rows = list(get_tau2_dataset(**kwargs, split="train")) + list(
+        get_tau2_dataset(**kwargs, split="dev")
+    )
     for domain in SUPPORTED_DOMAINS:
         selected = [row for row in rows if row["domain"] == domain]
         assert sorted(row["critic_split"] for row in selected) == ["dev", "train"]
@@ -211,9 +213,26 @@ async def test_cancellation_waits_for_episode_cleanup():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("policy_failure", [True, False])
+@pytest.mark.parametrize(
+    "policy_failure,policy_message",
+    [
+        (True, "areal_context_limit: context_length_exceeded"),
+        (
+            True,
+            "OpenAIException - Error code: 500 - {'detail': "
+            '"RuntimeError: Failed after 3 retries each. Payload: '
+            "{'sampling_params': {'max_new_tokens': 3773}, "
+            "'return_logprob': True}. Endpoint: /generate. Last error: "
+            "Requested token count exceeds the model's maximum context length "
+            "of 32768 tokens. You requested a total of 32768 tokens: "
+            "28995 tokens from the input messages and 3773 tokens for the "
+            'completion."}',
+        ),
+        (False, "user simulator exceeds max_total_tokens"),
+    ],
+)
 async def test_context_exhaustion_is_policy_failure_not_simulator_failure(
-    monkeypatch, policy_failure
+    monkeypatch, policy_failure, policy_message
 ):
     from litellm import BadRequestError
 
@@ -222,11 +241,7 @@ async def test_context_exhaustion_is_policy_failure_not_simulator_failure(
     def fake_completion(**kwargs):
         if kwargs["model"] == "openai/dummy" or not policy_failure:
             raise BadRequestError(
-                message=(
-                    "areal_context_limit: context_length_exceeded"
-                    if policy_failure
-                    else "user simulator exceeds max_total_tokens"
-                ),
+                message=policy_message,
                 model=kwargs["model"],
                 llm_provider="openai",
             )

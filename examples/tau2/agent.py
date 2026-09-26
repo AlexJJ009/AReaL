@@ -44,6 +44,28 @@ class Tau2InfrastructureError(RuntimeError):
     """Unexpected environment/evaluator failure that must not become reward zero."""
 
 
+def is_context_budget_error(exc: BaseException) -> bool:
+    """Classify known policy context exhaustion without retrying as infrastructure."""
+
+    visited: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        message = str(current).lower()
+        if CONTEXT_LENGTH_EXCEEDED_MARKER in message:
+            return True
+        if (
+            "requested token count exceeds" in message
+            and "maximum context length" in message
+            and "endpoint: /generate" in message
+            and "max_new_tokens" in message
+            and "return_logprob" in message
+        ):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 async def _await_without_orphaning(awaitable: Awaitable[_T]) -> _T:
     """Delay cancellation until a worker-thread operation has actually stopped."""
 
@@ -256,10 +278,9 @@ class Tau2Runner:
             simulation = await asyncio.to_thread(orchestrator.run)
             run_info.messages = simulation.messages
         except Exception as e:
-            message = str(e).lower()
             run_info.messages = orchestrator.get_trajectory()
             run_info.error = str(e)
-            if CONTEXT_LENGTH_EXCEEDED_MARKER in message:
+            if is_context_budget_error(e):
                 run_info.error_type = "task_budget"
                 run_info.terminated = False
                 run_info.truncated = True
@@ -349,7 +370,12 @@ class Tau2AgentWorkflow:
         """Retry transient provider failures, never scored model failures or bugs."""
         if not isinstance(exc, Tau2InfrastructureError):
             return False
-        if CONTEXT_LENGTH_EXCEEDED_MARKER in str(exc):
+        if is_context_budget_error(exc):
+            return False
+        # Provider context/config failures are deterministic, even when an
+        # OpenAI-compatible wrapper labels them as rate limiting.
+        message = str(exc).lower()
+        if "maximum context length" in message or "context_length_exceeded" in message:
             return False
         cause = exc.__cause__
         return isinstance(

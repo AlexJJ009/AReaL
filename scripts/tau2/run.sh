@@ -8,8 +8,8 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/tau2/run.sh qualification {collect|critic|mixed|airline|retail|telecom} [overrides...]
-  scripts/tau2/run.sh data {collect|critic} [overrides...]
+  scripts/tau2/run.sh qualification {mixed|airline|retail|telecom} [overrides...]
+  scripts/tau2/run.sh data critic [overrides...]
   scripts/tau2/run.sh policy {mixed|airline|retail|telecom} grpo [overrides...]
 
 Required runtime variables:
@@ -19,7 +19,7 @@ Required runtime variables:
   TAU2_DATA_DIR      data directory of the pinned official tau2 package
 
 Episode-producing run modes require TAU2_DEEPSEEK_ENV_FILE (mode 0600).
-qualification critic requires TAU2_EPISODES and TAU2_CRITIC_INIT_PATH.
+Critic training samples fresh train episodes and a fixed validation corpus online.
 
 With --check-config, run.sh skips the runtime CUDA environment and DeepSeek key load.
 EOF
@@ -167,33 +167,10 @@ case "${SELECTOR}" in
 esac
 
 case "${SELECTOR}:${MODE}" in
-  data:collect)
-    if ! has_check_config "$@"; then load_deepseek_key; fi
-    exec "${PYTHON_BIN}" "${REPO_ROOT}/examples/tau2/train.py" \
-      --config "${REPO_ROOT}/examples/tau2/config_critic_collect.yaml" "$@"
-    ;;
   data:critic)
-    : "${TAU2_EPISODES:?Set TAU2_EPISODES to the checked episode JSONL}"
-    export TAU2_CRITIC_INIT_PATH="${TAU2_ACTOR_PATH}"
+    if ! has_check_config "$@"; then load_deepseek_key; fi
     exec "${PYTHON_BIN}" "${REPO_ROOT}/scripts/tau2/train_critic.py" \
-      --config "${REPO_ROOT}/examples/tau2/config_critic_production.yaml" \
-      --episodes "${TAU2_EPISODES}" "$@"
-    ;;
-  qualification:collect)
-    if ! has_check_config "$@"; then
-      load_deepseek_key
-    fi
-    exec "${PYTHON_BIN}" "${REPO_ROOT}/examples/tau2/train.py" \
-      --config "${REPO_ROOT}/examples/tau2/config_critic_collect_qualification.yaml" \
-      "$@"
-    ;;
-  qualification:critic)
-    : "${TAU2_EPISODES:?Set TAU2_EPISODES to the checked six-episode JSONL file}"
-    : "${TAU2_CRITIC_INIT_PATH:?Set TAU2_CRITIC_INIT_PATH to the critic initialization}"
-    exec "${PYTHON_BIN}" "${REPO_ROOT}/scripts/tau2/train_critic.py" \
-      --config "${REPO_ROOT}/examples/tau2/config_critic_qualification.yaml" \
-      --episodes "${TAU2_EPISODES}" \
-      "$@"
+      --config "${REPO_ROOT}/examples/tau2/config_critic_production.yaml" "$@"
     ;;
   qualification:mixed)
     if ! has_check_config "$@"; then

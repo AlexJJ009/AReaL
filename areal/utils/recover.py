@@ -6,6 +6,7 @@ import inspect
 import json
 import os
 import pickle
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any
 
 import torch.distributed as dist
@@ -185,9 +186,19 @@ class RecoverInfo:
 
 
 class RecoverHandler:
-    def __init__(self, config: RecoverConfig, ft_spec: FinetuneSpec):
+    _OPTIMIZER_ROLES_STATE_KEY = "_recover_optimizer_roles"
+
+    def __init__(
+        self,
+        config: RecoverConfig,
+        ft_spec: FinetuneSpec,
+        optimizer_roles: Collection[str] | None = None,
+    ):
         self.config = config
         self.ft_spec = ft_spec
+        self.optimizer_roles = (
+            None if optimizer_roles is None else frozenset(optimizer_roles)
+        )
         self.last_step_info = StepInfo(
             epoch=-1,
             epoch_step=-1,
@@ -199,6 +210,11 @@ class RecoverHandler:
             freq_step=config.freq_steps,
             freq_sec=config.freq_secs,
         )
+
+    def _optimizer_roles_state(self) -> list[str] | None:
+        if self.optimizer_roles is None:
+            return None
+        return sorted(self.optimizer_roles)
 
     @staticmethod
     def recover_info_path(
@@ -341,6 +357,11 @@ class RecoverHandler:
             )
 
         self.last_step_info = step_info
+        trainer_state = dict(trainer_state or {})
+        optimizer_roles_state = self._optimizer_roles_state()
+        if optimizer_roles_state is not None:
+            trainer_state[self._OPTIMIZER_ROLES_STATE_KEY] = optimizer_roles_state
+
         recover_info = RecoverInfo(
             last_step_info=self.last_step_info,
             saver_info=saver.state_dict(),
@@ -348,7 +369,7 @@ class RecoverHandler:
             stats_logger_info=stats_logger.state_dict(),
             dataloader_info=dataloader.state_dict(),
             checkpoint_info=self.freq_ctl.state_dict(),
-            trainer_state=trainer_state or {},
+            trainer_state=trainer_state,
             rollout_input_state=rollout_input_state,
         )
 
@@ -422,6 +443,16 @@ class RecoverHandler:
                         f"Recovery trainer state mismatch for {key}: "
                         f"saved={observed}, configured={expected}"
                     )
+            saved_optimizer_roles = recover_info.trainer_state.get(
+                self._OPTIMIZER_ROLES_STATE_KEY
+            )
+            expected_optimizer_roles = self._optimizer_roles_state()
+            if saved_optimizer_roles != expected_optimizer_roles:
+                raise ValueError(
+                    "Recovery optimizer role policy mismatch: "
+                    f"saved={saved_optimizer_roles}, "
+                    f"configured={expected_optimizer_roles}"
+                )
             logger.info(f"Recovering from {recover_info.last_step_info.next()}.")
             saver.load_state_dict(recover_info.saver_info)
             self.freq_ctl.load_state_dict(recover_info.checkpoint_info)
@@ -528,7 +559,9 @@ class RecoverHandler:
             name=name,
         )
         weight_format = "dcp"
-        with_optim = not self.config.no_save_optim
+        with_optim = not self.config.no_save_optim and (
+            self.optimizer_roles is None or name in self.optimizer_roles
+        )
         meta = SaveLoadMeta(
             path=path,
             weight_format=weight_format,
@@ -556,7 +589,9 @@ class RecoverHandler:
         if not os.path.exists(path):
             raise FileNotFoundError(f"Checkpoint path {path} does not exist.")
         weight_format = "dcp"
-        with_optim = not self.config.no_load_optim
+        with_optim = not self.config.no_load_optim and (
+            self.optimizer_roles is None or name in self.optimizer_roles
+        )
         meta = SaveLoadMeta(
             path=path,
             weight_format=weight_format,

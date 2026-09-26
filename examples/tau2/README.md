@@ -6,13 +6,12 @@ runtime manifest is required.
 
 ## Training entrypoints
 
-| Entry                                                                  | Purpose                                                                                |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `scripts/tau2/train_mixed.sh`                                          | Async GRPO on all three official train domains                                         |
-| `scripts/tau2/train_airline.sh`, `train_retail.sh`, `train_telecom.sh` | The same GRPO recipe restricted to one domain                                          |
-| `scripts/tau2/collect_critic.sh`                                       | One frozen-policy episode per official train task, with task-disjoint train/dev labels |
-| `scripts/tau2/train_critic.sh`                                         | Offline mixed critic fitting from collected JSONL                                      |
-| `scripts/tau2/run.sh qualification mixed`                              | Historical three-episode SAO integration recipe                                        |
+| Entry                                                                  | Purpose                                                     |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------- |
+| `scripts/tau2/train_mixed.sh`                                          | Async GRPO on all three official train domains              |
+| `scripts/tau2/train_airline.sh`, `train_retail.sh`, `train_telecom.sh` | The same GRPO recipe restricted to one domain               |
+| `scripts/tau2/train_critic.sh`                                         | Online mixed critic training with fresh episodes each epoch |
+| `scripts/tau2/run.sh qualification mixed`                              | Historical three-episode SAO integration recipe             |
 
 GRPO uses 4 training GPUs, 3 rollout GPUs, and 1 dedicated checkpoint-evaluation GPU. A
 full training batch is 8 prompts x 8 trajectories = 64 episodes. The last epoch batch
@@ -31,14 +30,28 @@ with fixed settings; test results never select a checkpoint. The dedicated evalu
 reports per-domain coverage and rewards, and rejects missing/infra-failed episodes
 instead of reporting a partial mean.
 
-Critic collection defaults to one episode for each of178tasks:24/59/59train
-and6/15/15dev. It mixes domains and retains valid model failures. Offline fit uses two
-epochs, global batch16 including the tail (18 updates), validation at 0/5/10/15/18 and
-checkpoints every5steps and final. Qwen3.5-4B initializes a fresh scalar head; attention
-remains frozen. LR5e-6, token-mean plain MSE and optimizer settings match the latest SAO
-recipe. Dev reports contain overall and per-domain MSE, explained variance, and
-distributed gradient norm from a backward-only diagnostic (no optimizer step). The live
-training gradient norm is reported separately. EV is undefined for constant targets.
+Critic formal training uses all 178 official train tasks and fixed official test100
+trajectories. Tuning uses142train/36dev (24/59/59 train and6/15/15dev). Each of two
+epochs samples a fresh episode for each training task, in the same task order and batch
+membership. Each batch waits for its complete ordered results, then updates the critic
+once. Batch16 retains the tail: formal has356real training episodes, 24updates and
+a2-task tail; tune has284episodes,18updates and a14-task tail. The actor remains fixed.
+Physical tail replication preserves equal weighting and is not counted as additional
+sampling.
+
+Validation trajectories are collected once and reused at step0, every5steps and final;
+checkpoints are saved every5steps and final. Formal test metrics never select a
+checkpoint or tune parameters. Qwen3.5-4B initializes a fresh scalar head with frozen
+attention. LR5e-6, constant/no-warmup schedule and token-mean plain MSE retain the
+agreed critic recipe. Overall and per-domain metrics include MSE, explained variance and
+gradient norm; validation diagnostics do not update parameters. EV is undefined for
+constant targets. Completing training is distinct from qualifying critic quality.
+
+The previous collect-once/offline-train replay recipe is retired. Old episode dumps and
+checkpoints are historical evidence, not inputs to the current training loop. Resource
+candidate:4training GPUs with actor/critic colocation and phase offload, plus4rollout
+GPUs. Validation reuses the training critic. This candidate still needs native32K, tail,
+save and recovery verification before capacity claims.
 
 ## Runtime and configuration
 
@@ -60,13 +73,11 @@ model snapshot and loads no provider credential. Ordinary overrides are forwarde
 existing config parser. Run directories are stable so `recover.mode=auto` can resume the
 same run. Qualification mode explicitly creates a new temporary attempt directory.
 
-Set `TAU2_EPISODES` to the checked JSONL for critic fitting. The production critic
-always starts from the pinned actor backbone rather than an old math critic. Use
-`scripts/tau2/critic_data.py` to check/combine dumps, and `--require-full-coverage` on
-fitting when enforcing the whole official pool. Collection and fit are separate Pueue
-jobs; offline fit never calls DeepSeek or replays tools. Existing AReaL initialization
-still reserves rollout workers for the replay workflow; this is a reuse tradeoff, not a
-critic throughput optimum.
+Use `scripts/tau2/train_critic.sh --check-config` to inspect the online critic recipe,
+and `scripts/tau2/train_critic.sh` to run it. The entrypoint loads the same DeepSeek
+credentials as policy training. It does not accept sealed training episodes as a
+substitute for new epoch sampling. Resume uses the same run directory and native
+recovery state, preserving the fixed validation corpus and the task split.
 
 The runner sources `scripts/sao/runtime_env.sh` and the existing `.venv`. Do not run
 `uv run` in this qualified environment: lock synchronization would replace the installed
@@ -272,15 +283,6 @@ strictly below its32768-token context window. The policy request leaves one slot
 exhausted requests return HTTP400 `context_length_exceeded`, never a rate-limit retry.
 The episode receives reward0 with `truncated=true`, `bootstrap_mask=false`, and its
 existing generated prefix is retained.
-
-Critic collection and fitting use two training ranks (plus six rollout ranks), so
-batch16 and the official2/14-row tails dispatch without dropping or duplicating tasks.
-Their rollout input iterators stop at epoch boundaries.
-
-Collection now drives the existing rollout controller directly: no actor backward,
-optimizer step, or weight update runs merely to export an episode. The existing trainer
-initialization is reused, but learning starts only in offline critic fitting. Both GRPO
-and critic fitting use zero warmup steps and zero warmup proportion.
 
 GRPO consumes finite epochs. For the two-prompt tail on four training ranks, complete
 prompt groups are uniformly replicated for physical dispatch only; no extra episodes are

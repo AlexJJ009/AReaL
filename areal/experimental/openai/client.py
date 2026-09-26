@@ -834,7 +834,9 @@ class AsyncCompletionsWithReward(BaseAsyncCompletions):
 
         max_new_tokens = None
         if max_total_tokens_final is not None:
-            max_new_tokens = max_total_tokens_final - len(prompt_token_ids)
+            # SGLang rejects prompt + completion >= the configured context
+            # capacity. Reserve its final slot before constructing the request.
+            max_new_tokens = max_total_tokens_final - len(prompt_token_ids) - 1
             if max_new_tokens <= 0:
                 if (
                     interaction is not None
@@ -1260,7 +1262,8 @@ class AsyncResponsesWithReward(BaseAsyncResponses):
         top_p_val = 1.0 if is_omitted(top_p) else (top_p or 1.0)
         max_new_tokens = None
         if self.engine_max_tokens is not None:
-            max_new_tokens = self.engine_max_tokens - len(prompt_token_ids)
+            # Match the strict backend bound used by chat completions.
+            max_new_tokens = self.engine_max_tokens - len(prompt_token_ids) - 1
             if max_new_tokens <= 0:
                 if interaction is not None and cache is not None and resp_id in cache:
                     # Remove the interaction from cache on failure

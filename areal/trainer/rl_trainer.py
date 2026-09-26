@@ -464,7 +464,21 @@ class PPOTrainer:
 
         # Set up save as HF model
         self.saver = Saver(config.saver, ft_spec)
-        self.recover_handler = RecoverHandler(config.recover, ft_spec)
+        recover_optimizer_roles = None
+        effective_train_steps = ft_spec.total_train_steps
+        if config.total_train_steps is not None:
+            effective_train_steps = min(effective_train_steps, config.total_train_steps)
+        if (
+            self.critic is not None
+            and effective_train_steps > 0
+            and config.num_critic_only_steps >= effective_train_steps
+        ):
+            recover_optimizer_roles = {"critic"}
+        self.recover_handler = RecoverHandler(
+            config.recover,
+            ft_spec,
+            optimizer_roles=recover_optimizer_roles,
+        )
 
         # Set up statistics logging (wandb, tensoboard, etc.)
         self.stats_logger = StatsLogger(config, ft_spec)
