@@ -165,6 +165,8 @@ def test_production_config_resolves_frozen_training_contract(monkeypatch, tmp_pa
     assert config.total_train_epochs == 2
     assert config.train_dataset.batch_size == 16
     assert config.train_dataset.drop_last is False
+    assert config.actor.backend == "fsdp:d2p1t1"
+    assert config.rollout.backend == "sglang:d6p1t1"
     assert config.critic is not None
     assert config.critic.freeze_critic_attention is True
     assert config.critic.optimizer.lr == pytest.approx(5.0e-6)
@@ -270,3 +272,15 @@ def test_fsdp_worker_exposes_critic_gradient_diagnostic():
     batch = [{"input_ids": [1, 2]}]
     assert engine.grad_norm(batch) == {"grad_norm": 3.0}
     assert calls == [batch]
+
+
+@pytest.mark.parametrize("n_rows", [16, 14, 2])
+def test_critic_two_rank_dispatch_preserves_full_and_tail_batches(n_rows):
+    from areal.infra.controller.train_controller import _dispatch_tensors
+
+    rows = [
+        {"attention_mask": torch.ones((1, 2), dtype=torch.bool)} for _ in range(n_rows)
+    ]
+    shards, indices = _dispatch_tensors(rows, dp_size=2)
+    assert [len(shard) for shard in shards] == [n_rows // 2] * 2
+    assert sorted(i for shard in indices for i in shard) == list(range(n_rows))

@@ -20,6 +20,7 @@ from examples.tau2.contracts import (
     normalize_domains,
     remaining_generation_budget,
     resolve_pinned_hf_snapshot,
+    tau2_qwen_concat_prefix_matcher,
     validate_episode_batch,
     validate_installed_tau2_revision,
 )
@@ -137,22 +138,120 @@ def test_task_rows_keep_domain_identity_without_dataset_duplication():
 
 @pytest.mark.parametrize(
     "prompt_tokens,expected",
-    [(0, 4096), (28672, 4096), (32767, 1)],
+    [(0, 4096), (28671, 4096), (28672, 4095), (32766, 1)],
 )
 def test_generation_budget_enforces_32k_total_and_4k_response(
     prompt_tokens: int, expected: int
 ):
-    """The final consumer budget is min(4K, 32K minus rendered prompt)."""
+    """The final consumer leaves SGLang's reserved slot inside the 32K window."""
 
     assert remaining_generation_budget(prompt_tokens) == expected
 
 
-@pytest.mark.parametrize("prompt_tokens", [32768, 32769])
+@pytest.mark.parametrize("prompt_tokens", [32767, 32768, 32769])
 def test_generation_budget_rejects_context_boundary(prompt_tokens: int):
-    """L=32768 and L=32769 are rejected before generation."""
+    """No request is sent once the usable context has been exhausted."""
 
     with pytest.raises(ValueError, match="context_limit"):
         remaining_generation_budget(prompt_tokens)
+
+
+def _transfer_tool_call_message(
+    summary: str,
+    *,
+    call_id: str = "call_parent",
+    ensure_ascii: bool = False,
+    include_top_level_name: bool = False,
+) -> dict:
+    tool_call = {
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": "transfer_to_human_agents",
+            "arguments": json.dumps({"summary": summary}, ensure_ascii=ensure_ascii),
+        },
+    }
+    if include_top_level_name:
+        tool_call["name"] = "transfer_to_human_agents"
+    return {
+        "role": "assistant",
+        "content": "<think>Need transfer.</think>\n\n",
+        "tool_calls": [tool_call],
+    }
+
+
+def test_tau2_prefix_matcher_accepts_actual_toolcall_continuation_shape():
+    """The task-44 transfer tool call remains one parent-child trajectory."""
+
+    summary = "Transfer S61CZX; only H8Q05L has duration ≤3 hours — upgrade done."
+    base_messages = [
+        {"role": "system", "content": "You are an airline agent."},
+        {"role": "user", "content": "I need help changing my booking."},
+    ]
+    parent_data = [
+        *base_messages,
+        _transfer_tool_call_message(summary, ensure_ascii=False),
+    ]
+    child_messages = [
+        *base_messages,
+        _transfer_tool_call_message(
+            summary,
+            ensure_ascii=True,
+            include_top_level_name=True,
+        ),
+        {
+            "role": "tool",
+            "tool_call_id": "call_parent",
+            "content": "Transfer successful",
+        },
+        {
+            "role": "assistant",
+            "content": "YOU ARE BEING TRANSFERRED TO A HUMAN AGENT. PLEASE HOLD ON.",
+        },
+    ]
+
+    assert tau2_qwen_concat_prefix_matcher(parent_data, child_messages)
+
+
+def test_tau2_prefix_matcher_rejects_different_tool_arguments():
+    """Tool-call normalization does not merge distinct calls or summaries."""
+
+    base_messages = [{"role": "system", "content": "You are an airline agent."}]
+    parent_data = [
+        *base_messages,
+        _transfer_tool_call_message("Transfer customer S61CZX."),
+    ]
+    child_messages = [
+        *base_messages,
+        _transfer_tool_call_message(
+            "Transfer customer ABC123.",
+            ensure_ascii=True,
+            include_top_level_name=True,
+        ),
+    ]
+
+    assert not tau2_qwen_concat_prefix_matcher(parent_data, child_messages)
+
+
+def test_tau2_prefix_matcher_rejects_different_tool_call_ids():
+    parent_data = [_transfer_tool_call_message("same summary", call_id="call_parent")]
+    child_messages = [
+        _transfer_tool_call_message(
+            "same summary",
+            call_id="call_child",
+            ensure_ascii=True,
+            include_top_level_name=True,
+        )
+    ]
+
+    assert not tau2_qwen_concat_prefix_matcher(parent_data, child_messages)
+
+
+def test_tau2_prefix_matcher_keeps_non_tool_content_exact():
+    parent_data = [{"role": "assistant", "content": "A"}]
+    child_messages = [{"role": "assistant", "content": "B"}]
+
+    assert not tau2_qwen_concat_prefix_matcher(parent_data, child_messages)
 
 
 def test_policy_request_binds_non_thinking_and_preserves_telecom_user_tools():

@@ -31,6 +31,7 @@ from areal.experimental.openai.anthropic import (
     translate_anthropic_stream,
 )
 from areal.experimental.openai.client import ArealOpenAI
+from areal.experimental.openai.types import ContextLengthExceededError
 from areal.infra.rpc.serialization import deserialize_value, serialize_value
 from areal.infra.utils.http import validate_admin_api_key
 from areal.utils import name_resolve, names, seeding
@@ -657,6 +658,8 @@ async def _call_client_create(
 
     try:
         return await create_fn(areal_cache=session_data.completions, **kwargs)
+    except ContextLengthExceededError as e:
+        raise HTTPException(status_code=400, detail={"code": e.code, "message": str(e)})
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
@@ -715,6 +718,10 @@ async def chat_completions(
                     "X-Accel-Buffering": "no",
                 },
             )
+        except HTTPException:
+            if openai_stream is not None and hasattr(openai_stream, "aclose"):
+                await openai_stream.aclose()
+            raise
         except Exception as e:
             if openai_stream is not None and hasattr(openai_stream, "aclose"):
                 await openai_stream.aclose()
@@ -863,6 +870,11 @@ async def anthropic_messages(
                     "X-Accel-Buffering": "no",
                 },
             )
+        except HTTPException:
+            # Clean up stream on error during setup
+            if openai_stream is not None and hasattr(openai_stream, "aclose"):
+                await openai_stream.aclose()
+            raise
         except Exception as e:
             # Clean up stream on error during setup
             if openai_stream is not None and hasattr(openai_stream, "aclose"):

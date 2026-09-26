@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import functools
 import json
 import math
 import os
@@ -626,6 +627,9 @@ def main(argv: list[str]) -> None:
         train_dataset=Dataset.from_list(train_rows),
         valid_dataset=Dataset.from_list(dev_rows),
     ) as trainer:
+        trainer.rollout.prepare_batch = functools.partial(
+            trainer.rollout.prepare_batch, finite_epoch=True, fail_on_rejection=True
+        )
         recovered_completed = (
             trainer.recover_info.last_step_info.next().global_step
             if trainer.recover_info is not None

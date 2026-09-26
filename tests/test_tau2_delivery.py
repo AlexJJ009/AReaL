@@ -306,3 +306,22 @@ def test_initial_eval_consumes_trigger_without_requesting_unsaved_step1(
         if step < 19:
             assert queued == ([] if recovering else ["backbone"])
     assert queued == ([20] if recovering else ["backbone", 20])
+
+
+def test_context_error_wrapped_as_rate_limit_does_not_retry():
+    import litellm
+
+    from examples.tau2.agent import Tau2AgentWorkflow, Tau2InfrastructureError
+
+    cause = litellm.RateLimitError(
+        message="areal_context_limit: exhausted", model="dummy", llm_provider="openai"
+    )
+    failure = Tau2InfrastructureError(str(cause))
+    failure.__cause__ = cause
+    assert not Tau2AgentWorkflow.should_retry_episode(failure)
+    transient = litellm.RateLimitError(
+        message="Too many requests", model="dummy", llm_provider="openai"
+    )
+    failure = Tau2InfrastructureError(str(transient))
+    failure.__cause__ = transient
+    assert Tau2AgentWorkflow.should_retry_episode(failure)

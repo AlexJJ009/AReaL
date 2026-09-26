@@ -266,3 +266,13 @@ to reproduce results from the [AReaL Tau2 paper](https://arxiv.org/abs/2601.2260
 directly download the resulting model
 [AReaL-SEA-235B-A22B](https://huggingface.co/inclusionAI/AReaL-SEA-235B-A22B) trained
 with this data and pipeline.
+
+The current non-speculative SGLang server requires prompt plus requested completion
+strictly below its32768-token context window. The policy request leaves one slot unused;
+exhausted requests return HTTP400 `context_length_exceeded`, never a rate-limit retry.
+The episode receives reward0 with `truncated=true`, `bootstrap_mask=false`, and its
+existing generated prefix is retained.
+
+Critic collection and fitting use two training ranks (plus six rollout ranks), so
+batch16 and the official2/14-row tails dispatch without dropping or duplicating tasks.
+Their rollout input iterators stop at epoch boundaries.

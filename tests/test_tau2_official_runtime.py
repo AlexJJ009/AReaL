@@ -203,3 +203,64 @@ async def test_cancellation_waits_for_episode_cleanup():
     release.set()
     with pytest.raises(asyncio.CancelledError):
         await workflow_task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy_failure", [True, False])
+async def test_context_exhaustion_is_policy_failure_not_simulator_failure(
+    monkeypatch, policy_failure
+):
+    from litellm import BadRequestError
+
+    from examples.tau2.agent import Tau2InfrastructureError
+
+    def fake_completion(**kwargs):
+        if kwargs["model"] == "openai/dummy" or not policy_failure:
+            raise BadRequestError(
+                message=(
+                    "areal_context_limit: context_length_exceeded"
+                    if policy_failure
+                    else "user simulator exceeds max_total_tokens"
+                ),
+                model=kwargs["model"],
+                llm_provider="openai",
+            )
+        return ModelResponse(
+            model=kwargs["model"],
+            choices=[
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Help me."},
+                    "finish_reason": "stop",
+                }
+            ],
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        )
+
+    monkeypatch.setattr(llm_utils, "completion", fake_completion)
+    runner = Tau2Runner(
+        econfig=Tau2EnvConfig(
+            domain="telecom",
+            user_llm_base_url="https://user.invalid/v1",
+            user_llm="openai/test-user",
+        ),
+        gen_args={"max_total_tokens": 32768, "max_completion_tokens": 4096},
+        agent_base_url="http://policy.invalid/v1",
+        agent_api_key="session",
+        user_api_key="user",
+        timeout=30.0,
+    )
+    assert runner._agent_llm_args()["max_total_tokens"] == 32767
+    task = _get_task(
+        "telecom", get_tau2_dataset("telecom", split="train")[0]["task_id"], "train"
+    )
+    if not policy_failure:
+        with pytest.raises(Tau2InfrastructureError):
+            await runner.run(task)
+        return
+    result = await runner.run(task)
+    assert result.reward == 0.0
+    assert result.truncated and not result.terminated
+    assert result.error_type == "task_budget"
+    assert result.stop_reason == "context_limit"
+    assert result.reward_info is None

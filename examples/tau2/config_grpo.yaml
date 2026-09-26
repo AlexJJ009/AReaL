@@ -58,6 +58,7 @@ rollout:
     chat_template_type: concat
     engine_max_tokens: 32768
     export_style: concat
+    prefix_matcher: examples.tau2.contracts.tau2_qwen_concat_prefix_matcher
     turn_discount: 1.0
 
 evaluation_rollout:
@@ -82,6 +83,7 @@ evaluation_rollout:
     chat_template_type: concat
     engine_max_tokens: 32768
     export_style: concat
+    prefix_matcher: examples.tau2.contracts.tau2_qwen_concat_prefix_matcher
     turn_discount: 1.0
 
 gconfig:

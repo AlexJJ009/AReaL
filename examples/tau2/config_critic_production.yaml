@@ -19,7 +19,7 @@ cluster:
 scheduler: {type: local}
 
 rollout:
-  backend: sglang:d5p1t1
+  backend: sglang:d6p1t1
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   max_concurrent_rollouts: 1
@@ -46,7 +46,7 @@ gconfig:
 eval_gconfig: null
 
 actor:
-  backend: fsdp:d3p1t1
+  backend: fsdp:d2p1t1
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   path: ${oc.env:TAU2_ACTOR_PATH}

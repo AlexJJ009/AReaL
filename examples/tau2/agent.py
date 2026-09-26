@@ -28,7 +28,10 @@ from tau2.user.user_simulator_base import HalfDuplexUser
 from examples.tau2.contracts import bind_policy_request
 from examples.tau2.utils import Tau2EnvConfig, Tau2RunInfo
 
-from areal.experimental.openai.types import AgentWorkflowResult
+from areal.experimental.openai.types import (
+    CONTEXT_LENGTH_EXCEEDED_MARKER,
+    AgentWorkflowResult,
+)
 from areal.utils import logging
 
 logger = logging.getLogger("Tau2Agent")
@@ -135,6 +138,12 @@ class Tau2Runner:
             api_key=self.agent_api_key,
             timeout=min(self.timeout, 120.0),
             num_retries=0,
+        )
+        # SGLang rejects prompt + max_new_tokens >= context_length. Keep the
+        # server's 32K window, reserving its final slot at the policy consumer.
+        args["max_total_tokens"] = min(
+            args.get("max_total_tokens", self.econfig.context_window_tokens),
+            self.econfig.context_window_tokens - 1,
         )
         return args
 
@@ -244,11 +253,17 @@ class Tau2Runner:
             message = str(e).lower()
             run_info.messages = orchestrator.get_trajectory()
             run_info.error = str(e)
-            if "context_limit" in message or "exceeds max_total_tokens" in message:
+            if CONTEXT_LENGTH_EXCEEDED_MARKER in message:
                 run_info.error_type = "task_budget"
                 run_info.terminated = False
                 run_info.truncated = True
                 run_info.stop_reason = "context_limit"
+                logger.info(
+                    "FINISHED SIMULATION: Domain: %s, Task: %s, Reward: 0.0, "
+                    "Stop reason: context_limit",
+                    domain,
+                    task.id,
+                )
                 return run_info
             raise Tau2InfrastructureError(
                 f"τ² simulation failed for {domain}/{task.id}: {type(e).__name__}: {e}"
@@ -327,6 +342,8 @@ class Tau2AgentWorkflow:
     def should_retry_episode(exc: Exception) -> bool:
         """Retry transient provider failures, never scored model failures or bugs."""
         if not isinstance(exc, Tau2InfrastructureError):
+            return False
+        if CONTEXT_LENGTH_EXCEEDED_MARKER in str(exc):
             return False
         cause = exc.__cause__
         return isinstance(

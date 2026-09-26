@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -292,3 +293,71 @@ class TestExportTrajectories:
             )
             assert resp_export.status_code == 200
             assert "interactions" in resp_export.json()
+
+
+class _ContextLimitCreate:
+    async def create(self, *, messages, areal_cache=None, temperature=1.0, top_p=1.0):
+        from areal.experimental.openai.types import ContextLengthExceededError
+
+        raise ContextLengthExceededError(
+            prompt_len=8, limit_name="max_total_tokens", limit=8
+        )
+
+
+class _PlainValueErrorCreate:
+    async def create(self, *, messages, areal_cache=None, temperature=1.0, top_p=1.0):
+        raise ValueError("areal_context_limit appears in an unrelated ValueError")
+
+
+class _FakeOpenAIClient:
+    def __init__(self, create):
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=create.create))
+
+
+def _install_session(monkeypatch, create):
+    session_id = "session-0"
+    api_key = "session-key"
+    srv._session_cache[session_id] = SessionData(session_id=session_id)
+    srv._api_key_to_session[api_key] = session_id
+    srv._session_to_api_key[session_id] = api_key
+    monkeypatch.setattr(srv, "_openai_client", _FakeOpenAIClient(create))
+    return {"Authorization": f"Bearer {api_key}"}
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_context_limit_returns_structured_http_400(monkeypatch):
+    """Typed context preflight errors are user-input 400s, not infra 500s."""
+
+    headers = _install_session(monkeypatch, _ContextLimitCreate())
+
+    async with _client() as client:
+        resp = await client.post(
+            "/chat/completions",
+            headers=headers,
+            json={"model": "ignored", "messages": [{"role": "user", "content": "x"}]},
+        )
+
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert detail["code"] == "context_length_exceeded"
+    assert "areal_context_limit" in detail["message"]
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_plain_value_error_with_marker_stays_500(monkeypatch):
+    """Only the typed exception is classified as context length exceeded."""
+
+    headers = _install_session(monkeypatch, _PlainValueErrorCreate())
+
+    async with _client() as client:
+        resp = await client.post(
+            "/chat/completions",
+            headers=headers,
+            json={"model": "ignored", "messages": [{"role": "user", "content": "x"}]},
+        )
+
+    assert resp.status_code == 500
+    assert (
+        resp.json()["detail"]
+        == "areal_context_limit appears in an unrelated ValueError"
+    )

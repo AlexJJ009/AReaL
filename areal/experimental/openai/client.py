@@ -55,7 +55,10 @@ from areal.api import ModelRequest, ModelResponse
 from areal.api.cli_args import GenerationHyperparameters
 from areal.experimental.openai.cache import InteractionCache
 from areal.experimental.openai.tool_call_parser import process_tool_calls
-from areal.experimental.openai.types import InteractionWithTokenLogpReward
+from areal.experimental.openai.types import (
+    ContextLengthExceededError,
+    InteractionWithTokenLogpReward,
+)
 from areal.utils import logging
 from areal.utils.hf_utils import apply_chat_template
 
@@ -840,8 +843,10 @@ class AsyncCompletionsWithReward(BaseAsyncCompletions):
                 ):
                     # Remove the interaction from cache on failure
                     del cache[completion_id]
-                raise ValueError(
-                    f"len of prompt tokens {len(prompt_token_ids)} exceeds max_total_tokens {max_total_tokens_final}"
+                raise ContextLengthExceededError(
+                    prompt_len=len(prompt_token_ids),
+                    limit_name="max_total_tokens",
+                    limit=max_total_tokens_final,
                 )
         if not is_omitted(max_completion_tokens):
             if max_new_tokens is None:
@@ -1260,8 +1265,10 @@ class AsyncResponsesWithReward(BaseAsyncResponses):
                 if interaction is not None and cache is not None and resp_id in cache:
                     # Remove the interaction from cache on failure
                     del cache[resp_id]
-                raise ValueError(
-                    f"len of prompt tokens {len(prompt_token_ids)} exceeds engine_max_tokens {self.engine_max_tokens}"
+                raise ContextLengthExceededError(
+                    prompt_len=len(prompt_token_ids),
+                    limit_name="engine_max_tokens",
+                    limit=self.engine_max_tokens,
                 )
         if not is_omitted(max_output_tokens):
             if max_new_tokens is None:

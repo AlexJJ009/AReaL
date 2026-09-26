@@ -16,6 +16,7 @@ critic_tasks_per_domain: null
 infra_retries: 1
 
 rollout:
+  backend: sglang:d6p1t1
   max_concurrent_rollouts: 16
   queue_size: 64
   consumer_batch_size: 16
@@ -25,6 +26,7 @@ sglang:
   max_running_requests: 16
 
 actor:
+  backend: fsdp:d2p1t1
   mb_spec: {n_mbs: 1, max_tokens_per_mb: 32768}
 
 train_dataset:

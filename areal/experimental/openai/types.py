@@ -13,6 +13,24 @@ from openai.types.responses.response_input_param import ResponseInputParam
 
 from areal.api import ModelResponse
 
+CONTEXT_LENGTH_EXCEEDED_MARKER = "areal_context_limit"
+
+
+class ContextLengthExceededError(ValueError):
+    """Raised before generation when the prompt leaves no room for output."""
+
+    code = "context_length_exceeded"
+    marker = CONTEXT_LENGTH_EXCEEDED_MARKER
+
+    def __init__(self, *, prompt_len: int, limit_name: str, limit: int):
+        self.prompt_len = prompt_len
+        self.limit_name = limit_name
+        self.limit = limit
+        super().__init__(
+            f"{self.marker}: prompt_tokens={prompt_len} exceeds "
+            f"{limit_name}={limit}; max_new_tokens<=0 before generation"
+        )
+
 
 @dataclass(frozen=True)
 class AgentWorkflowResult:

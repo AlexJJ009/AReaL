@@ -1,6 +1,7 @@
 """Training script for Tau2 benchmark with AReaL proxy mode."""
 
 import argparse
+import functools
 import math
 import random
 import sys
@@ -414,6 +415,10 @@ def main(args):
         train_dataset=train_dataset,
         valid_dataset=valid_dataset,
     ) as trainer:
+        if config.algorithm == "collect":
+            trainer.rollout.prepare_batch = functools.partial(
+                trainer.rollout.prepare_batch, finite_epoch=True, fail_on_rejection=True
+            )
         trainer.train(
             workflow="examples.tau2.agent.Tau2AgentWorkflow",
             workflow_kwargs=workflow_kwargs,

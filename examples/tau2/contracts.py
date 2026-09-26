@@ -195,13 +195,13 @@ def remaining_generation_budget(
     response_limit: int = MAX_ASSISTANT_TOKENS,
     episode_remaining: int | None = None,
 ) -> int:
-    """Implement ``min(4K, 32K-L, episode_remaining)`` fail-closed."""
+    """Reserve one token for SGLang's strict prompt+completion context bound."""
 
     if prompt_tokens < 0:
         raise ValueError("prompt_tokens must be non-negative")
     if context_window <= 0 or response_limit <= 0:
         raise ValueError("context_window and response_limit must be positive")
-    remaining = context_window - prompt_tokens
+    remaining = context_window - 1 - prompt_tokens
     if remaining <= 0:
         raise ValueError(
             f"context_limit: prompt has {prompt_tokens} tokens for a "
@@ -383,6 +383,64 @@ def resolve_pinned_hf_snapshot(
     if not path:
         raise ValueError("Pinned actor snapshot resolver returned an empty path")
     return path
+
+
+def _json_argument_value(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return value
+
+
+def _normalize_tau2_prefix_message(raw: Mapping[str, Any]) -> dict[str, Any]:
+    message = deepcopy(dict(raw))
+    if message.get("tool_calls") is None:
+        message.pop("tool_calls", None)
+    if message.get("content") is None:
+        message.pop("content", None)
+    if message.get("role") != "assistant" or "tool_calls" not in message:
+        return message
+    tool_calls = message["tool_calls"]
+    if not isinstance(tool_calls, list):
+        return message
+    normalized_calls: list[dict[str, Any]] = []
+    for raw_call in tool_calls:
+        if not isinstance(raw_call, Mapping):
+            return message
+        call = deepcopy(dict(raw_call))
+        function = call.get("function")
+        if isinstance(function, Mapping):
+            function = dict(function)
+            redundant_name = call.get("name")
+            if redundant_name == function.get("name"):
+                call.pop("name", None)
+            elif redundant_name is not None:
+                return message
+            if "arguments" in function:
+                function["arguments"] = _json_argument_value(function["arguments"])
+            call["function"] = function
+        normalized_calls.append(call)
+    message["tool_calls"] = normalized_calls
+    return message
+
+
+def tau2_qwen_concat_prefix_matcher(a: list[dict], b: list[dict]) -> bool:
+    """Match concat τ² prefixes after τ² rebuilds structured tool calls.
+
+    The cache's parent rule remains a true prefix rule.  This matcher only
+    canonicalizes assistant tool-call turns from the OpenAI shape stored in the
+    cache and the τ² ``to_litellm_messages`` shape used in the next request:
+    generated IDs, function names, and parsed JSON arguments must still match.
+    Ordinary content and tool responses stay exact.
+    """
+
+    if len(a) > len(b):
+        return False
+    normalized_a = [_normalize_tau2_prefix_message(message) for message in a]
+    normalized_b = [_normalize_tau2_prefix_message(message) for message in b[: len(a)]]
+    return normalized_a == normalized_b
 
 
 def clean_openai_messages(
