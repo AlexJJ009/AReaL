@@ -288,3 +288,18 @@ sampled. This repeats both the numerator and denominator of the token-mean loss,
 gradient is unchanged. `tau2_batch/real_prompts` and `real_episodes` measure coverage;
 worker sequence/token counters describe physical computation. The normal batch remains
 eight prompts times eight samples, and the real tail is sixteen episodes.
+
+### Empty simulator responses
+
+Training and evaluation both retry an empty user-simulator response once, with the same
+request and history. A tool-only response is valid. The retry occurs before any returned
+user tool call is executed, so policy actions and tools are not replayed. Existing
+provider transport retries remain unchanged. Two consecutive empty responses raise an
+infrastructure error; they do not become reward zero.
+
+Failed simulator requests and the recovery response are written under
+`$TAU2_RUN_ROOT/tau2-user-failures/` (or `./tau2-user-failures/` when unset), with a
+unique incident ID and attempt number. The JSON includes the full conversation, tool
+schemas, generation arguments, raw response (including reasoning, response ID and finish
+reason), and error body. Authentication arguments are excluded. Debug-write failures
+emit a warning and do not prevent the one recovery attempt.

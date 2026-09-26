@@ -8,6 +8,7 @@ import asyncio
 import os
 from collections.abc import Awaitable
 from dataclasses import replace
+from pathlib import Path
 from typing import Any, TypeVar
 
 import litellm
@@ -21,11 +22,12 @@ from tau2.environment.tool import Tool
 from tau2.evaluator.evaluator import EvaluationType, evaluate_simulation
 from tau2.orchestrator.orchestrator import Orchestrator
 from tau2.registry import registry
-from tau2.user.user_simulator import DummyUser, UserSimulator
+from tau2.user.user_simulator import DummyUser
 from tau2.user.user_simulator_base import HalfDuplexUser
 
 # Import utilities (also patches tau2.utils.llm_utils)
 from examples.tau2.contracts import bind_policy_request
+from examples.tau2.user_simulator import RetryingUserSimulator
 from examples.tau2.utils import Tau2EnvConfig, Tau2RunInfo
 
 from areal.experimental.openai.types import (
@@ -196,7 +198,11 @@ class Tau2Runner:
                 llm="openai/dummy",
                 llm_args=self._agent_llm_args(),
             )
-            user = UserSimulator(
+            user = RetryingUserSimulator(
+                debug_dir=Path(os.environ.get("TAU2_RUN_ROOT", "."))
+                / "tau2-user-failures",
+                task_id=task.id,
+                domain=self.domain,
                 tools=user_tools if len(user_tools) > 0 else None,
                 instructions=str(task.user_scenario),
                 llm=_litellm_user_model(self.econfig.user_llm),

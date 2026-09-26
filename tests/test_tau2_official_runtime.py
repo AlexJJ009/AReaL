@@ -34,6 +34,11 @@ from examples.tau2.train import get_tau2_dataset
 from examples.tau2.utils import Tau2EnvConfig
 
 
+@pytest.fixture(autouse=True)
+def isolate_user_debug_files(monkeypatch, tmp_path):
+    monkeypatch.setenv("TAU2_RUN_ROOT", str(tmp_path))
+
+
 def test_official_loader_matches_all_three_domains():
     assert validate_installed_tau2_revision()["revision"] == OFFICIAL_TAU2_REVISION
     for domain in SUPPORTED_DOMAINS:
@@ -264,3 +269,128 @@ async def test_context_exhaustion_is_policy_failure_not_simulator_failure(
     assert result.error_type == "task_budget"
     assert result.stop_reason == "context_limit"
     assert result.reward_info is None
+
+
+@pytest.mark.parametrize("recover", [True, False])
+@pytest.mark.parametrize("debug_write_fails", [True, False])
+def test_empty_user_response_retries_identical_request_once(
+    monkeypatch, tmp_path, recover, debug_write_fails
+):
+    import copy
+    import json
+
+    from tau2.data_model.message import AssistantMessage
+
+    from examples.tau2.user_simulator import (
+        EmptyUserResponseError,
+        RetryingUserSimulator,
+    )
+
+    requests = []
+    debug_dir = tmp_path / "debug"
+    if debug_write_fails:
+        debug_dir.write_text("not a directory")
+
+    def completion(**kwargs):
+        requests.append(copy.deepcopy(kwargs["messages"]))
+        content = "Recovered reply" if recover and len(requests) == 2 else None
+        return ModelResponse(
+            id=f"provider-{len(requests)}",
+            model="test",
+            choices=[
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "content": content,
+                        "reasoning_content": "Full debugging content",
+                    },
+                }
+            ],
+        )
+
+    monkeypatch.setattr(llm_utils, "completion", completion)
+    simulator = RetryingUserSimulator(
+        debug_dir=debug_dir,
+        task_id="task",
+        domain="telecom",
+        instructions="Test scenario",
+        tools=None,
+        llm="openai/test",
+        llm_args={"api_key": "test-secret", "num_retries": 3},
+    )
+    state = simulator.get_init_state()
+    incoming = AssistantMessage(role="assistant", content="Please describe the issue")
+    if recover:
+        response, result_state = simulator.generate_next_message(incoming, state)
+        assert response.content == "Recovered reply"
+        assert result_state.messages == [incoming, response]
+    else:
+        with pytest.raises(EmptyUserResponseError, match="after 2 attempts"):
+            simulator.generate_next_message(incoming, state)
+        assert state.messages == []
+    assert len(requests) == 2
+    assert requests[0] == requests[1]
+    if debug_write_fails:
+        assert debug_dir.is_file()
+        return
+    records = [json.loads(p.read_text()) for p in sorted(debug_dir.glob("*.json"))]
+    assert len(records) == 2
+    assert [r["response"]["id"] for r in records] == ["provider-1", "provider-2"]
+    assert (
+        records[0]["response"]["choices"][0]["message"]["reasoning_content"]
+        == "Full debugging content"
+    )
+    assert records[0]["request"]["messages"] == requests[0]
+    assert "api_key" not in records[0]["request"]["args"]
+
+
+def test_user_tool_only_reply_is_valid_without_retry(monkeypatch, tmp_path):
+    from tau2.data_model.message import AssistantMessage
+
+    from examples.tau2.user_simulator import RetryingUserSimulator
+
+    calls = []
+
+    def completion(**kwargs):
+        calls.append(kwargs)
+        return ModelResponse(
+            model="test",
+            choices=[
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "tool-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "check_phone",
+                                    "arguments": "{}",
+                                },
+                            }
+                        ],
+                    },
+                }
+            ],
+        )
+
+    monkeypatch.setattr(llm_utils, "completion", completion)
+    simulator = RetryingUserSimulator(
+        debug_dir=tmp_path,
+        task_id="task",
+        domain="telecom",
+        instructions="Test scenario",
+        tools=None,
+        llm="openai/test",
+    )
+    response, _ = simulator.generate_next_message(
+        AssistantMessage(role="assistant", content="Check your phone"),
+        simulator.get_init_state(),
+    )
+    response.validate()
+    assert response.tool_calls[0].name == "check_phone"
+    assert len(calls) == 1
+    assert not list(tmp_path.glob("*.json"))
