@@ -21,7 +21,9 @@ over all 178 official train tasks (46 updates). It uses non-thinking, 32768 tota
 context, at most4096 tokens per response, policy temperature1, staleness2, recomputed
 logprobs, decoupled loss, group reward normalization and the existing token ratio mask
 above5. It does not load a critic. Save/recovery/evaluation cadence is20 steps plus
-final, as in the previous math GRPO recipe.
+final, as in the previous math GRPO recipe. With `eval_before_train=true`, the initial
+evaluation uses the starting model and consumes the initial evaluator trigger before
+training; step1 does not request an unsaved checkpoint.
 
 `experiment_mode=tune` selects142train/36dev, stratified by task and domain with seed42.
 `experiment_mode=formal` trains on178officialtrain and evaluates 100officialtest tasks

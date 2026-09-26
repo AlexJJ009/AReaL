@@ -97,6 +97,9 @@ def test_config_grpo_freezes_4_3_1_async_grpo_contract(grpo_config: Tau2PPOConfi
     assert grpo_config.gconfig.max_new_tokens == 4096
     assert grpo_config.actor.use_decoupled_loss is True
     assert grpo_config.actor.recompute_logprob is True
+    assert grpo_config.actor.eps_clip_higher == 0.28
+    assert grpo_config.gconfig.seed is None
+    assert grpo_config.eval_gconfig.seed is None
     assert grpo_config.actor.reward_norm is not None
     assert grpo_config.actor.reward_norm.group_size == grpo_config.gconfig.n_samples
     assert grpo_config.saver.mode == "sync"
@@ -271,3 +274,35 @@ def test_final_grpo_evaluation_uses_final_checkpoint_once(tmp_path):
     assert len(calls) == 1
     assert calls[0]["version"] == 46
     assert calls[0]["checkpoint_path"].endswith("epoch1epochstep22globalstep45")
+
+
+@pytest.mark.parametrize("recovering", [False, True])
+def test_initial_eval_consumes_trigger_without_requesting_unsaved_step1(
+    monkeypatch, grpo_config, recovering
+):
+    from scripts.sao.async_eval import AsyncEvalPPOTrainer
+
+    from areal.api import FinetuneSpec
+    from areal.utils.evaluator import Evaluator
+
+    trainer = object.__new__(Tau2AsyncEvalTrainer)
+    trainer.config = grpo_config
+    trainer.recover_info = object() if recovering else None
+    trainer.valid_dataloader = [object()]
+    trainer.evaluator = Evaluator(
+        grpo_config.evaluator,
+        FinetuneSpec(total_train_epochs=2, dataset_size=178, train_batch_size=8),
+    )
+    if recovering:
+        trainer.evaluator.freq_ctl.check(epochs=0, steps=0)
+    queued = []
+    trainer._evaluate_fn = lambda *args: queued.append("backbone")
+    trainer._enqueue_eval = lambda **kwargs: queued.append(kwargs["version"])
+    trainer.check_evaluation = lambda: None
+    monkeypatch.setattr(AsyncEvalPPOTrainer, "train", lambda *args, **kwargs: None)
+    trainer.train(eval_workflow="workflow", eval_workflow_kwargs={})
+    for step in range(20):
+        trainer._evaluate("workflow", {}, 0, step, step)
+        if step < 19:
+            assert queued == ([] if recovering else ["backbone"])
+    assert queued == ([20] if recovering else ["backbone", 20])

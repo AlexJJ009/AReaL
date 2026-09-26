@@ -398,12 +398,12 @@ def main(args):
     # Evaluation sampling is explicit and shared across dev/test.
     eval_workflow_kwargs = workflow_kwargs.copy()
     eval_workflow_kwargs["gen_args"] = dict(
-        top_p=1.0,
-        frequency_penalty=0.0,
-        seed=config.seed,
+        top_p=config.eval_gconfig.top_p,
+        frequency_penalty=config.eval_gconfig.frequency_penalty,
+        seed=config.eval_gconfig.seed,
         max_total_tokens=econfig.context_window_tokens,
-        temperature=config.eval_gconfig.temperature if config.eval_gconfig else 0.6,
-        max_completion_tokens=config.gconfig.max_new_tokens,
+        temperature=config.eval_gconfig.temperature,
+        max_completion_tokens=config.eval_gconfig.max_new_tokens,
     )
 
     from examples.tau2.evaluation import Tau2AsyncEvalTrainer

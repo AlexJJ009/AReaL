@@ -94,7 +94,7 @@ gconfig:
   top_p: 1.0
   top_k: 100000000
   frequency_penalty: 0.0
-  seed: 42
+  seed: null
   reward_normalization: false
   drop_incomplete_group: false
 
@@ -108,7 +108,7 @@ eval_gconfig:
   top_p: 1.0
   top_k: 100000000
   frequency_penalty: 0.0
-  seed: 42
+  seed: null
   reward_normalization: false
   drop_incomplete_group: false
 
@@ -143,6 +143,8 @@ actor:
     warmup_steps_proportion: 0.0
     warmup_steps: 0
   temperature: ${gconfig.temperature}
+  eps_clip: 0.2
+  eps_clip_higher: 0.28
   reward_scaling: 1.0
   reward_bias: 0.0
   kl_ctl: 0.0

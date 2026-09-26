@@ -14,6 +14,24 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
 
     _snapshot_evidence = False
 
+    def train(self, *args, eval_workflow=None, eval_workflow_kwargs=None, **kwargs):
+        # Match the math entrypoint: consume the initial evaluation trigger before
+        # training, using the backbone rather than a not-yet-saved checkpoint.
+        if (
+            self.config.evaluator.eval_before_train
+            and self.recover_info is None
+            and self.valid_dataloader is not None
+            and eval_workflow is not None
+        ):
+            self.evaluator.freq_ctl.check(epochs=0, steps=0)
+            self._evaluate_fn(eval_workflow, eval_workflow_kwargs)
+        return super().train(
+            *args,
+            eval_workflow=eval_workflow,
+            eval_workflow_kwargs=eval_workflow_kwargs,
+            **kwargs,
+        )
+
     def _save_training_state(self, *, epoch, epoch_step, global_step, force=False):
         super()._save_training_state(
             epoch=epoch,
