@@ -1146,22 +1146,12 @@ class Tau2CriticOnlineTrainer(PPOTrainer):
         self._tau2_next_train_step += 1
         return physical
 
-    def _export_and_commit_stats(self, epoch, epoch_step, global_step):
-        stats = self.actor.export_stats()
-        if self.critic is not None:
-            stats.update(
-                {
-                    f"critic/{key}": value
-                    for key, value in self.critic.export_stats().items()
-                }
-            )
-        stats.update(self.rollout.export_stats())
-        if self.eval_rollout is not None:
-            stats.update(self.eval_rollout.export_stats())
-        stats.update(getattr(self, "_batch_counts", {}))
-        stats["ppo/critic_only"] = 1
-        stats["ppo/policy_version"] = 0
-        self.stats_logger.commit(epoch, epoch_step, global_step, stats)
+    def _additional_stats(self) -> dict[str, float]:
+        return {
+            **getattr(self, "_batch_counts", {}),
+            "ppo/critic_only": 1,
+            "ppo/policy_version": 0,
+        }
 
 
 def _workflow_kwargs(config: Tau2PPOConfig) -> dict[str, Any]:

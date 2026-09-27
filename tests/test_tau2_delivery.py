@@ -283,11 +283,11 @@ def test_tau2_eval_context_budget_result_counts_as_completed_episode(tmp_path):
 def test_final_grpo_checkpoint_is_forced_off_regular_cadence(
     monkeypatch, global_step, forced
 ):
-    from scripts.sao.async_eval import AsyncEvalPPOTrainer
+    from areal import PPOTrainer
 
     calls = []
     monkeypatch.setattr(
-        AsyncEvalPPOTrainer,
+        PPOTrainer,
         "_save_training_state",
         lambda self, **kwargs: calls.append(kwargs),
     )
@@ -318,8 +318,7 @@ def test_final_grpo_evaluation_uses_final_checkpoint_once(tmp_path):
 def test_initial_eval_consumes_trigger_without_requesting_unsaved_step1(
     monkeypatch, grpo_config, recovering
 ):
-    from scripts.sao.async_eval import AsyncEvalPPOTrainer
-
+    from areal import PPOTrainer
     from areal.api import FinetuneSpec
     from areal.utils.evaluator import Evaluator
     from areal.utils.recover import StepInfo
@@ -352,7 +351,7 @@ def test_initial_eval_consumes_trigger_without_requesting_unsaved_step1(
         (kwargs["version"], str(kwargs["checkpoint_path"]))
     )
     trainer.check_evaluation = lambda: None
-    monkeypatch.setattr(AsyncEvalPPOTrainer, "train", lambda *args, **kwargs: None)
+    monkeypatch.setattr(PPOTrainer, "train", lambda *args, **kwargs: None)
     trainer.train(eval_workflow="workflow", eval_workflow_kwargs={})
     if recovering:
         assert queued == [(20, queued[0][1])]
@@ -374,8 +373,7 @@ def test_initial_eval_consumes_trigger_without_requesting_unsaved_step1(
 def test_recovered_non_frequency_step_catches_up_counter_without_eval(
     monkeypatch, grpo_config
 ):
-    from scripts.sao.async_eval import AsyncEvalPPOTrainer
-
+    from areal import PPOTrainer
     from areal.api import FinetuneSpec
     from areal.utils.evaluator import Evaluator
     from areal.utils.recover import StepInfo
@@ -399,7 +397,7 @@ def test_recovered_non_frequency_step_catches_up_counter_without_eval(
     queued = []
     trainer._enqueue_eval = lambda **kwargs: queued.append(kwargs["version"])
     trainer.check_evaluation = lambda: None
-    monkeypatch.setattr(AsyncEvalPPOTrainer, "train", lambda *args, **kwargs: None)
+    monkeypatch.setattr(PPOTrainer, "train", lambda *args, **kwargs: None)
 
     trainer.train(eval_workflow="workflow", eval_workflow_kwargs={})
 

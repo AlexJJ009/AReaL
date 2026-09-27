@@ -1,8 +1,10 @@
 # Customer Service Agent Training with Tau2 Benchmark
 
-The scripts reuse AReaL's PPO trainer, official tau2 environment/evaluator, existing
-dedicated evaluation controller, and ordinary Pueue. No separate launcher registry or
-runtime manifest is required.
+The scripts reuse AReaL's PPO trainer, official tau2 environment/evaluator, the native
+`areal/trainer/async_eval.py` dedicated evaluation controller, native metrics
+collection, and ordinary Pueue. Tau2 adds only domain-level evaluation summarization on
+top of the native async evaluator. No separate launcher registry or runtime manifest is
+required.
 
 ## Training entrypoints
 
@@ -12,6 +14,7 @@ runtime manifest is required.
 | `scripts/tau2/train_airline.sh`, `train_retail.sh`, `train_telecom.sh` | The same GRPO recipe restricted to one domain               |
 | `scripts/tau2/train_critic.sh`                                         | Online mixed critic training with fresh episodes each epoch |
 | `scripts/tau2/run.sh qualification mixed`                              | Historical three-episode SAO integration recipe             |
+| `scripts/tau2/run.sh policy {mixed,airline,retail,telecom} sao`        | Formal SAO recipe using the native async evaluator          |
 
 GRPO uses 4 training GPUs, 3 rollout GPUs, and 1 dedicated checkpoint-evaluation GPU. A
 full training batch is 8 prompts x 8 trajectories = 64 episodes. The last epoch batch
@@ -23,6 +26,18 @@ above5. It does not load a critic. Save/recovery/evaluation cadence is20 steps p
 final, as in the previous math GRPO recipe. With `eval_before_train=true`, the initial
 evaluation uses the starting model and consumes the initial evaluator trigger before
 training; step1 does not request an unsaved checkpoint.
+
+SAO uses the same 4/3/1 GPU split, one trajectory per prompt, batch64, staleness2,
+TMS-enabled actor/critic colocation, a restored scalar critic from `TAU2_CRITIC_PATH`,
+and frozen critic attention. The mixed formal schedule is explicit in the config: 240
+airline, 592 retail, and 592 telecom episodes per epoch. Two epochs give 2848 total
+episodes and 46 updates. Single-domain SAO entrypoints prune only the unselected domain
+budgets; `train.py` derives `effective_episodes` from the resolved schedule after
+overrides, task limits, epochs and partial `total_train_steps`. SAO saves,
+recovery-checkpoints, and dedicated evaluation run every5 optimizer steps plus the final
+forced checkpoint/evaluation. The SAO policy recipe defaults W&B online; the inherited
+GRPO and critic recipes remain offline by default unless `TAU2_WANDB_MODE` overrides
+them.
 
 `experiment_mode=tune` selects142train/36dev, stratified by task and domain with seed42.
 `experiment_mode=formal` trains on178officialtrain and evaluates 100officialtest tasks
@@ -56,12 +71,13 @@ save and recovery verification before capacity claims.
 ## Runtime and configuration
 
 Formal critic and GRPO recipes record W&B locally by default, using `areal-tau2-critic`
-and `areal-tau2-grpo`. Authentication uses the existing W&B login; never put API keys in
-these recipes. Override `TAU2_WANDB_ENTITY`, `TAU2_WANDB_PROJECT`, or `TAU2_WANDB_MODE`
-when needed. The runtime wrapper overrides the shared SAO environment's disabled mode
-with the selected τ² mode. The default `offline` mode does not upload during training.
-Upload completed runs with `scripts/tau2/upload_metrics.py`; `online` requires an
-explicit mode override.
+and `areal-tau2-grpo`. Formal SAO uses `areal-tau2-sao` and defaults online because it
+is an explicit policy recipe. Authentication uses the existing W&B login; never put API
+keys in these recipes. Override `TAU2_WANDB_ENTITY`, `TAU2_WANDB_PROJECT`, or
+`TAU2_WANDB_MODE` when needed. The runtime wrapper overrides the shared SAO
+environment's disabled mode with the selected τ² mode. Offline critic/GRPO runs can be
+uploaded with `scripts/tau2/upload_metrics.py`; offline SAO W&B runs should be synced
+with W&B's native `wandb sync` flow.
 
 ```bash
 export SAO_ARTIFACT_ROOT=/path/to/existing/areal-artifacts
@@ -77,9 +93,13 @@ scripts/tau2/train_mixed.sh
 ```
 
 `--check-config` uses the official task loader but starts no GPU worker, resolves no
-model snapshot and loads no provider credential. Ordinary overrides are forwarded to the
-existing config parser. Run directories are stable so `recover.mode=auto` can resume the
-same run. Qualification mode explicitly creates a new temporary attempt directory.
+model snapshot and loads no provider credential. `AREAL_PYTHON` may point this CPU check
+at a compatible interpreter when the worktree `.venv` is absent. It is not a full GPU
+runtime override: `scripts/sao/runtime_env.sh`, scheduler worker commands, PATH, and the
+repo-local environment still have to be qualified before launch. Ordinary overrides are
+forwarded to the existing config parser. Run directories are stable so
+`recover.mode=auto` can resume the same run. Qualification mode explicitly creates a new
+temporary attempt directory.
 
 Use `scripts/tau2/train_critic.sh --check-config` to inspect the online critic recipe,
 and `scripts/tau2/train_critic.sh` to run it. The entrypoint loads the same DeepSeek

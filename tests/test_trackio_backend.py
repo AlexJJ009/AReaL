@@ -177,7 +177,9 @@ class TestStatsLoggerTrackioIntegration:
         logger.commit(epoch=0, step=0, global_step=0, data=data)
 
         expected = {"critic/ev_defined": 0.0}
-        mock_wandb.log.assert_called_once_with(expected, step=0)
+        mock_wandb.log.assert_called_once_with(
+            {**expected, "train/global_step": 1}, step=0
+        )
         mock_swanlab.log.assert_called_once_with(expected, step=0)
         mock_trackio.log.assert_called_once_with(expected, step=0)
 

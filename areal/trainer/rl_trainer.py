@@ -1657,6 +1657,10 @@ class PPOTrainer:
             dist.barrier(group=self.actor.cpu_group)
             current_platform.synchronize()
 
+    def _additional_stats(self) -> dict[str, float]:
+        """Recipe metrics appended to the native actor/critic/rollout exports."""
+        return {}
+
     def _export_and_commit_stats(self, epoch: int, epoch_step: int, global_step: int):
         # Upload statistics to the logger (e.g., wandb)
         stats = self.actor.export_stats()
@@ -1679,6 +1683,7 @@ class PPOTrainer:
             stats["ppo/policy_version"] = max(
                 0, global_step + 1 - self.config.num_critic_only_steps
             )
+        stats.update(self._additional_stats())
         self.stats_logger.commit(epoch, epoch_step, global_step, stats)
 
         if not is_single_controller():

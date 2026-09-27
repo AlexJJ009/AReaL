@@ -1,0 +1,116 @@
+# Full τ² SAO policy recipe.
+#
+# Domain episode budgets are per epoch. The default mixed recipe schedules
+# 240 airline + 592 retail + 592 telecom = 1424 episodes per epoch, then runs
+# two epochs for 2848 total episodes and 46 optimizer updates at batch size 64.
+defaults:
+  - config_grpo
+  - _self_
+
+experiment_name: tau2-sao
+trial_name: ${oc.env:TAU2_TRIAL_NAME}
+enable_offload: true
+algorithm: sao
+train_batch_episodes: 64
+effective_episodes: 2848
+domain_effective_episodes:
+  airline: 240
+  retail: 592
+  telecom: 592
+
+rollout:
+  max_concurrent_rollouts: 64
+  queue_size: 128
+
+gconfig:
+  n_samples: 1
+  reward_normalization: false
+  drop_incomplete_group: false
+
+actor:
+  recompute_logprob: false
+  use_decoupled_loss: false
+  rejection_sampling: null
+  reward_norm: null
+  adv_norm: null
+  gae_lambda: areal.trainer.ppo.lambda_fn.sao_length_adaptive_gae
+  gae_lambda_kwargs:
+    alpha: 1.5
+  critic_gae_lambda: 1.0
+  use_direct_dis_loss: true
+  dis_epsilon_low: 0.3
+  dis_epsilon_high: 5.0
+  optimizer:
+    weight_decay: 0.0
+    beta2: 0.999
+  scheduling_spec:
+    - task_type: worker
+      port_count: 2
+      gpu: 1
+      cpu: 2
+      mem: 64
+      cmd: python3 -m areal.infra.rpc.rpc_server
+      env_vars: {}
+
+critic_updates_before_actor: 2
+critic:
+  backend: ${actor.backend}
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  path: ${oc.env:TAU2_CRITIC_PATH}
+  is_critic: true
+  freeze_critic_attention: true
+  value_contract: null
+  init_from_scratch: false
+  offload: true
+  dtype: ${actor.dtype}
+  optimizer_dtype: ${actor.optimizer_dtype}
+  grad_reduce_dtype: ${actor.grad_reduce_dtype}
+  attn_impl: ${actor.attn_impl}
+  disable_dropout: true
+  gradient_checkpointing: true
+  ppo_n_minibatches: 1
+  loss_reduction: token_mean
+  eps_clip: null
+  mb_spec:
+    n_mbs: 1
+    max_tokens_per_mb: 32768
+    packing_algorithm: ffd
+  fsdp:
+    offload_params: false
+    per_layer_optim_step: false
+  optimizer:
+    type: adam
+    lr: 5.0e-06
+    weight_decay: 0.0
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1.0e-8
+    lr_scheduler_type: constant
+    gradient_clipping: 1.0
+    warmup_steps_proportion: 0.0
+    warmup_steps: 0
+  scheduling_strategy:
+    type: colocation
+    target: actor
+  scheduling_spec: ${actor.scheduling_spec}
+
+train_dataset:
+  batch_size: 64
+  shuffle: true
+
+saver:
+  freq_steps: 5
+
+recover:
+  freq_steps: 5
+
+evaluator:
+  freq_steps: 5
+  eval_before_train: true
+
+stats_logger:
+  wandb:
+    mode: ${oc.env:TAU2_WANDB_MODE,online}
+    project: ${oc.env:TAU2_WANDB_PROJECT,areal-tau2-sao}
+    tags: [tau2, sao, qwen35-4b, frozen-critic-attention]

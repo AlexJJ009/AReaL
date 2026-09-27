@@ -10,7 +10,7 @@ usage() {
 Usage:
   scripts/tau2/run.sh qualification {mixed|airline|retail|telecom} [overrides...]
   scripts/tau2/run.sh data critic [overrides...]
-  scripts/tau2/run.sh policy {mixed|airline|retail|telecom} grpo [overrides...]
+  scripts/tau2/run.sh policy {mixed|airline|retail|telecom} {grpo|sao} [overrides...]
 
 Required runtime variables:
   SAO_ARTIFACT_ROOT  shared AReaL runtime/cache root
@@ -53,6 +53,18 @@ has_check_config() {
   return 1
 }
 
+reject_sao_domain_identity_overrides() {
+  local arg
+  for arg in "$@"; do
+    case "${arg}" in
+      domains=*|+domains=*|++domains=*|~domains|~domains=*|econfig.domain=*|+econfig.domain=*|++econfig.domain=*|~econfig.domain|~econfig.domain=*)
+        printf 'SAO policy selectors own domain identity; reject conflicting override: %s\n' "${arg}" >&2
+        exit 2
+        ;;
+    esac
+  done
+}
+
 prepare_runtime_env() {
   : "${SAO_ARTIFACT_ROOT:?Set SAO_ARTIFACT_ROOT to the existing runtime/cache root}"
   : "${HF_HUB_CACHE:?Set HF_HUB_CACHE to the cache containing the pinned actor}"
@@ -62,13 +74,13 @@ prepare_runtime_env() {
   # and libstdc++ paths, local-RPC proxy bypass, and data-volume caches.
   # shellcheck source=../sao/runtime_env.sh
   source "${REPO_ROOT}/scripts/sao/runtime_env.sh"
-  export WANDB_MODE="${TAU2_WANDB_MODE:-offline}"
+  export WANDB_MODE="${TAU2_WANDB_MODE:-${TAU2_DEFAULT_WANDB_MODE:-offline}}"
 
   # TMS is preloaded by AReaL's local scheduler before the worker Python process
   # starts. Make its venv-provided CUDA runtime dependency visible to the dynamic
   # loader; importing torch later is too late for an LD_PRELOAD dependency.
   TMS_CUDA_RUNTIME_LIB="$(
-    "${REPO_ROOT}/.venv/bin/python" -c \
+    "${PYTHON_BIN}" -c \
       'import sysconfig; print(sysconfig.get_path("purelib") + "/nvidia/cuda_runtime/lib")'
   )"
   if [[ ! -f "${TMS_CUDA_RUNTIME_LIB}/libcudart.so.12" ]]; then
@@ -110,7 +122,7 @@ load_deepseek_key() {
   : "${DEEPSEEK_API_KEY:?DEEPSEEK_API_KEY is missing from TAU2_DEEPSEEK_ENV_FILE}"
 }
 
-PYTHON_BIN="${REPO_ROOT}/.venv/bin/python"
+PYTHON_BIN="${AREAL_PYTHON:-${REPO_ROOT}/.venv/bin/python}"
 
 if [[ $# -lt 1 ]]; then
   usage >&2
@@ -133,13 +145,13 @@ case "${SELECTOR}" in
     MODE="$1"
     shift
     if [[ $# -lt 1 ]]; then
-      printf 'Policy mode requires an explicit algorithm: grpo\n' >&2
+      printf 'Policy mode requires an explicit algorithm: grpo or sao\n' >&2
       usage >&2
       exit 2
     fi
     ALGORITHM="$1"
     shift
-    if [[ "${ALGORITHM}" != "grpo" ]]; then
+    if [[ "${ALGORITHM}" != "grpo" && "${ALGORITHM}" != "sao" ]]; then
       printf 'Unsupported tau2 policy algorithm in this entrypoint: %s\n' "${ALGORITHM}" >&2
       usage >&2
       exit 2
@@ -152,6 +164,9 @@ case "${SELECTOR}" in
         exit 2
         ;;
     esac
+    if [[ "${ALGORITHM}" == "sao" ]]; then
+      export TAU2_DEFAULT_WANDB_MODE=online
+    fi
     if ! has_check_config "$@"; then
       prepare_run_root policy
       prepare_runtime_env
@@ -207,6 +222,13 @@ case "${SELECTOR}:${MODE}" in
     if ! has_check_config "$@"; then
       load_deepseek_key
     fi
+    if [[ "${ALGORITHM}" == "sao" ]]; then
+      : "${TAU2_CRITIC_PATH:?Set TAU2_CRITIC_PATH to the restored critic checkpoint}"
+      reject_sao_domain_identity_overrides "$@"
+      exec "${PYTHON_BIN}" "${REPO_ROOT}/examples/tau2/train.py" \
+        --config "${REPO_ROOT}/examples/tau2/config_sao.yaml" \
+        "$@"
+    fi
     exec "${PYTHON_BIN}" "${REPO_ROOT}/examples/tau2/train.py" \
       --config "${REPO_ROOT}/examples/tau2/config_grpo.yaml" \
       "$@"
@@ -214,6 +236,22 @@ case "${SELECTOR}:${MODE}" in
   policy:airline|policy:retail|policy:telecom)
     if ! has_check_config "$@"; then
       load_deepseek_key
+    fi
+    if [[ "${ALGORITHM}" == "sao" ]]; then
+      : "${TAU2_CRITIC_PATH:?Set TAU2_CRITIC_PATH to the restored critic checkpoint}"
+      reject_sao_domain_identity_overrides "$@"
+      case "${MODE}" in
+        airline) DOMAIN_PRUNE=("~domain_effective_episodes.retail" "~domain_effective_episodes.telecom") ;;
+        retail) DOMAIN_PRUNE=("~domain_effective_episodes.airline" "~domain_effective_episodes.telecom") ;;
+        telecom) DOMAIN_PRUNE=("~domain_effective_episodes.airline" "~domain_effective_episodes.retail") ;;
+      esac
+      exec "${PYTHON_BIN}" "${REPO_ROOT}/examples/tau2/train.py" \
+        --config "${REPO_ROOT}/examples/tau2/config_sao.yaml" \
+        "domains=[${MODE}]" \
+        "econfig.domain=${MODE}" \
+        "effective_episodes=null" \
+        "${DOMAIN_PRUNE[@]}" \
+        "$@"
     fi
     exec "${PYTHON_BIN}" "${REPO_ROOT}/examples/tau2/train.py" \
       --config "${REPO_ROOT}/examples/tau2/config_grpo.yaml" \

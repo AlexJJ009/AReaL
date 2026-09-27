@@ -293,6 +293,46 @@ def collection_provenance(
     }
 
 
+def resolve_effective_episodes(config: Tau2PPOConfig, train_items: int) -> int:
+    """Bind effective episodes to the actual finite schedule coverage."""
+
+    if config.total_train_steps is None:
+        raise ValueError("total_train_steps must be resolved before episode binding")
+    if train_items <= 0:
+        raise ValueError("training schedule is empty")
+    if config.train_dataset.drop_last:
+        batch_sizes = [config.train_dataset.batch_size] * (
+            train_items // config.train_dataset.batch_size
+        )
+    else:
+        batch_sizes = [
+            min(config.train_dataset.batch_size, train_items - start)
+            for start in range(0, train_items, config.train_dataset.batch_size)
+        ]
+    if not batch_sizes:
+        raise ValueError("training schedule has no complete update batch")
+    consumed_prompts = 0
+    remaining_steps = int(config.total_train_steps)
+    for _epoch in range(int(config.total_train_epochs)):
+        for batch_size in batch_sizes:
+            if remaining_steps <= 0:
+                break
+            consumed_prompts += batch_size
+            remaining_steps -= 1
+        if remaining_steps <= 0:
+            break
+    actual = consumed_prompts * int(config.gconfig.n_samples)
+    if config.effective_episodes is None:
+        config.effective_episodes = actual
+    elif int(config.effective_episodes) != actual:
+        raise ValueError(
+            "effective_episodes must equal actual scheduled coverage after "
+            "domain pruning, task_limit, epochs and total_train_steps: "
+            f"{actual} != {config.effective_episodes}"
+        )
+    return actual
+
+
 def main(args):
     # Suppress pydantic UserWarning
     warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
@@ -338,10 +378,17 @@ def main(args):
         config.total_train_steps = available_steps
     if not 0 < config.total_train_steps <= available_steps:
         raise ValueError("total_train_steps exceeds the configured dataset and epochs")
+    resolve_effective_episodes(config, len(train_dataset))
     valid_dataset = None
     if config.valid_dataset is not None:
         valid_split = "test" if config.experiment_mode == "formal" else "dev"
         valid_dataset = get_tau2_dataset(**dataset_kwargs, split=valid_split)
+    if (
+        config.algorithm == "sao"
+        and config.experiment_mode != "qualification"
+        and valid_dataset is None
+    ):
+        raise ValueError("Formal/tune τ² SAO requires a validation dataset")
     if options.check_config:
         logger.info(
             "Resolved config (no workers/API calls):\n%s",
@@ -388,7 +435,12 @@ def main(args):
 
     from examples.tau2.evaluation import Tau2AsyncEvalTrainer
 
-    trainer_cls = Tau2AsyncEvalTrainer if config.algorithm == "grpo" else PPOTrainer
+    use_native_async_eval = config.algorithm == "grpo" or (
+        config.algorithm == "sao"
+        and config.experiment_mode != "qualification"
+        and valid_dataset is not None
+    )
+    trainer_cls = Tau2AsyncEvalTrainer if use_native_async_eval else PPOTrainer
     with trainer_cls(
         config,
         train_dataset=train_dataset,

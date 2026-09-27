@@ -24,7 +24,11 @@ from examples.tau2.contracts import (
     validate_episode_batch,
     validate_installed_tau2_revision,
 )
-from examples.tau2.train import collection_provenance, validate_tau2_recipe
+from examples.tau2.train import (
+    collection_provenance,
+    resolve_effective_episodes,
+    validate_tau2_recipe,
+)
 from examples.tau2.utils import Tau2PPOConfig
 from scripts.tau2.eval_matrix import build_eval_plan, verify_eval_ledger
 from scripts.tau2.train_critic import (
@@ -450,12 +454,16 @@ def test_tms_worker_env_rejects_missing_hook(monkeypatch):
 
 def test_qualification_configs_resolve_for_all_entrypoints(monkeypatch, tmp_path):
     actor = "Qwen/Qwen3.5-4B@" + "a" * 40
+    monkeypatch.setenv("TAU2_TRIAL_NAME", "tau2-sao-unit")
     monkeypatch.setenv("TAU2_ACTOR_PATH", actor)
     monkeypatch.setenv("TAU2_CRITIC_PATH", str(tmp_path / "critic"))
     monkeypatch.setenv("TAU2_CRITIC_INIT_PATH", actor)
     monkeypatch.setenv("TAU2_RUN_ROOT", str(tmp_path / "run"))
 
-    for config_path in ("examples/tau2/config_sao_qualification.yaml",):
+    for config_path in (
+        "examples/tau2/config_sao_qualification.yaml",
+        "examples/tau2/config_sao.yaml",
+    ):
         config, _ = load_expr_config(
             ["--config", config_path],
             Tau2PPOConfig,
@@ -470,10 +478,56 @@ def test_qualification_configs_resolve_for_all_entrypoints(monkeypatch, tmp_path
             assert config.critic.offload is True
             assert config.critic.fsdp.offload_params is False
             assert config.critic.fsdp.per_layer_optim_step is False
+            if config_path.endswith("config_sao.yaml"):
+                assert config.actor.backend == "fsdp:d4p1t1"
+                assert config.rollout.backend == "sglang:d3p1t1"
+                assert config.evaluation_rollout.backend == "sglang:d1p1t1"
+                assert config.gconfig.n_samples == 1
+                assert config.train_batch_episodes == 64
+                assert config.train_dataset.batch_size == 64
+                assert config.total_train_epochs == 2
+                assert config.effective_episodes == 2848
+                assert sum(config.domain_effective_episodes.values()) == 1424
+                assert config.saver.freq_steps == 5
+                assert config.recover.freq_steps == 5
+                assert config.evaluator.freq_steps == 5
+                assert config.stats_logger.wandb.mode == "online"
+                assert config.critic.freeze_critic_attention is True
 
         config.rollout.queue_size = 2 * config.train_dataset.batch_size - 1
         with pytest.raises(ValueError, match="reserved consumer batch"):
             validate_tau2_recipe(config)
+
+    config, _ = load_expr_config(
+        ["--config", "examples/tau2/config_sao.yaml", "effective_episodes=null"],
+        Tau2PPOConfig,
+    )
+    config.total_train_steps = 46
+    assert resolve_effective_episodes(config, train_items=1424) == 2848
+    assert config.effective_episodes == 2848
+
+    config, _ = load_expr_config(
+        [
+            "--config",
+            "examples/tau2/config_sao.yaml",
+            "effective_episodes=64",
+            "total_train_steps=1",
+        ],
+        Tau2PPOConfig,
+    )
+    assert resolve_effective_episodes(config, train_items=1424) == 64
+
+    config, _ = load_expr_config(
+        [
+            "--config",
+            "examples/tau2/config_sao.yaml",
+            "effective_episodes=2848",
+            "total_train_steps=1",
+        ],
+        Tau2PPOConfig,
+    )
+    with pytest.raises(ValueError, match="actual scheduled coverage"):
+        resolve_effective_episodes(config, train_items=1424)
 
     other_domains = {
         "airline": ("retail", "telecom"),
@@ -499,6 +553,26 @@ def test_qualification_configs_resolve_for_all_entrypoints(monkeypatch, tmp_path
             Tau2PPOConfig,
         )
         assert validate_tau2_recipe(config) == (domain,)
+
+    for domain, per_epoch in (
+        ("airline", 240),
+        ("retail", 592),
+        ("telecom", 592),
+    ):
+        pruned = tuple(other for other in other_domains if other != domain)
+        config, _ = load_expr_config(
+            [
+                "--config",
+                "examples/tau2/config_sao.yaml",
+                f"domains=[{domain}]",
+                f"econfig.domain={domain}",
+                "effective_episodes=null",
+                *(f"~domain_effective_episodes.{other}" for other in pruned),
+            ],
+            Tau2PPOConfig,
+        )
+        assert validate_tau2_recipe(config) == (domain,)
+        assert config.domain_effective_episodes == {domain: per_epoch}
 
 
 def _official_test_rows() -> list[dict[str, str]]:

@@ -134,7 +134,7 @@ def test_dedicated_eval_controller_uses_separate_role_and_records_gpus(
     )
 
     monkeypatch.setattr(
-        "scripts.sao.async_eval.SGLangConfig.build_args",
+        "areal.trainer.async_eval.SGLangConfig.build_args",
         lambda **kwargs: {"tp_size": kwargs["tp_size"], "pp_size": kwargs["pp_size"]},
     )
 
@@ -143,7 +143,7 @@ def test_dedicated_eval_controller_uses_separate_role_and_records_gpus(
         return fake
 
     monkeypatch.setattr(
-        "scripts.sao.async_eval.RemoteSGLangEngine.as_controller",
+        "areal.trainer.async_eval.RemoteSGLangEngine.as_controller",
         fake_as_controller,
     )
 
@@ -183,7 +183,7 @@ def test_dedicated_eval_controller_is_owned_before_initialize(monkeypatch, tmp_p
 
     fake.initialize = fail_initialize
     monkeypatch.setattr(
-        "scripts.sao.async_eval.SGLangConfig.build_args",
+        "areal.trainer.async_eval.SGLangConfig.build_args",
         lambda **kwargs: {"tp_size": kwargs["tp_size"], "pp_size": kwargs["pp_size"]},
     )
 
@@ -192,7 +192,7 @@ def test_dedicated_eval_controller_is_owned_before_initialize(monkeypatch, tmp_p
         return fake
 
     monkeypatch.setattr(
-        "scripts.sao.async_eval.RemoteSGLangEngine.as_controller",
+        "areal.trainer.async_eval.RemoteSGLangEngine.as_controller",
         fake_as_controller,
     )
 
@@ -234,7 +234,9 @@ def test_dedicated_init_failure_happens_after_base_close_is_available(monkeypatc
     def record_close(self):
         close_saw_saver.append(hasattr(self, "saver"))
 
-    monkeypatch.setattr("scripts.sao.async_eval.PPOTrainer._init_impl", fake_base_init)
+    monkeypatch.setattr(
+        "areal.trainer.async_eval.PPOTrainer._init_impl", fake_base_init
+    )
     monkeypatch.setattr(
         AsyncEvalGRPOTrainer, "_init_dedicated_eval_rollout", fail_dedicated_init
     )
@@ -246,17 +248,18 @@ def test_dedicated_init_failure_happens_after_base_close_is_available(monkeypatc
 
 
 def test_dedicated_eval_rejects_wrapped_gpu_allocation(tmp_path):
-    """The adapter fails before launching if actor+rollout did not consume 7 GPUs."""
+    """The adapter fails before launching if actor+rollout consume all available GPUs."""
     trainer = _trainer(tmp_path)
+    trainer.config.evaluation_rollout = SimpleNamespace(backend="sglang:d1p1t1")
     trainer.scheduler = SimpleNamespace(
         gpu_devices=list(range(8)),
         _workers={
             "actor": [_worker("actor", i, [i]) for i in range(4)],
-            "rollout": [_worker("rollout", i, [i + 4]) for i in range(2)],
+            "rollout": [_worker("rollout", i, [i + 4]) for i in range(4)],
         },
     )
 
-    with pytest.raises(RuntimeError, match="consume 7 GPU slots"):
+    with pytest.raises(RuntimeError, match="needs 1 free GPU slots"):
         trainer._assert_dedicated_eval_preconditions()
 
 
@@ -269,8 +272,8 @@ def _record_checkpoint_ready(monkeypatch):
     def fake_add(name, value, keepalive_ttl=None):
         calls.append(("add", name, keepalive_ttl))
 
-    monkeypatch.setattr("scripts.sao.async_eval.name_resolve.delete", fake_delete)
-    monkeypatch.setattr("scripts.sao.async_eval.name_resolve.add", fake_add)
+    monkeypatch.setattr("areal.trainer.async_eval.name_resolve.delete", fake_delete)
+    monkeypatch.setattr("areal.trainer.async_eval.name_resolve.add", fake_add)
     return calls
 
 

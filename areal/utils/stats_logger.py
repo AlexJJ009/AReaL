@@ -140,9 +140,28 @@ class StatsLogger:
             f"Step {step + 1}/{self.ft_spec.steps_per_epoch} "
             f"Train step {global_step + 1}/{self.ft_spec.total_train_steps} done."
         )
+        self.log_metrics(data, step=global_step + 1, step_metric="train/global_step")
+
+    def log_metrics(
+        self, data: dict | list[dict], *, step: int, step_metric: str
+    ) -> None:
+        """Log an event without declaring a training update completed.
+
+        Upload order remains monotonic while each metric uses its semantic step
+        (e.g. the evaluated checkpoint), which may lag behind training.
+        Call from the trainer thread, including for background evaluation results.
+        """
+        if dist.is_initialized() and dist.get_rank() != 0:
+            return
         if isinstance(data, dict):
             data = [data]
-        log_step = max(global_step, self._last_commit_step + 1)
+        # A resumed online run may already contain events newer than the last
+        # recovery checkpoint. Do not send those events at rejected old steps.
+        run_step = getattr(getattr(wandb, "run", None), "step", 0)
+        log_step = max(
+            self._last_commit_step + 1, run_step if isinstance(run_step, int) else 0
+        )
+        axes = getattr(self, "_metric_axes", {})
         for i, item in enumerate(data):
             # Filter out counter keys for scalar variables
             item = {k: v for k, v in item.items() if not k.endswith("__count")}
@@ -150,13 +169,18 @@ class StatsLogger:
 
             logger.info(f"Stats ({i + 1}/{len(data)}):")
             self.print_stats(item)
-            wandb.log(log_item, step=log_step + i)
+            for key in log_item:
+                if key != step_metric and axes.get(key) != step_metric:
+                    wandb.define_metric(key, step_metric=step_metric)
+                    axes[key] = step_metric
+            wandb.log({**log_item, step_metric: step}, step=log_step + i)
             swanlab.log(log_item, step=log_step + i)
             if getattr(self, "_trackio_enabled", False):
                 trackio.log(log_item, step=log_step + i)
             if self.summary_writer is not None:
                 for key, val in log_item.items():
-                    self.summary_writer.add_scalar(f"{key}", val, log_step + i)
+                    self.summary_writer.add_scalar(f"{key}", val, step)
+        self._metric_axes = axes
         self._last_commit_step = log_step + len(data) - 1
 
     def print_stats(self, stats: dict[str, float]):

@@ -133,7 +133,7 @@ def test_ppo_dedicated_eval_records_three_four_colocated_one_layout(
     fake = _FakeController()
 
     monkeypatch.setattr(
-        "scripts.sao.async_eval.SGLangConfig.build_args",
+        "areal.trainer.async_eval.SGLangConfig.build_args",
         lambda **kwargs: {"tp_size": kwargs["tp_size"], "pp_size": kwargs["pp_size"]},
     )
 
@@ -142,7 +142,7 @@ def test_ppo_dedicated_eval_records_three_four_colocated_one_layout(
         return fake
 
     monkeypatch.setattr(
-        "scripts.sao.async_eval.RemoteSGLangEngine.as_controller",
+        "areal.trainer.async_eval.RemoteSGLangEngine.as_controller",
         fake_as_controller,
     )
 
@@ -177,12 +177,12 @@ def test_ppo_dedicated_eval_records_three_four_colocated_one_layout(
         (
             list(range(7)),
             3,
-            "requires >=8 visible GPUs",
+            "needs 1 free GPU slots",
         ),
         (
             list(range(8)),
             4,
-            "consume 7 GPU slots",
+            "needs 1 free GPU slots",
         ),
     ],
 )
