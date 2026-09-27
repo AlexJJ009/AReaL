@@ -203,6 +203,21 @@ def test_export_with_drop_retry_orphans_flag():
     assert exported["retry"].reward == pytest.approx(3.0)
 
 
+def test_concat_export_with_drop_retry_orphans_keeps_ambiguous_leaves():
+    """Ambiguous all-leaf duplicates must remain visible to cardinality guards."""
+    msgs = [_user_msg("hi")]
+    cache = InteractionCache()
+    cache["orphan"] = _make_interaction("orphan", msgs)
+    cache["retry"] = _make_interaction("retry", msgs)
+
+    exported = cache.export_interactions(
+        style="concat",
+        drop_retry_orphans=True,
+    )
+
+    assert set(exported) == {"orphan", "retry"}
+
+
 def test_drop_updates_total_reward():
     """Dropping an orphan decrements the running total_reward."""
     msgs = [_user_msg("hi")]
