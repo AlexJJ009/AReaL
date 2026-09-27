@@ -93,6 +93,72 @@ def _warn_once(msg: str) -> None:
             logger.warning(msg)
 
 
+def _extract_areal_chat_extensions(raw_body: Any) -> dict[str, Any]:
+    """Preserve AReaL chat extensions erased by OpenAI's request schema."""
+
+    if not isinstance(raw_body, dict):
+        return {}
+
+    nested_extra = raw_body.get("extra_body")
+    if nested_extra is not None and not isinstance(nested_extra, dict):
+        raise HTTPException(
+            status_code=400, detail="extra_body must be an object when provided"
+        )
+
+    extensions: dict[str, Any] = {}
+
+    def _resolve_extension(name: str) -> tuple[bool, Any]:
+        top_present = name in raw_body
+        nested_present = isinstance(nested_extra, dict) and name in nested_extra
+        if top_present and nested_present and raw_body[name] != nested_extra[name]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"conflicting {name} values in top-level body and extra_body",
+            )
+        if top_present:
+            return True, raw_body[name]
+        if nested_present:
+            return True, nested_extra[name]
+        return False, None
+
+    has_chat_template_kwargs, chat_template_kwargs = _resolve_extension(
+        "chat_template_kwargs"
+    )
+    if has_chat_template_kwargs:
+        if not isinstance(chat_template_kwargs, dict):
+            raise HTTPException(
+                status_code=400, detail="chat_template_kwargs must be an object"
+            )
+        extensions["extra_body"] = {"chat_template_kwargs": chat_template_kwargs}
+
+    has_max_total_tokens, max_total_tokens = _resolve_extension("max_total_tokens")
+    if has_max_total_tokens:
+        if not (
+            max_total_tokens is None
+            or (
+                isinstance(max_total_tokens, int)
+                and not isinstance(max_total_tokens, bool)
+            )
+        ):
+            raise HTTPException(
+                status_code=400, detail="max_total_tokens must be an integer or null"
+            )
+        extensions["max_total_tokens"] = max_total_tokens
+
+    return extensions
+
+
+def _with_areal_chat_extensions(
+    request: CompletionCreateParams, raw_body: Any
+) -> dict[str, Any]:
+    """Merge known AReaL extensions into an OpenAI-validated chat request."""
+
+    patched = dict(request)
+    extensions = _extract_areal_chat_extensions(raw_body)
+    patched.update(extensions)
+    return patched
+
+
 # =============================================================================
 # Module-Level Globals (like rpc_server.py)
 # =============================================================================
@@ -672,7 +738,9 @@ async def _call_client_create(
     response_model=None,
 )
 async def chat_completions(
-    request: CompletionCreateParams, session_id: str = Depends(_require_session_key)
+    raw_request: Request,
+    request: CompletionCreateParams,
+    session_id: str = Depends(_require_session_key),
 ) -> ChatCompletion | StreamingResponse:
     """OpenAI-compatible chat completions endpoint.
 
@@ -687,14 +755,16 @@ async def chat_completions(
         )
 
     # CompletionCreateParams is a TypedDict (dict subclass), so use dict access.
-    is_streaming = request.get("stream") is True
+    raw_body = await raw_request.json()
+    patched_request = _with_areal_chat_extensions(request, raw_body)
+    is_streaming = patched_request.get("stream") is True
 
     if is_streaming:
         openai_stream = None
         try:
             openai_stream = await _call_client_create(
                 create_fn=_openai_client.chat.completions.create,
-                request=request,
+                request=patched_request,
                 session_id=session_id,
                 stream=True,
             )
@@ -730,7 +800,7 @@ async def chat_completions(
 
     return await _call_client_create(
         create_fn=_openai_client.chat.completions.create,
-        request=request,
+        request=patched_request,
         session_id=session_id,
     )
 

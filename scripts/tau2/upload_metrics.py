@@ -227,9 +227,63 @@ def load_grpo_eval_metrics(run_root: Path) -> list[dict[str, Any]]:
     return rows
 
 
+def load_offline_eval_metrics(run_root: Path) -> list[dict[str, Any]]:
+    """Upload complete repeated evaluation only, retaining every trial."""
+    manifest = _json(run_root / "manifest.json")
+    summary = _json(run_root / "summary.json")
+    repeats = int(manifest["repeats"])
+    if repeats < 1 or summary.get("status") != "complete":
+        raise ValueError("Offline evaluation is incomplete")
+    episodes = [
+        json.loads(line)
+        for line in (run_root / "episodes.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    expected = 100 * repeats
+    if len(episodes) != expected or manifest["planned_episodes"] != expected:
+        raise ValueError("Offline evaluation coverage mismatch")
+    seen = set()
+    grouped: dict[tuple[int, str], list[float]] = {}
+    for item in episodes:
+        trial, domain = int(item["trial"]), item["domain"]
+        identity = (domain, str(item["task_id"]), trial)
+        if identity in seen:
+            raise ValueError(f"Duplicate offline evaluation cell: {identity}")
+        if (
+            item["status"] != "completed"
+            or not 0 <= trial < repeats
+            or domain not in DOMAINS
+        ):
+            raise ValueError(f"Invalid offline evaluation cell: {identity}")
+        score = float(item["official_score"])
+        if score not in (0.0, 1.0):
+            raise ValueError(f"Non-binary offline evaluation score: {score}")
+        seen.add(identity)
+        grouped.setdefault((trial, domain), []).append(score)
+    rows = []
+    for trial in range(repeats):
+        row: dict[str, Any] = {
+            "eval/completed_step": trial + 1,
+            "source/kind": "offline_eval",
+        }
+        total = 0.0
+        for domain, count in (("airline", 20), ("retail", 40), ("telecom", 40)):
+            scores = grouped.get((trial, domain), [])
+            if len(scores) != count:
+                raise ValueError(f"Missing {domain} coverage in trial {trial}")
+            row[f"eval/{domain}/reward_mean"] = sum(scores) / count
+            row[f"eval/{domain}/episodes"] = count
+            total += sum(scores)
+        row["eval/reward_mean"] = total / 100
+        rows.append(row)
+    return rows
+
+
 def _load(
     kind: str, run_root: Path
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if kind == "offline_eval":
+        return [], load_offline_eval_metrics(run_root)
     return (
         load_critic_metrics(run_root)
         if kind == "critic"
@@ -255,6 +309,15 @@ def upload_once(args: argparse.Namespace, run: Any) -> tuple[int, int, int, int]
                 record[f"{axis}/completed_step"]
             )
     run.summary[f"tau2_upload/{args.kind}/run_root"] = str(args.run_root)
+    if args.kind == "offline_eval":
+        # Trial curves stay visible; the headline is the mean, never the best trial.
+        for key in evals[0]:
+            if key.endswith("reward_mean"):
+                run.summary[f"offline_eval/{key.removeprefix('eval/')}"] = sum(
+                    float(row[key]) for row in evals
+                ) / len(evals)
+        run.summary["offline_eval/repeats"] = len(evals)
+        run.summary["offline_eval/episodes"] = len(evals) * 100
     return (
         len(pending_train) + len(pending_eval),
         max((int(r["train/completed_step"]) for r in train), default=last_train),
@@ -291,7 +354,9 @@ def _init_wandb(args: argparse.Namespace) -> Any:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--kind", choices=("critic", "grpo"), required=True)
+    parser.add_argument(
+        "--kind", choices=("critic", "grpo", "offline_eval"), required=True
+    )
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--entity", default=os.getenv("TAU2_WANDB_ENTITY"))
     parser.add_argument("--project", default=os.getenv("TAU2_WANDB_PROJECT"))

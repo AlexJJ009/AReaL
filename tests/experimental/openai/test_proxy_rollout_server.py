@@ -309,6 +309,55 @@ class _PlainValueErrorCreate:
         raise ValueError("areal_context_limit appears in an unrelated ValueError")
 
 
+class _CapturingChatCreate:
+    def __init__(self):
+        self.calls = []
+
+    async def create(
+        self,
+        *,
+        messages,
+        areal_cache=None,
+        temperature=1.0,
+        top_p=1.0,
+        max_completion_tokens=None,
+        max_total_tokens=None,
+        extra_body=None,
+        stream=False,
+    ):
+        self.calls.append(
+            {
+                "temperature": temperature,
+                "top_p": top_p,
+                "max_completion_tokens": max_completion_tokens,
+                "max_total_tokens": max_total_tokens,
+                "extra_body": extra_body,
+                "stream": stream,
+                "areal_cache": areal_cache,
+            }
+        )
+        if stream:
+            return _empty_chunk_stream()
+        return {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 0,
+            "model": "test",
+            "choices": [],
+        }
+
+
+def _chat_payload(**kwargs):
+    payload = {"model": "ignored", "messages": [{"role": "user", "content": "x"}]}
+    payload.update(kwargs)
+    return payload
+
+
+async def _empty_chunk_stream():
+    if False:
+        yield None
+
+
 class _FakeOpenAIClient:
     def __init__(self, create):
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=create.create))
@@ -334,7 +383,7 @@ async def test_chat_completions_context_limit_returns_structured_http_400(monkey
         resp = await client.post(
             "/chat/completions",
             headers=headers,
-            json={"model": "ignored", "messages": [{"role": "user", "content": "x"}]},
+            json=_chat_payload(),
         )
 
     assert resp.status_code == 400
@@ -353,7 +402,7 @@ async def test_chat_completions_plain_value_error_with_marker_stays_500(monkeypa
         resp = await client.post(
             "/chat/completions",
             headers=headers,
-            json={"model": "ignored", "messages": [{"role": "user", "content": "x"}]},
+            json=_chat_payload(),
         )
 
     assert resp.status_code == 500
@@ -361,3 +410,123 @@ async def test_chat_completions_plain_value_error_with_marker_stays_500(monkeypa
         resp.json()["detail"]
         == "areal_context_limit appears in an unrelated ValueError"
     )
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_standard_request_still_reaches_client(monkeypatch):
+    """OpenAI-standard chat requests still pass through unchanged."""
+
+    create = _CapturingChatCreate()
+    headers = _install_session(monkeypatch, create)
+
+    async with _client() as client:
+        resp = await client.post(
+            "/chat/completions",
+            headers=headers,
+            json=_chat_payload(
+                temperature=0.2,
+                top_p=0.9,
+                max_completion_tokens=7,
+            ),
+        )
+
+    assert resp.status_code == 200
+    assert len(create.calls) == 1
+    assert create.calls[0]["temperature"] == 0.2
+    assert create.calls[0]["top_p"] == 0.9
+    assert create.calls[0]["max_completion_tokens"] == 7
+    assert create.calls[0]["extra_body"] is None
+    assert create.calls[0]["max_total_tokens"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "expect_stream", "expect_max_total_tokens"),
+    [
+        (
+            _chat_payload(
+                extra_body={
+                    "chat_template_kwargs": {"enable_thinking": False},
+                    "max_total_tokens": 32767,
+                },
+            ),
+            False,
+            32767,
+        ),
+        (
+            _chat_payload(
+                stream=True,
+                chat_template_kwargs={"enable_thinking": False},
+                max_total_tokens=321,
+            ),
+            True,
+            321,
+        ),
+    ],
+)
+async def test_chat_completions_preserves_areal_extensions(
+    monkeypatch, payload, expect_stream, expect_max_total_tokens
+):
+    """Nested and SDK-flattened extensions reach the AReaL chat client."""
+
+    create = _CapturingChatCreate()
+    headers = _install_session(monkeypatch, create)
+
+    async with _client() as client:
+        resp = await client.post(
+            "/chat/completions",
+            headers=headers,
+            json=payload,
+        )
+        body = resp.text
+
+    assert resp.status_code == 200
+    if expect_stream:
+        assert "data: [DONE]" in body
+    assert len(create.calls) == 1
+    assert create.calls[0]["stream"] is expect_stream
+    assert create.calls[0]["extra_body"] == {
+        "chat_template_kwargs": {"enable_thinking": False}
+    }
+    assert create.calls[0]["max_total_tokens"] == expect_max_total_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("payload", "detail"),
+    [
+        (
+            _chat_payload(chat_template_kwargs="bad"),
+            "chat_template_kwargs must be an object",
+        ),
+        (
+            _chat_payload(extra_body="bad"),
+            "extra_body must be an object when provided",
+        ),
+        (
+            _chat_payload(
+                extra_body={"chat_template_kwargs": {"enable_thinking": True}},
+                chat_template_kwargs={"enable_thinking": False},
+            ),
+            "conflicting chat_template_kwargs values in top-level body and extra_body",
+        ),
+    ],
+)
+async def test_chat_completions_rejects_bad_areal_extensions(
+    monkeypatch, payload, detail
+):
+    """Malformed or conflicting known extensions fail loudly."""
+
+    create = _CapturingChatCreate()
+    headers = _install_session(monkeypatch, create)
+
+    async with _client() as client:
+        resp = await client.post(
+            "/chat/completions",
+            headers=headers,
+            json=payload,
+        )
+
+    assert resp.status_code == 400
+    assert resp.json()["detail"] == detail
+    assert create.calls == []

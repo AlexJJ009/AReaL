@@ -246,3 +246,38 @@ def test_grpo_recovery_discards_updates_not_in_restored_checkpoint(tmp_path):
     rows = upload_metrics.load_grpo_train_metrics(tmp_path)
     assert [row["train/completed_step"] for row in rows] == [1, 2]
     assert rows[1]["rollout/reward"] == 0.75
+
+
+def test_offline_eval_keeps_all_trials_and_rejects_duplicate_cells(tmp_path):
+    _write_json(tmp_path / "manifest.json", {"repeats": 2, "planned_episodes": 200})
+    _write_json(tmp_path / "summary.json", {"status": "complete"})
+    episodes = [
+        {
+            "trial": trial,
+            "domain": domain,
+            "task_id": str(task),
+            "status": "completed",
+            "official_score": float(trial),
+        }
+        for trial in range(2)
+        for domain, count in (("airline", 20), ("retail", 40), ("telecom", 40))
+        for task in range(count)
+    ]
+    path = tmp_path / "episodes.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in episodes))
+    run = SimpleNamespace(summary={}, log=lambda row: None)
+    args = SimpleNamespace(kind="offline_eval", run_root=tmp_path)
+    upload_metrics.upload_once(args, run)
+    assert run.summary["offline_eval/reward_mean"] == 0.5
+    assert run.summary["offline_eval/repeats"] == 2
+    episodes[-1] = episodes[0]
+    path.write_text("\n".join(json.dumps(row) for row in episodes))
+    with pytest.raises(ValueError, match="Duplicate"):
+        upload_metrics.load_offline_eval_metrics(tmp_path)
+
+
+def test_offline_eval_refuses_partial_run(tmp_path):
+    _write_json(tmp_path / "manifest.json", {"repeats": 8})
+    _write_json(tmp_path / "summary.json", {"status": "partial"})
+    with pytest.raises(ValueError, match="incomplete"):
+        upload_metrics.load_offline_eval_metrics(tmp_path)
