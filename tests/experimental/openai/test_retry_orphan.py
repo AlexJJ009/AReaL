@@ -3,7 +3,8 @@
 Covers the scenario where the upstream Agent SDK times out, retries the same
 LLM request, and the proxy ends up with two completions sharing the same
 input messages. Only the latter is actually consumed by the agent; the
-former is an "orphan" leaf that should be dropped before export.
+former is an "orphan" leaf that should be dropped before export when a
+subsequent turn proves which sibling was consumed.
 """
 
 from __future__ import annotations
@@ -83,51 +84,38 @@ def test_single_retry_with_subsequent_turn_drops_orphan():
     assert set(cache.keys()) == {"retry", "next"}
 
 
-def test_retry_then_session_ends_keeps_latest():
-    """Two siblings, both leaves → keep the latest, drop the earlier.
-
-    When the session ends immediately after a retry there is no later turn
-    to anchor the real completion as a parent, so the tree cannot tell orphan
-    from retry. The fallback keeps the most recently created entry (here the
-    later-inserted ``retry``) instead of dropping both, avoiding data loss.
-    """
+def test_retry_then_session_ends_keeps_ambiguous_leaves():
+    """Two siblings, both leaves → keep both because consumption is unknown."""
     msgs = [_user_msg("hi")]
     cache = InteractionCache()
     cache["orphan"] = _make_interaction("orphan", msgs)
     cache["retry"] = _make_interaction("retry", msgs)
     dropped = cache.drop_retry_orphans()
-    assert dropped == ["orphan"]
-    assert "retry" in cache
-    assert "orphan" not in cache
+    assert dropped == []
+    assert set(cache.keys()) == {"orphan", "retry"}
 
 
-def test_all_leaves_keeps_latest_by_created_at():
-    """All-leaf fallback ranks by created_at, not insertion order.
-
-    The retry is inserted *before* the orphan but carries a larger
-    ``created_at`` (it was generated later, after the SDK timeout). The
-    survivor must be the retry, proving generation time drives the tie, not
-    the order rows landed in the cache.
-    """
+def test_all_leaves_does_not_guess_by_created_at():
+    """All-leaf duplicate groups stay intact even when created_at differs."""
     msgs = [_user_msg("hi")]
     cache = InteractionCache()
     cache["retry"] = _make_interaction("retry", msgs, created=100)
     cache["orphan"] = _make_interaction("orphan", msgs, created=50)
     dropped = cache.drop_retry_orphans()
-    assert dropped == ["orphan"]
-    assert set(cache.keys()) == {"retry"}
+    assert dropped == []
+    assert set(cache.keys()) == {"retry", "orphan"}
 
 
-def test_three_retries_drops_two_orphans():
-    """Three same-input leaves → keep the latest, drop the two earlier."""
+def test_three_ambiguous_retries_keep_all_leaves():
+    """Three same-input leaves remain for downstream cardinality guards."""
     msgs = [_user_msg("hi")]
     cache = InteractionCache()
     cache["o1"] = _make_interaction("o1", msgs, created=1)
     cache["o2"] = _make_interaction("o2", msgs, created=2)
     cache["final"] = _make_interaction("final", msgs, created=3)
     dropped = set(cache.drop_retry_orphans())
-    assert dropped == {"o1", "o2"}
-    assert set(cache.keys()) == {"final"}
+    assert dropped == set()
+    assert set(cache.keys()) == {"o1", "o2", "final"}
 
 
 def test_mid_conversation_retry():

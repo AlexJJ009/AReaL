@@ -112,17 +112,9 @@ class InteractionCache(OrderedDict[str, InteractionWithTokenLogpReward]):
 
         Among a group of interactions sharing identical input messages
         (deep-equal), an entry is a retry orphan when it was not the one the
-        agent actually consumed:
-
-          1) If the group contains an entry with children (a later turn
-             adopted it as parent), that entry is the consumed completion and
-             every childless sibling is an orphan.
-          2) If the whole group is childless (the session ended right after a
-             retry, before any later turn could establish parentage), the tree
-             cannot disambiguate. Fall back to generation time: keep the entry
-             with the largest ``created_at`` (most likely the retry) and treat
-             the earlier duplicates as orphans, so the consumed completion is
-             not lost.
+        agent actually consumed. If the group contains an entry with children
+        (a later turn adopted it as parent), that entry is the consumed
+        completion and every childless sibling is an orphan.
 
         This pattern is produced when the upstream Agent SDK times out
         waiting for a response, retries the same request, and the proxy
@@ -167,26 +159,6 @@ class InteractionCache(OrderedDict[str, InteractionWithTokenLogpReward]):
                 # entry was actually consumed (a later turn adopted it as
                 # parent), so every childless sibling is an orphan.
                 orphan_ids.update(leaves)
-            else:
-                # The whole group is leaves. This happens when the session
-                # ends right after a retry, before any later turn could adopt
-                # the real completion as a parent. The tree can no longer
-                # distinguish orphan from retry, so fall back to generation
-                # time: keep the most recently created entry (most likely the
-                # retry the agent consumed) and drop the earlier duplicates.
-                # Tie-break on insertion order so a coarse (second-resolution)
-                # or missing created_at still keeps the latest deterministically.
-                order = {c: i for i, c in enumerate(cids)}
-                survivor = max(
-                    cids,
-                    key=lambda c: (
-                        self[c].created_at
-                        if self[c].created_at is not None
-                        else float("-inf"),
-                        order[c],
-                    ),
-                )
-                orphan_ids.update(c for c in cids if c != survivor)
         return orphan_ids
 
     def drop_retry_orphans(self) -> list[str]:
