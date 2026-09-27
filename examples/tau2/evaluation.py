@@ -82,12 +82,38 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
         ):
             self.evaluator.freq_ctl.check(epochs=0, steps=0)
             self._evaluate_fn(eval_workflow, eval_workflow_kwargs)
+        elif (
+            self.recover_info is not None
+            and self.valid_dataloader is not None
+            and eval_workflow is not None
+        ):
+            self._catch_up_recovered_eval(eval_workflow, eval_workflow_kwargs)
         return super().train(
             *args,
             eval_workflow=eval_workflow,
             eval_workflow_kwargs=eval_workflow_kwargs,
             **kwargs,
         )
+
+    def _catch_up_recovered_eval(self, eval_workflow, eval_workflow_kwargs):
+        step_info = self.recover_info.last_step_info
+        completed_step = step_info.global_step + 1
+        state = self.evaluator.freq_ctl.state_dict()
+        restored_steps = int(state.get("step", {}).get("steps", completed_step))
+        if restored_steps >= completed_step:
+            return
+        self._evaluate(
+            eval_workflow,
+            eval_workflow_kwargs,
+            step_info.epoch,
+            step_info.epoch_step,
+            step_info.global_step,
+        )
+        if self.evaluator.freq_ctl.state_dict()["step"]["steps"] == restored_steps:
+            self.evaluator.freq_ctl.check(
+                epochs=int(step_info.epoch_step == step_info.steps_per_epoch - 1),
+                steps=1,
+            )
 
     def _save_training_state(self, *, epoch, epoch_step, global_step, force=False):
         super()._save_training_state(

@@ -322,28 +322,89 @@ def test_initial_eval_consumes_trigger_without_requesting_unsaved_step1(
 
     from areal.api import FinetuneSpec
     from areal.utils.evaluator import Evaluator
+    from areal.utils.recover import StepInfo
 
     trainer = object.__new__(Tau2AsyncEvalTrainer)
     trainer.config = grpo_config
-    trainer.recover_info = object() if recovering else None
+    trainer.recover_info = (
+        SimpleNamespace(
+            last_step_info=StepInfo(
+                epoch=0,
+                epoch_step=19,
+                global_step=19,
+                steps_per_epoch=23,
+            )
+        )
+        if recovering
+        else None
+    )
     trainer.valid_dataloader = [object()]
     trainer.evaluator = Evaluator(
         grpo_config.evaluator,
         FinetuneSpec(total_train_epochs=2, dataset_size=178, train_batch_size=8),
     )
     if recovering:
-        trainer.evaluator.freq_ctl.check(epochs=0, steps=0)
+        trainer.evaluator.freq_ctl.check(epochs=0, steps=19)
+        assert trainer.evaluator.freq_ctl.state_dict()["step"]["steps"] == 19
     queued = []
     trainer._evaluate_fn = lambda *args: queued.append("backbone")
-    trainer._enqueue_eval = lambda **kwargs: queued.append(kwargs["version"])
+    trainer._enqueue_eval = lambda **kwargs: queued.append(
+        (kwargs["version"], str(kwargs["checkpoint_path"]))
+    )
     trainer.check_evaluation = lambda: None
     monkeypatch.setattr(AsyncEvalPPOTrainer, "train", lambda *args, **kwargs: None)
     trainer.train(eval_workflow="workflow", eval_workflow_kwargs={})
+    if recovering:
+        assert queued == [(20, queued[0][1])]
+        assert queued[0][1].endswith("epoch0epochstep19globalstep19")
+        assert trainer.evaluator.freq_ctl.state_dict()["step"]["steps"] == 20
+        trainer.train(eval_workflow="workflow", eval_workflow_kwargs={})
+        assert queued == [(20, queued[0][1])]
+        assert trainer.evaluator.freq_ctl.state_dict()["step"]["steps"] == 20
+        trainer._evaluate("workflow", {}, 0, 20, 20)
+        assert queued == [(20, queued[0][1])]
+        return
     for step in range(20):
         trainer._evaluate("workflow", {}, 0, step, step)
         if step < 19:
-            assert queued == ([] if recovering else ["backbone"])
-    assert queued == ([20] if recovering else ["backbone", 20])
+            assert queued == ["backbone"]
+    assert queued == ["backbone", (20, queued[1][1])]
+
+
+def test_recovered_non_frequency_step_catches_up_counter_without_eval(
+    monkeypatch, grpo_config
+):
+    from scripts.sao.async_eval import AsyncEvalPPOTrainer
+
+    from areal.api import FinetuneSpec
+    from areal.utils.evaluator import Evaluator
+    from areal.utils.recover import StepInfo
+
+    trainer = object.__new__(Tau2AsyncEvalTrainer)
+    trainer.config = grpo_config
+    trainer.recover_info = SimpleNamespace(
+        last_step_info=StepInfo(
+            epoch=0,
+            epoch_step=18,
+            global_step=18,
+            steps_per_epoch=23,
+        )
+    )
+    trainer.valid_dataloader = [object()]
+    trainer.evaluator = Evaluator(
+        grpo_config.evaluator,
+        FinetuneSpec(total_train_epochs=2, dataset_size=178, train_batch_size=8),
+    )
+    trainer.evaluator.freq_ctl.check(epochs=0, steps=18)
+    queued = []
+    trainer._enqueue_eval = lambda **kwargs: queued.append(kwargs["version"])
+    trainer.check_evaluation = lambda: None
+    monkeypatch.setattr(AsyncEvalPPOTrainer, "train", lambda *args, **kwargs: None)
+
+    trainer.train(eval_workflow="workflow", eval_workflow_kwargs={})
+
+    assert queued == []
+    assert trainer.evaluator.freq_ctl.state_dict()["step"]["steps"] == 19
 
 
 def test_context_error_wrapped_as_rate_limit_does_not_retry():
