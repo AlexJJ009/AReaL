@@ -19,7 +19,7 @@ critic_dev_fraction: 0.2
 critic_tasks_per_domain: null
 critic_rollouts_per_task: 1
 infra_retries: 1
-episode_timeout_seconds: 600
+episode_timeout_seconds: 1200
 tokenizer_path: ${actor.path}
 
 cluster:
@@ -206,7 +206,7 @@ vllm:
 
 econfig:
   domain: mixed
-  max_steps: 50
+  max_steps: 200
   add_thinking_tool: false
   enable_thinking: false
   context_window_tokens: 32768

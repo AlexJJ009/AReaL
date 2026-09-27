@@ -169,6 +169,7 @@ def test_bind_eval_config_preserves_validation_sampling(tmp_path):
         config, model_path="/models/policy", output_root=tmp_path
     )
 
+    assert Path(bound.cluster.name_resolve.nfs_record_root).is_dir()
     assert bound.eval_gconfig.temperature == 1.0
     assert bound.eval_gconfig.top_p == 1.0
     assert bound.eval_gconfig.n_samples == 1

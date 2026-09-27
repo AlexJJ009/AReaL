@@ -13,6 +13,7 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
     """Reuse GPU allocation/checkpoint loading; summarize official domain rewards."""
 
     _snapshot_evidence = False
+    _recover_rollout_inputs = True
 
     def _init_impl(self, config, *args, **kwargs):
         if (

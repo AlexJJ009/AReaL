@@ -40,6 +40,10 @@ logger = logging.getLogger("Tau2Agent")
 _T = TypeVar("_T")
 
 
+class Tau2EpisodeTimeoutError(TimeoutError):
+    """Wall-clock safety timeout, distinct from a model token/step budget."""
+
+
 class Tau2InfrastructureError(RuntimeError):
     """Unexpected environment/evaluator failure that must not become reward zero."""
 
@@ -163,11 +167,11 @@ class Tau2Runner:
             timeout=min(self.timeout, 120.0),
             num_retries=0,
         )
-        # SGLang rejects prompt + max_new_tokens >= context_length. Keep the
-        # server's 32K window, reserving its final slot at the policy consumer.
+        # The AReaL client reserves SGLang's final context slot when computing
+        # max_new_tokens. Pass the full window here so that margin is applied once.
         args["max_total_tokens"] = min(
             args.get("max_total_tokens", self.econfig.context_window_tokens),
-            self.econfig.context_window_tokens - 1,
+            self.econfig.context_window_tokens,
         )
         return args
 
@@ -296,6 +300,14 @@ class Tau2Runner:
                 f"τ² simulation failed for {domain}/{task.id}: {type(e).__name__}: {e}"
             ) from e
 
+        reason = getattr(simulation, "termination_reason", "completed")
+        termination_reason = str(getattr(reason, "value", reason)).lower()
+        if termination_reason == "timeout":
+            error = Tau2EpisodeTimeoutError(
+                f"Episode wall-clock limit {self.timeout}s reached for {domain}/{task.id}"
+            )
+            raise Tau2InfrastructureError(str(error)) from error
+
         try:
             self._bind_nl_assertion_evaluator()
             reward_info = evaluate_simulation(
@@ -312,15 +324,11 @@ class Tau2Runner:
                 f"τ² evaluator failed for {domain}/{task.id}: {type(e).__name__}: {e}"
             ) from e
 
-        termination_reason = str(
-            getattr(simulation, "termination_reason", "completed")
-        ).lower()
         budget_markers = (
             "max_step",
             "max step",
             "budget",
             "context_limit",
-            "timeout",
         )
         run_info.truncated = any(
             marker in termination_reason for marker in budget_markers
@@ -381,6 +389,7 @@ class Tau2AgentWorkflow:
         return isinstance(
             cause,
             (
+                Tau2EpisodeTimeoutError,
                 litellm.APIConnectionError,
                 litellm.Timeout,
                 litellm.RateLimitError,

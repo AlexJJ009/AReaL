@@ -763,3 +763,40 @@ def test_eval_ledger_marks_missing_or_infra_cells_partial():
     assert report["coverage"] == 0.0
     assert report["infra_failed"] == [first["cell_id"]]
     assert len(report["missing"]) == plan["planned_cells"] - 1
+
+
+def test_actual_policy_trace_rejects_thinking_despite_config_false():
+    from examples.tau2.contracts import validate_exported_policy_trace
+
+    trace = {
+        "enable_thinking": False,
+        "seqlen": 100,
+        "segments": [
+            {"role": "prompt", "len": 80, "text": "<|im_start|>assistant\\n<think>\\n"},
+            {"role": "gen", "len": 20, "text": "Let me reason.</think>Answer"},
+        ],
+    }
+    with pytest.raises(ValueError, match="non-thinking prefix"):
+        validate_exported_policy_trace(trace)
+    trace["segments"][0]["text"] = "<|im_start|>assistant\\n<think>\\n\\n</think>\\n\\n"
+    with pytest.raises(ValueError, match="reasoning delimiters"):
+        validate_exported_policy_trace(trace)
+    trace["segments"][1]["text"] = "Answer"
+    validate_exported_policy_trace(trace)
+    trace["segments"][1]["len"] = 4097
+    with pytest.raises(ValueError, match="per-turn"):
+        validate_exported_policy_trace(trace)
+
+
+def test_actual_single_generation_policy_trace_uses_native_dump_fields():
+    from examples.tau2.contracts import validate_exported_policy_trace
+
+    validate_exported_policy_trace(
+        {
+            "seqlen": 10,
+            "prompt_len": 8,
+            "segments": None,
+            "prompt": "<|im_start|>assistant\n<think>\n\n</think>\n\n",
+            "completion": "Answer<|im_end|>",
+        }
+    )

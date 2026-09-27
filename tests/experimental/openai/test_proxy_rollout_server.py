@@ -530,3 +530,59 @@ async def test_chat_completions_rejects_bad_areal_extensions(
     assert resp.status_code == 400
     assert resp.json()["detail"] == detail
     assert create.calls == []
+
+
+@pytest.mark.asyncio
+async def test_http_controls_reach_template_and_generation_request(monkeypatch):
+    """Exercise HTTP parsing and the real AReaL client, not a kwargs-only mock."""
+    from areal.api import ModelResponse
+    from areal.experimental.openai import ArealOpenAI
+
+    class Tokenizer:
+        eos_token_id = 2
+        pad_token_id = 0
+
+        def apply_chat_template(self, messages, **kwargs):
+            assert kwargs["enable_thinking"] is False
+            return {"input_ids": list(range(28995))}
+
+        def decode(self, tokens, **kwargs):
+            return "OK"
+
+    class Engine:
+        calls = 0
+
+        async def agenerate(self, req):
+            assert req.gconfig.max_new_tokens == 3772
+            assert req.gconfig.temperature == 0.8
+            assert req.gconfig.top_p == 0.9
+            assert req.gconfig.seed == 42
+            self.calls += 1
+            return ModelResponse(
+                input_tokens=list(req.input_ids),
+                output_tokens=[42, 2],
+                output_logprobs=[-0.2, -0.1],
+                output_versions=[0, 0],
+                tokenizer=req.tokenizer,
+            )
+
+    engine = Engine()
+    areal_client = ArealOpenAI(
+        engine=engine, tokenizer=Tokenizer(), engine_max_tokens=32768
+    )
+    headers = _install_session(monkeypatch, areal_client.chat.completions)
+    async with _client() as client:
+        response = await client.post(
+            "/chat/completions",
+            headers=headers,
+            json=_chat_payload(
+                chat_template_kwargs={"enable_thinking": False},
+                max_total_tokens=32768,
+                max_completion_tokens=4096,
+                temperature=0.8,
+                top_p=0.9,
+                seed=42,
+            ),
+        )
+    assert response.status_code == 200, response.text
+    assert engine.calls == 1

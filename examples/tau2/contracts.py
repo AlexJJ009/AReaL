@@ -471,3 +471,54 @@ def bind_policy_request(
     if "messages" in bound:
         bound["messages"] = clean_openai_messages(bound["messages"])
     return bound
+
+
+def validate_exported_policy_trace(record: Mapping[str, Any]) -> None:
+    """Check the consumed Qwen3.5 prompt and generation segments, not config flags.
+
+    An empty, closed think block is the tokenizer's non-thinking prefix. An open
+    block or a reasoning delimiter in generated tokens is a protocol failure.
+    This validator never removes tokens or repairs recorded log probabilities.
+    """
+    length = int(record["seqlen"])
+    if not 0 < length <= CONTEXT_WINDOW_TOKENS:
+        raise ValueError("Invalid policy context length")
+    segments = record.get("segments")
+    if segments is None:
+        # Native dumps omit segments when there is only one generation.
+        prompt_length = int(record["prompt_len"])
+        if not 0 < prompt_length < length:
+            raise ValueError("No actual generation in policy trace")
+        segments = [
+            {"role": "prompt", "len": prompt_length, "text": record["prompt"]},
+            {
+                "role": "gen",
+                "len": length - prompt_length,
+                "text": record["completion"],
+            },
+        ]
+    generated = 0
+    for segment in segments:
+        role = segment["role"]
+        text = str(segment["text"]).replace("\\n", "\n")
+        if role in ("prompt", "context"):
+            boundary = "<|im_start|>assistant"
+            if (
+                boundary not in text
+                or text.rsplit(boundary, 1)[1].strip() != "<think>\n\n</think>"
+            ):
+                raise ValueError(
+                    "Policy request did not render the non-thinking prefix"
+                )
+        elif role == "gen":
+            generated += 1
+            if int(segment["len"]) > MAX_ASSISTANT_TOKENS:
+                raise ValueError("Policy reply exceeded the per-turn token limit")
+            if "<think>" in text or "</think>" in text:
+                raise ValueError(
+                    "Policy generated reasoning delimiters in non-thinking mode"
+                )
+        else:
+            raise ValueError(f"Unknown policy trace segment role: {role}")
+    if not generated:
+        raise ValueError("No actual generation in policy trace")

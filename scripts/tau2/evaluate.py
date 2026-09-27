@@ -86,6 +86,7 @@ def bind_eval_config(
     config = deepcopy(config)
     output_root.mkdir(parents=True, exist_ok=True)
     config.cluster.fileroot = str(output_root)
+    (output_root / "name-resolve").mkdir(parents=True, exist_ok=True)
     config.cluster.name_resolve.nfs_record_root = str(output_root / "name-resolve")
     config.experiment_name = f"{config.experiment_name}-offline-eval"
     config.trial_name = f"{config.trial_name}-offline-eval"

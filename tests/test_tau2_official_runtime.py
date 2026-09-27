@@ -270,7 +270,7 @@ async def test_context_exhaustion_is_policy_failure_not_simulator_failure(
         user_api_key="user",
         timeout=30.0,
     )
-    assert runner._agent_llm_args()["max_total_tokens"] == 32767
+    assert runner._agent_llm_args()["max_total_tokens"] == 32768
     task = _get_task(
         "telecom", get_tau2_dataset("telecom", split="train")[0]["task_id"], "train"
     )
@@ -527,3 +527,45 @@ def test_user_tool_only_reply_is_valid_without_retry(monkeypatch, tmp_path):
     assert response.tool_calls[0].name == "check_phone"
     assert len(calls) == 1
     assert not list(tmp_path.glob("*.json"))
+
+
+@pytest.mark.asyncio
+async def test_episode_wall_timeout_is_retryable_infra_before_reward(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from tau2.data_model.simulation import TerminationReason
+
+    import examples.tau2.agent as module
+
+    runner = Tau2Runner(
+        econfig=Tau2EnvConfig(domain="telecom"),
+        gen_args={},
+        agent_base_url="http://policy.invalid/v1",
+        agent_api_key="session",
+        user_api_key="user",
+        timeout=1200.0,
+    )
+    monkeypatch.setattr(runner, "_get_environment", lambda: object())
+    monkeypatch.setattr(
+        runner, "_get_agent_and_user", lambda **kwargs: (object(), object())
+    )
+    monkeypatch.setattr(
+        runner,
+        "_get_orchestrator",
+        lambda **kwargs: SimpleNamespace(
+            run=lambda: SimpleNamespace(
+                messages=[], termination_reason=TerminationReason.TIMEOUT
+            )
+        ),
+    )
+    evaluator = Mock(side_effect=AssertionError("Timeout must not be scored"))
+    monkeypatch.setattr(module, "evaluate_simulation", evaluator)
+    task = _get_task(
+        "telecom", get_tau2_dataset("telecom", split="train")[0]["task_id"], "train"
+    )
+    with pytest.raises(module.Tau2InfrastructureError, match="wall-clock") as caught:
+        await runner.run(task)
+    evaluator.assert_not_called()
+    assert isinstance(caught.value.__cause__, module.Tau2EpisodeTimeoutError)
+    assert Tau2AgentWorkflow.should_retry_episode(caught.value)

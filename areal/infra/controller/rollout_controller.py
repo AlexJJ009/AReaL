@@ -426,7 +426,13 @@ class RolloutController:
             )
 
         run_async_task(self._async_start_proxy)
-        self._proxy_started = True
+        # Recovery may have advanced the shared server before lazy proxy startup.
+        # Synchronize metadata before allowing these proxies to serve rollouts.
+        with self._version_lock:
+            self._proxy_collective_rpc(
+                "set_version", version=self._version, http_timeout=60.0
+            )
+            self._proxy_started = True
 
     async def _async_start_proxy(self) -> None:
         """Async implementation of proxy worker initialization."""

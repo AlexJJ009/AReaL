@@ -104,6 +104,9 @@ class _EmptyDataLoader:
 
 
 class PPOTrainer:
+    _recover_rollout_inputs = False
+    _rollout_recovery_policy = "replay_raw_inputs_discard_generated_trajectories"
+
     def __init__(
         self,
         config: PPOConfig,
@@ -498,14 +501,7 @@ class PPOTrainer:
             # Recompute placement instead of reusing _should_offload_rollout:
             # AWEX clears that flag because it drives the handover itself.
             colocated_rollout=self._is_actor_rollout_colocated(config),
-            expected_trainer_state={
-                "num_critic_only_steps": config.num_critic_only_steps,
-                "rollout_recovery_policy": (
-                    "replay_raw_inputs_discard_generated_trajectories"
-                    if config.critic_updates_before_actor
-                    else 0
-                ),
-            },
+            expected_trainer_state=self._expected_recovery_trainer_state(config),
         )
 
         # After recovery, sync the staleness manager so its capacity formula
@@ -521,11 +517,40 @@ class PPOTrainer:
             if sm is not None:
                 sm.on_version_recovered(recovery_version)
             input_state = self.recover_info.rollout_input_state
+            self._validate_recovered_rollout_input_state(input_state)
             if input_state is not None:
                 self.rollout.load_input_recovery_state(input_state)
 
         self._config_perf_tracer()
         self._apply_initial_offload_policy()
+
+    def _should_recover_rollout_inputs(self, config: PPOConfig) -> bool:
+        return bool(
+            self._recover_rollout_inputs
+            or config.num_critic_only_steps
+            or config.critic_updates_before_actor
+        )
+
+    def _expected_recovery_trainer_state(self, config: PPOConfig) -> dict[str, Any]:
+        state: dict[str, Any] = {
+            "num_critic_only_steps": config.num_critic_only_steps,
+            "rollout_recovery_policy": (
+                self._rollout_recovery_policy
+                if self._recover_rollout_inputs or config.critic_updates_before_actor
+                else 0
+            ),
+        }
+        return state
+
+    def _validate_recovered_rollout_input_state(
+        self, input_state: dict[str, Any] | None
+    ) -> None:
+        if self._recover_rollout_inputs and input_state is None:
+            raise ValueError(
+                "Recovery checkpoint is missing rollout_input_state required by "
+                "this trainer; refusing to resume because async rollout inputs "
+                "could otherwise be duplicated or skipped."
+            )
 
     @staticmethod
     def _is_colocation(strategy: SchedulingStrategy | None) -> bool:
@@ -1572,13 +1597,9 @@ class PPOTrainer:
             trainer_state["optimizer_steps_base"] = getattr(
                 self, "_optimizer_steps_base", 0
             )
-        should_recover_rollout_inputs = (
-            self.config.num_critic_only_steps or self.config.critic_updates_before_actor
-        )
-        if self.config.critic_updates_before_actor:
-            trainer_state["rollout_recovery_policy"] = (
-                "replay_raw_inputs_discard_generated_trajectories"
-            )
+        should_recover_rollout_inputs = self._should_recover_rollout_inputs(self.config)
+        if self.config.critic_updates_before_actor or self._recover_rollout_inputs:
+            trainer_state["rollout_recovery_policy"] = self._rollout_recovery_policy
         self.recover_handler.dump(
             to_save,
             step_info,
