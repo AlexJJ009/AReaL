@@ -179,7 +179,10 @@ actor:
       cpu: 2
       mem: 64
       cmd: python3 -m areal.infra.rpc.rpc_server
-      env_vars: {}
+      # Variable-length 32K episodes otherwise leave large unusable CUDA splits.
+      # This recipe disables TMS offload, which requires a different allocator.
+      env_vars:
+        PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
 
 critic: null
 ref: null
