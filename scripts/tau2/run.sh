@@ -62,6 +62,7 @@ prepare_runtime_env() {
   # and libstdc++ paths, local-RPC proxy bypass, and data-volume caches.
   # shellcheck source=../sao/runtime_env.sh
   source "${REPO_ROOT}/scripts/sao/runtime_env.sh"
+  export WANDB_MODE="${TAU2_WANDB_MODE:-offline}"
 
   # TMS is preloaded by AReaL's local scheduler before the worker Python process
   # starts. Make its venv-provided CUDA runtime dependency visible to the dynamic

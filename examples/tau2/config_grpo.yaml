@@ -285,7 +285,11 @@ stats_logger:
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
-  wandb: {mode: disabled}
+  wandb:
+    mode: ${oc.env:TAU2_WANDB_MODE,offline}
+    entity: ${oc.env:TAU2_WANDB_ENTITY,null}
+    project: ${oc.env:TAU2_WANDB_PROJECT,areal-tau2-grpo}
+    tags: [tau2, async-grpo, qwen35-4b]
   swanlab: {mode: disabled}
   trackio: {mode: disabled}
 

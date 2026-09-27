@@ -55,6 +55,14 @@ save and recovery verification before capacity claims.
 
 ## Runtime and configuration
 
+Formal critic and GRPO recipes record W&B locally by default, using `areal-tau2-critic`
+and `areal-tau2-grpo`. Authentication uses the existing W&B login; never put API keys in
+these recipes. Override `TAU2_WANDB_ENTITY`, `TAU2_WANDB_PROJECT`, or `TAU2_WANDB_MODE`
+when needed. The runtime wrapper overrides the shared SAO environment's disabled mode
+with the selected τ² mode. The default `offline` mode does not upload during training.
+Upload completed runs with `scripts/tau2/upload_metrics.py`; `online` requires an
+explicit mode override.
+
 ```bash
 export SAO_ARTIFACT_ROOT=/path/to/existing/areal-artifacts
 export TAU2_RUN_ROOT=/path/to/a-unique-run
