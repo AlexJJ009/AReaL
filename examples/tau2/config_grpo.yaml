@@ -58,6 +58,7 @@ rollout:
     chat_template_type: concat
     engine_max_tokens: 32768
     export_style: concat
+    drop_retry_orphans: true
     prefix_matcher: examples.tau2.contracts.tau2_qwen_concat_prefix_matcher
     turn_discount: 1.0
 
@@ -65,7 +66,8 @@ evaluation_rollout:
   backend: sglang:d1p1t1
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
-  max_concurrent_rollouts: 32
+  # Four prompt groups x eight repeats preserve 32 active eval episodes.
+  max_concurrent_rollouts: 4
   queue_size: 64
   consumer_batch_size: ${valid_dataset.batch_size}
   max_head_offpolicyness: 1000000000000
@@ -83,6 +85,7 @@ evaluation_rollout:
     chat_template_type: concat
     engine_max_tokens: 32768
     export_style: concat
+    drop_retry_orphans: true
     prefix_matcher: examples.tau2.contracts.tau2_qwen_concat_prefix_matcher
     turn_discount: 1.0
 
@@ -101,7 +104,7 @@ gconfig:
   drop_incomplete_group: false
 
 eval_gconfig:
-  n_samples: 1
+  n_samples: 8
   min_new_tokens: 0
   max_new_tokens: 4096
   max_tokens: 32768
@@ -183,6 +186,8 @@ actor:
       # This recipe disables TMS offload, which requires a different allocator.
       env_vars:
         PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+        AREAL_OPENAI_CACHE_MISMATCH_DUMP_DIR: ${cluster.fileroot}/tau2-prefix-mismatches
+        AREAL_OPENAI_CACHE_MISMATCH_DUMP_LIMIT: "3"
 
 critic: null
 ref: null
@@ -260,7 +265,7 @@ saver:
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
   freq_epochs: null
-  freq_steps: 20
+  freq_steps: 5
   freq_secs: null
 
 recover:
@@ -269,7 +274,7 @@ recover:
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
   freq_epochs: null
-  freq_steps: 20
+  freq_steps: 5
   freq_secs: null
 
 evaluator:
@@ -277,7 +282,7 @@ evaluator:
   trial_name: ${trial_name}
   fileroot: ${cluster.fileroot}
   freq_epochs: null
-  freq_steps: 20
+  freq_steps: 5
   freq_secs: null
   eval_before_train: true
 

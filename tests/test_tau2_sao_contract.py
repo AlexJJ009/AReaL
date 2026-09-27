@@ -483,6 +483,26 @@ def test_qualification_configs_resolve_for_all_entrypoints(monkeypatch, tmp_path
                 assert config.rollout.backend == "sglang:d3p1t1"
                 assert config.evaluation_rollout.backend == "sglang:d1p1t1"
                 assert config.gconfig.n_samples == 1
+                grpo, _ = load_expr_config(
+                    ["--config", "examples/tau2/config_grpo.yaml"], Tau2PPOConfig
+                )
+                # The comparison shares one validation protocol; training n is
+                # algorithm-specific and must not leak into evaluation.
+                assert config.eval_gconfig == grpo.eval_gconfig
+                for name in (
+                    "backend",
+                    "max_concurrent_rollouts",
+                    "consumer_batch_size",
+                    "agent",
+                ):
+                    assert getattr(config.evaluation_rollout, name) == getattr(
+                        grpo.evaluation_rollout, name
+                    )
+                assert config.valid_dataset == grpo.valid_dataset
+                assert config.eval_gconfig.n_samples == 8
+                assert config.evaluation_rollout.max_concurrent_rollouts == 4
+                assert config.rollout.agent.drop_retry_orphans
+                assert config.evaluation_rollout.agent.drop_retry_orphans
                 assert config.train_batch_episodes == 64
                 assert config.train_dataset.batch_size == 64
                 assert config.total_train_epochs == 2

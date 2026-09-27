@@ -8,6 +8,7 @@ import subprocess
 
 import pytest
 
+from scripts.sao import gpu_admission as legacy_gpu_admission
 from scripts.sao.gpu_admission import (
     GPUAdmissionCancelled,
     GPUAdmissionConfig,
@@ -17,6 +18,23 @@ from scripts.sao.gpu_admission import (
     query_compute_processes,
     wait_for_scoped_gpus_free,
 )
+
+from areal.utils import gpu_admission as common_gpu_admission
+
+
+def test_legacy_gpu_admission_exports_shared_objects():
+    assert (
+        legacy_gpu_admission.GPUAdmissionConfig
+        is common_gpu_admission.GPUAdmissionConfig
+    )
+    assert (
+        legacy_gpu_admission.wait_for_scoped_gpus_free
+        is common_gpu_admission.wait_for_scoped_gpus_free
+    )
+    assert (
+        legacy_gpu_admission.admission_config_from_env
+        is common_gpu_admission.admission_config_from_env
+    )
 
 
 class FakeClock:
@@ -81,6 +99,49 @@ def test_wait_for_scoped_gpus_busy_then_stably_free():
     assert report["polls"] == 3
     assert clock.sleeps == [2, 2]
     assert all(call[1]["timeout"] <= 10 for call in runner.calls)
+
+
+def test_wait_for_scoped_gpus_requires_continuous_idle_seconds():
+    clock = FakeClock()
+    runner = FakeNvidiaSmi(["", "", ""])
+    config = GPUAdmissionConfig(
+        devices=("0",),
+        timeout_seconds=10,
+        poll_seconds=2,
+        stable_polls=1,
+        stable_seconds=3,
+    )
+
+    report = wait_for_scoped_gpus_free(
+        config, runner=runner, sleep=clock.sleep, monotonic=clock.monotonic
+    )
+
+    assert report["passed"] is True
+    assert report["polls"] == 3
+    assert report["stable_polls"] == 3
+    assert report["stable_seconds"] >= 3
+    assert clock.sleeps == [2, 1]
+
+
+def test_wait_for_scoped_gpus_resets_idle_seconds_after_busy():
+    clock = FakeClock()
+    runner = FakeNvidiaSmi(["", "", "123, GPU-0\n", "", "", ""])
+    config = GPUAdmissionConfig(
+        devices=("0",),
+        timeout_seconds=20,
+        poll_seconds=2,
+        stable_polls=1,
+        stable_seconds=3,
+    )
+
+    report = wait_for_scoped_gpus_free(
+        config, runner=runner, sleep=clock.sleep, monotonic=clock.monotonic
+    )
+
+    assert report["passed"] is True
+    assert report["polls"] == 6
+    assert report["stable_seconds"] >= 3
+    assert clock.sleeps == [2, 1, 2, 2, 1]
 
 
 def test_wait_for_scoped_gpus_ignores_out_of_scope_processes():
@@ -182,6 +243,7 @@ def test_admission_config_from_env_uses_scoped_devices_and_defaults():
             "SAO_GPU_ADMISSION_TIMEOUT_SECONDS": "5",
             "SAO_GPU_ADMISSION_POLL_SECONDS": "0.5",
             "SAO_GPU_ADMISSION_STABLE_POLLS": "3",
+            "SAO_GPU_ADMISSION_STABLE_SECONDS": "4.5",
         }
     )
 
@@ -189,6 +251,7 @@ def test_admission_config_from_env_uses_scoped_devices_and_defaults():
     assert config.timeout_seconds == 5
     assert config.poll_seconds == 0.5
     assert config.stable_polls == 3
+    assert config.stable_seconds == 4.5
     assert config.query_timeout_seconds == 10
 
 
@@ -199,6 +262,8 @@ def test_admission_config_rejects_non_finite_values():
         GPUAdmissionConfig(devices=("0",), poll_seconds=math.nan)
     with pytest.raises(ValueError, match="finite"):
         GPUAdmissionConfig(devices=("0",), query_timeout_seconds=math.inf)
+    with pytest.raises(ValueError, match="finite"):
+        GPUAdmissionConfig(devices=("0",), stable_seconds=math.nan)
 
 
 def test_query_timeout_becomes_query_error():

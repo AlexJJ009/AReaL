@@ -107,7 +107,11 @@ def test_config_grpo_freezes_4_3_1_async_grpo_contract(grpo_config: Tau2PPOConfi
     assert grpo_config.actor.reward_norm.group_size == grpo_config.gconfig.n_samples
     assert grpo_config.saver.mode == "sync"
     assert grpo_config.saver.freq_steps == grpo_config.evaluator.freq_steps
-    assert grpo_config.saver.freq_steps == 20
+    assert grpo_config.saver.freq_steps == 5
+    assert grpo_config.recover.freq_steps == 5
+    assert grpo_config.eval_gconfig.n_samples == 8
+    assert grpo_config.rollout.agent.drop_retry_orphans
+    assert grpo_config.evaluation_rollout.agent.drop_retry_orphans
 
 
 @pytest.mark.parametrize(
@@ -152,6 +156,11 @@ class _RetryAgent:
         return isinstance(exc, _TransientEpisodeError)
 
 
+class _DefaultAgent:
+    async def run(self, data, **kwargs):
+        raise AssertionError("_run_agent should not be reached")
+
+
 @pytest.fixture()
 def retry_workflow(monkeypatch) -> OpenAIProxyWorkflow:
     workflow = OpenAIProxyWorkflow(mode="inline", agent=_RetryAgent())
@@ -192,6 +201,16 @@ async def test_proxy_workflow_retries_transient_episode_from_fresh_wrapper(
 
 
 @pytest.mark.asyncio
+async def test_proxy_export_validation_is_optional_for_default_agents():
+    workflow = OpenAIProxyWorkflow(mode="inline", agent=_DefaultAgent())
+
+    await workflow._validate_exported_interactions(
+        {"leaf-1": object(), "leaf-2": object()},
+        {"task_id": "x"},
+    )
+
+
+@pytest.mark.asyncio
 async def test_proxy_workflow_does_not_retry_deterministic_or_cancelled_errors(
     retry_workflow: OpenAIProxyWorkflow,
 ):
@@ -218,6 +237,44 @@ async def test_proxy_workflow_does_not_retry_deterministic_or_cancelled_errors(
     with pytest.raises(asyncio.CancelledError):
         await retry_workflow.arun_episode("engine", {"task_id": "x"})
     assert cancelled_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_tau2_proxy_export_validation_rejects_multiple_concat_leaves():
+    from examples.tau2.agent import (
+        Tau2AgentWorkflow,
+        Tau2ExportCardinalityError,
+        Tau2InfrastructureError,
+    )
+
+    workflow = OpenAIProxyWorkflow(
+        mode="inline",
+        agent=Tau2AgentWorkflow(),
+        export_style="concat",
+    )
+
+    with pytest.raises(Tau2InfrastructureError, match="exactly one") as caught:
+        await workflow._validate_exported_interactions(
+            {"leaf-1": object(), "leaf-2": object()},
+            {"domain": "telecom", "task_id": "branched"},
+        )
+    assert isinstance(caught.value.__cause__, Tau2ExportCardinalityError)
+    assert Tau2AgentWorkflow.should_retry_episode(caught.value)
+
+
+def test_tau2_concat_export_cardinality_guard_allows_single_or_non_concat():
+    from examples.tau2.agent import Tau2AgentWorkflow
+
+    Tau2AgentWorkflow.validate_exported_interactions(
+        interactions={"leaf-1": object()},
+        export_style="concat",
+        data={"domain": "telecom", "task_id": "ok"},
+    )
+    Tau2AgentWorkflow.validate_exported_interactions(
+        interactions={"leaf-1": object(), "leaf-2": object()},
+        export_style="individual",
+        data={"domain": "telecom", "task_id": "legacy"},
+    )
 
 
 def test_tau2_eval_wait_none_writes_failed_status_not_completed(tmp_path):
@@ -329,8 +386,8 @@ def test_initial_eval_consumes_trigger_without_requesting_unsaved_step1(
         SimpleNamespace(
             last_step_info=StepInfo(
                 epoch=0,
-                epoch_step=19,
-                global_step=19,
+                epoch_step=4,
+                global_step=4,
                 steps_per_epoch=23,
             )
         )
@@ -343,8 +400,8 @@ def test_initial_eval_consumes_trigger_without_requesting_unsaved_step1(
         FinetuneSpec(total_train_epochs=2, dataset_size=178, train_batch_size=8),
     )
     if recovering:
-        trainer.evaluator.freq_ctl.check(epochs=0, steps=19)
-        assert trainer.evaluator.freq_ctl.state_dict()["step"]["steps"] == 19
+        trainer.evaluator.freq_ctl.check(epochs=0, steps=4)
+        assert trainer.evaluator.freq_ctl.state_dict()["step"]["steps"] == 4
     queued = []
     trainer._evaluate_fn = lambda *args: queued.append("backbone")
     trainer._enqueue_eval = lambda **kwargs: queued.append(
@@ -354,20 +411,20 @@ def test_initial_eval_consumes_trigger_without_requesting_unsaved_step1(
     monkeypatch.setattr(PPOTrainer, "train", lambda *args, **kwargs: None)
     trainer.train(eval_workflow="workflow", eval_workflow_kwargs={})
     if recovering:
-        assert queued == [(20, queued[0][1])]
-        assert queued[0][1].endswith("epoch0epochstep19globalstep19")
-        assert trainer.evaluator.freq_ctl.state_dict()["step"]["steps"] == 20
+        assert queued == [(5, queued[0][1])]
+        assert queued[0][1].endswith("epoch0epochstep4globalstep4")
+        assert trainer.evaluator.freq_ctl.state_dict()["step"]["steps"] == 5
         trainer.train(eval_workflow="workflow", eval_workflow_kwargs={})
-        assert queued == [(20, queued[0][1])]
-        assert trainer.evaluator.freq_ctl.state_dict()["step"]["steps"] == 20
-        trainer._evaluate("workflow", {}, 0, 20, 20)
-        assert queued == [(20, queued[0][1])]
+        assert queued == [(5, queued[0][1])]
+        assert trainer.evaluator.freq_ctl.state_dict()["step"]["steps"] == 5
+        trainer._evaluate("workflow", {}, 0, 5, 5)
+        assert queued == [(5, queued[0][1])]
         return
-    for step in range(20):
+    for step in range(5):
         trainer._evaluate("workflow", {}, 0, step, step)
-        if step < 19:
+        if step < 4:
             assert queued == ["backbone"]
-    assert queued == ["backbone", (20, queued[1][1])]
+    assert queued == ["backbone", (5, queued[1][1])]
 
 
 def test_recovered_non_frequency_step_catches_up_counter_without_eval(

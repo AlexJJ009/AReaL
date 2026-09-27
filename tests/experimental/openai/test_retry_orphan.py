@@ -232,3 +232,35 @@ def test_drop_updates_total_reward():
     assert dropped == ["orphan"]
     # The orphan's 5.0 must be removed from the running total, leaving retry's.
     assert cache.total_reward == pytest.approx(3.0)
+
+
+def test_concat_retry_orphan_keeps_eight_logical_group_samples():
+    """A duplicate completion in one session must not turn GRPO N=8 into 9."""
+    sessions = []
+    for sample in range(8):
+        cache = InteractionCache()
+        messages = [_user_msg(f"sample {sample}")]
+        if sample == 4:
+            cache["orphan"] = _make_interaction(
+                "orphan", messages, [_assistant_msg("unused malformed output")]
+            )
+        cache["consumed"] = _make_interaction(
+            "consumed", messages, [_assistant_msg("accepted output")]
+        )
+        cache["final"] = _make_interaction(
+            "final",
+            messages + [_assistant_msg("accepted output"), _user_msg("continue")],
+        )
+        sessions.append(cache)
+
+    before = [cache.export_interactions(style="concat") for cache in sessions]
+    assert sum(len(rows) for rows in before) == 9
+    assert set(before[4]) == {"orphan", "final"}
+
+    after = [
+        cache.export_interactions(style="concat", drop_retry_orphans=True)
+        for cache in sessions
+    ]
+    assert sum(len(rows) for rows in after) == 8
+    assert all(set(rows) == {"final"} for rows in after)
+    assert all(rows["final"].parent.interaction_id == "consumed" for rows in after)

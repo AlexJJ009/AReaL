@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import hashlib
+import inspect
 import os
 import threading
 from concurrent.futures import ProcessPoolExecutor
@@ -166,6 +167,22 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
         async with session.post(url, headers=headers) as resp:
             resp.raise_for_status()
 
+    async def _validate_exported_interactions(
+        self,
+        interactions: dict[str, InteractionWithTokenLogpReward],
+        data: dict[str, Any],
+    ) -> None:
+        validate_export = getattr(self.agent, "validate_exported_interactions", None)
+        if validate_export is None:
+            return
+        result = validate_export(
+            interactions=interactions,
+            export_style=self.export_style,
+            data=data,
+        )
+        if inspect.isawaitable(result):
+            await result
+
     @staticmethod
     def _episode_tensor_id(identity: str) -> int:
         raw = hashlib.sha256(identity.encode("utf-8")).digest()[:8]
@@ -240,6 +257,7 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
                 style=self.export_style,
                 drop_retry_orphans=self.drop_retry_orphans,
             )
+            await self._validate_exported_interactions(interactions, data)
 
             # Return None if no interactions (empty session — user never sent chat/completions)
             if not interactions:
@@ -296,6 +314,7 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
             style=self.export_style,
             drop_retry_orphans=self.drop_retry_orphans,
         )
+        await self._validate_exported_interactions(interactions, data)
         if episode_result is not None:
             episode_id = self._episode_tensor_id(
                 f"{proxy_task_id}:{proxy_client.session_id}"

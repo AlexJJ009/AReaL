@@ -9,14 +9,30 @@ import subprocess
 import sys
 from pathlib import Path
 
+from scripts.sao import gpu_diagnostics as legacy_gpu_diagnostics
 from scripts.sao.gpu_admission import GPUAdmissionConfig, GPUAdmissionQueryError
 from scripts.sao.gpu_diagnostics import (
+    _admission_from_args,
+    _parse_args,
     _parse_proc_stat_starttime,
     _start_monitors,
     query_compute_memory_snapshot,
     read_process_owner,
     run_diagnostics,
 )
+
+from areal.utils import gpu_diagnostics as common_gpu_diagnostics
+
+
+def test_legacy_gpu_diagnostics_exports_shared_objects():
+    assert legacy_gpu_diagnostics.main is common_gpu_diagnostics.main
+    assert (
+        legacy_gpu_diagnostics.run_diagnostics is common_gpu_diagnostics.run_diagnostics
+    )
+    assert (
+        legacy_gpu_diagnostics.query_compute_memory_snapshot
+        is common_gpu_diagnostics.query_compute_memory_snapshot
+    )
 
 
 class FakeNvidiaSmi:
@@ -247,6 +263,14 @@ def test_cli_help_is_cpu_only_and_documents_opt_in():
     assert "never reads process environments or full command lines" in " ".join(
         result.stdout.split()
     )
+
+
+def test_diagnostics_cli_defaults_to_long_idle_admission():
+    args = _parse_args(["--", sys.executable, "-c", "raise SystemExit(0)"])
+    admission = _admission_from_args(args)
+
+    assert admission.timeout_seconds == 86400
+    assert admission.stable_seconds == 60
 
 
 def test_read_process_owner_tolerates_exited_process(tmp_path):

@@ -33,6 +33,7 @@ from examples.tau2.utils import Tau2EnvConfig, Tau2RunInfo
 from areal.experimental.openai.types import (
     CONTEXT_LENGTH_EXCEEDED_MARKER,
     AgentWorkflowResult,
+    InteractionWithTokenLogpReward,
 )
 from areal.utils import logging
 
@@ -46,6 +47,10 @@ class Tau2EpisodeTimeoutError(TimeoutError):
 
 class Tau2InfrastructureError(RuntimeError):
     """Unexpected environment/evaluator failure that must not become reward zero."""
+
+
+class Tau2ExportCardinalityError(RuntimeError):
+    """Retryable proxy export shape failure before tensors enter training."""
 
 
 def is_context_budget_error(exc: BaseException) -> bool:
@@ -397,6 +402,8 @@ class Tau2AgentWorkflow:
         if "maximum context length" in message or "context_length_exceeded" in message:
             return False
         cause = exc.__cause__
+        if isinstance(cause, Tau2ExportCardinalityError):
+            return True
         return isinstance(
             cause,
             (
@@ -407,6 +414,26 @@ class Tau2AgentWorkflow:
                 litellm.InternalServerError,
             ),
         )
+
+    @staticmethod
+    def validate_exported_interactions(
+        *,
+        interactions: dict[str, InteractionWithTokenLogpReward],
+        export_style: str,
+        data: dict[str, Any],
+    ) -> None:
+        if export_style != "concat":
+            return
+        if len(interactions) == 1:
+            return
+        task_id = data.get("task_id", "<unknown>")
+        domain = data.get("domain", "<unknown>")
+        cause = Tau2ExportCardinalityError(
+            f"τ² concat export requires exactly one trajectory for "
+            f"{domain}/{task_id}, got {len(interactions)}: "
+            f"{sorted(interactions.keys())}"
+        )
+        raise Tau2InfrastructureError(str(cause)) from cause
 
     async def run(
         self, data: dict[str, Any], **extra_kwargs: Any
