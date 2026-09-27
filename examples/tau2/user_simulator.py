@@ -37,6 +37,22 @@ class RetryingUserSimulator(UserSimulator):
             # API. Roll it back on failure so the retry has exactly the same input.
             try:
                 response = super()._generate_next_message(message, state)
+            except json.JSONDecodeError as exc:
+                self._record(state, incident_id, attempt, error=exc)
+                del state.messages[history_size:]
+                if attempt:
+                    raise
+                logger.warning(
+                    "Malformed user simulator tool JSON for %s/%s, attempt %s/2; "
+                    "evidence %s/%s-%s.json",
+                    self.domain,
+                    self.task_id,
+                    attempt + 1,
+                    self.debug_dir,
+                    incident_id,
+                    attempt,
+                )
+                continue
             except Exception as exc:
                 self._record(state, incident_id, attempt, error=exc)
                 del state.messages[history_size:]
@@ -100,6 +116,11 @@ class RetryingUserSimulator(UserSimulator):
                     "type": type(error).__name__,
                     "message": str(error),
                     "body": getattr(error, "body", None),
+                    **(
+                        {"doc": error.doc, "pos": error.pos}
+                        if isinstance(error, json.JSONDecodeError)
+                        else {}
+                    ),
                 }
                 if error
                 else None,

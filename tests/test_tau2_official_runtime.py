@@ -360,6 +360,124 @@ def test_empty_user_response_retries_identical_request_once(
     assert "api_key" not in records[0]["request"]["args"]
 
 
+@pytest.mark.parametrize(
+    "second_arguments,recovers",
+    [
+        ('{"phone": "123"}', True),
+        ('{"phone":', False),
+    ],
+)
+def test_malformed_user_tool_json_retries_once_and_records_decode_error(
+    monkeypatch, tmp_path, second_arguments, recovers
+):
+    import copy
+    import json
+
+    from tau2.data_model.message import AssistantMessage
+
+    from examples.tau2.user_simulator import RetryingUserSimulator
+
+    requests = []
+
+    def completion(**kwargs):
+        requests.append(copy.deepcopy(kwargs["messages"]))
+        arguments = '{"phone":' if len(requests) == 1 else second_arguments
+        return ModelResponse(
+            model="test",
+            choices=[
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": f"tool-{len(requests)}",
+                                "type": "function",
+                                "function": {
+                                    "name": "verify_phone",
+                                    "arguments": arguments,
+                                },
+                            }
+                        ],
+                    },
+                }
+            ],
+        )
+
+    monkeypatch.setattr(llm_utils, "completion", completion)
+    simulator = RetryingUserSimulator(
+        debug_dir=tmp_path,
+        task_id="task",
+        domain="telecom",
+        instructions="Test scenario",
+        tools=None,
+        llm="openai/test",
+    )
+    state = simulator.get_init_state()
+    incoming = AssistantMessage(role="assistant", content="Check your phone")
+
+    if recovers:
+        response, result_state = simulator.generate_next_message(incoming, state)
+        assert response.tool_calls[0].arguments == {"phone": "123"}
+        assert result_state.messages == [incoming, response]
+    else:
+        with pytest.raises(json.JSONDecodeError):
+            simulator.generate_next_message(incoming, state)
+        assert state.messages == []
+    assert len(requests) == 2
+    assert requests[0] == requests[1]
+    records = [json.loads(p.read_text()) for p in sorted(tmp_path.glob("*.json"))]
+    assert len(records) == 2
+    assert records[0]["error"]["type"] == "JSONDecodeError"
+    assert records[0]["error"]["doc"] == '{"phone":'
+    assert records[0]["error"]["pos"] == len('{"phone":')
+    if recovers:
+        assert records[1]["error"] is None
+        assert (
+            records[1]["response"]["choices"][0]["message"]["tool_calls"][0][
+                "function"
+            ]["arguments"]
+            == '{"phone": "123"}'
+        )
+    else:
+        assert records[1]["error"]["type"] == "JSONDecodeError"
+        assert records[1]["error"]["doc"] == '{"phone":'
+        assert records[1]["error"]["pos"] == len('{"phone":')
+
+
+def test_user_simulator_unrelated_exception_does_not_retry(monkeypatch, tmp_path):
+    from tau2.data_model.message import AssistantMessage
+
+    from examples.tau2.user_simulator import RetryingUserSimulator
+
+    calls = []
+
+    def completion(**kwargs):
+        calls.append(kwargs["messages"])
+        raise RuntimeError("transport failed")
+
+    monkeypatch.setattr(llm_utils, "completion", completion)
+    simulator = RetryingUserSimulator(
+        debug_dir=tmp_path,
+        task_id="task",
+        domain="telecom",
+        instructions="Test scenario",
+        tools=None,
+        llm="openai/test",
+    )
+    state = simulator.get_init_state()
+
+    with pytest.raises(RuntimeError, match="transport failed"):
+        simulator.generate_next_message(
+            AssistantMessage(role="assistant", content="Check your phone"),
+            state,
+        )
+
+    assert len(calls) == 1
+    assert state.messages == []
+
+
 def test_user_tool_only_reply_is_valid_without_retry(monkeypatch, tmp_path):
     from tau2.data_model.message import AssistantMessage
 
