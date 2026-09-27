@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import dataclasses
 import gc
+import json
 import math
 import os
 import time
@@ -12,6 +13,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import Future
 from contextlib import contextmanager, nullcontext
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -147,6 +149,12 @@ from areal.utils.offload import (
     torch_memory_saver,
 )
 from areal.utils.perf_tracer import trace_perf, trace_scope
+from areal.utils.runtime_audit import (
+    runtime_audit_enabled,
+    sanitize_runtime_value,
+    tensor_evidence,
+    write_runtime_audit,
+)
 from areal.utils.save_load import get_state_dict_from_repo_id_or_path
 
 if TYPE_CHECKING:
@@ -243,6 +251,73 @@ def _dcp_has_uninitialized_state_manifest(path: str) -> bool:
     metadata = dcp.FileSystemReader(path).read_metadata()
     state_dict_metadata = getattr(metadata, "state_dict_metadata", {})
     return "dcp.optim_uninitialized_state" in state_dict_metadata
+
+
+def _checkpoint_score_weight_evidence(path: str) -> dict[str, Any] | None:
+    root = Path(path)
+    if not root.is_dir():
+        return None
+    index_path = root / "model.safetensors.index.json"
+    candidate_shard = None
+    if index_path.is_file():
+        try:
+            index = json.loads(index_path.read_text(encoding="utf-8"))
+            candidate_shard = index.get("weight_map", {}).get("score.weight")
+        except (OSError, json.JSONDecodeError):
+            return {"status": "unreadable_index", "index": str(index_path)}
+    else:
+        single = root / "model.safetensors"
+        if single.is_file():
+            candidate_shard = single.name
+    if candidate_shard is None:
+        return {"status": "score.weight_not_indexed"}
+    try:
+        from safetensors.torch import safe_open
+
+        shard_path = root / candidate_shard
+        with safe_open(shard_path, framework="pt", device="cpu") as handle:
+            if "score.weight" not in handle.keys():
+                return {
+                    "status": "score.weight_missing_from_shard",
+                    "shard": str(shard_path),
+                }
+            tensor = handle.get_tensor("score.weight")
+        return {
+            "status": "loaded",
+            "shard": str(shard_path),
+            **tensor_evidence(tensor, digest=True),
+        }
+    except Exception as exc:
+        return {
+            "status": "load_failed",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+
+
+def _compare_score_evidence(
+    runtime: dict[str, Any], checkpoint: dict[str, Any]
+) -> dict[str, Any]:
+    if checkpoint.get("status") != "loaded" or "sha256" not in runtime:
+        return {"status": "not_comparable"}
+    same_shape = runtime.get("shape") == checkpoint.get("shape")
+    same_digest = runtime.get("sha256") == checkpoint.get("sha256")
+    if same_shape and same_digest:
+        return {"status": "exact_match"}
+    if runtime.get("local_shape") is not None:
+        return {
+            "status": "runtime_local_shard_recorded",
+            "checkpoint_shape": checkpoint.get("shape"),
+            "runtime_shape": runtime.get("shape"),
+            "runtime_local_shape": runtime.get("local_shape"),
+        }
+    return {
+        "status": "mismatch",
+        "checkpoint_shape": checkpoint.get("shape"),
+        "runtime_shape": runtime.get("shape"),
+        "same_shape": same_shape,
+        "same_digest": same_digest,
+    }
 
 
 class FSDPEngine(TrainEngine):
@@ -589,6 +664,7 @@ class FSDPEngine(TrainEngine):
             )
 
         self._initialized = True
+        self._write_post_init_runtime_audit()
 
     @property
     def data_parallel_group(self) -> dist.ProcessGroup:
@@ -1503,6 +1579,128 @@ class FSDPEngine(TrainEngine):
                 f"Unknown lr scheduler type {self.optimizer_config.lr_scheduler_type}"
             )
         self.logger.info(f"Create optimizer time: {time.perf_counter() - tik}")
+
+    def _write_post_init_runtime_audit(self) -> None:
+        if not runtime_audit_enabled():
+            return
+        payload = {
+            "engine": {
+                "class": type(self).__name__,
+                "initialized": self._initialized,
+                "role": "critic" if self.config.is_critic else "actor",
+                "backend": self.config.backend,
+                "config": sanitize_runtime_value(self.config),
+            },
+            "model": self._runtime_model_evidence(),
+            "optimizer": self._runtime_optimizer_evidence(),
+            "parallel": self._runtime_parallel_evidence(),
+            "device": self._runtime_device_evidence(),
+        }
+        write_runtime_audit(
+            f"fsdp-post-init-{'critic' if self.config.is_critic else 'actor'}",
+            payload,
+        )
+
+    def _runtime_model_evidence(self) -> dict[str, Any]:
+        trainable_numel = 0
+        frozen_numel = 0
+        named_parameters = []
+        score_evidence = None
+        for name, param in self.model.named_parameters():
+            numel = int(param.numel())
+            if param.requires_grad:
+                trainable_numel += numel
+            else:
+                frozen_numel += numel
+            if name.endswith("score.weight") or name == "score.weight":
+                score_evidence = {
+                    "name": name,
+                    **tensor_evidence(param, digest=True),
+                }
+            named_parameters.append(
+                {
+                    "name": name,
+                    "shape": list(param.shape),
+                    "dtype": str(param.dtype).replace("torch.", ""),
+                    "requires_grad": bool(param.requires_grad),
+                    "numel": numel,
+                }
+            )
+        source_score = _checkpoint_score_weight_evidence(self.config.path)
+        if score_evidence is not None and source_score is not None:
+            score_evidence["checkpoint"] = source_score
+            score_evidence["checkpoint_comparison"] = _compare_score_evidence(
+                score_evidence, source_score
+            )
+        return {
+            "path": self.config.path,
+            "model_type": getattr(self.model_config, "model_type", None),
+            "architectures": getattr(self.model_config, "architectures", None),
+            "is_critic": self.config.is_critic,
+            "scalar_value_artifact": self._scalar_value_artifact,
+            "qwen35_token_critic_adapter": _use_qwen35_token_critic_adapter(
+                self.config, self.model_config
+            ),
+            "model_class": type(self.model).__name__,
+            "config_class": type(self.model_config).__name__,
+            "parameter_counts": {
+                "trainable_numel": trainable_numel,
+                "frozen_numel": frozen_numel,
+                "total_numel": trainable_numel + frozen_numel,
+            },
+            "critic_freeze": getattr(self, "_critic_freeze_manifest", None),
+            "score_weight": score_evidence,
+            "parameters": named_parameters,
+        }
+
+    def _runtime_optimizer_evidence(self) -> dict[str, Any] | None:
+        optimizer = getattr(self, "optimizer", None)
+        if optimizer is None:
+            return None
+        groups = []
+        for index, group in enumerate(optimizer.param_groups):
+            params = list(group.get("params", []))
+            groups.append(
+                {
+                    "index": index,
+                    "lr": group.get("lr"),
+                    "weight_decay": group.get("weight_decay"),
+                    "betas": group.get("betas"),
+                    "eps": group.get("eps"),
+                    "parameter_count": len(params),
+                    "parameter_numel": sum(int(param.numel()) for param in params),
+                }
+            )
+        return {
+            "class": type(optimizer).__name__,
+            "config": sanitize_runtime_value(self.optimizer_config),
+            "param_groups": groups,
+            "lr_scheduler": type(getattr(self, "lr_scheduler", None)).__name__
+            if hasattr(self, "lr_scheduler")
+            else None,
+        }
+
+    def _runtime_parallel_evidence(self) -> dict[str, Any]:
+        return {
+            "world_size": getattr(self, "world_size", None),
+            "rank": getattr(self, "rank", None),
+            "dp_rank": getattr(self, "dp_rank", None),
+            "dp_head": getattr(self, "dp_head", None),
+            "parallel_helper": str(getattr(self, "parallel_helper", "")),
+            "backend": current_platform.communication_backend,
+            "world_mesh": str(getattr(self, "world_mesh", "")),
+        }
+
+    def _runtime_device_evidence(self) -> dict[str, Any]:
+        return {
+            "device": str(getattr(self, "device", None)),
+            "platform_device_type": current_platform.device_type,
+            "tms_enabled": is_tms_enabled(),
+            "tms_hook_mode": getattr(torch_memory_saver, "hook_mode", None),
+            "offload": self.config.offload,
+            "fsdp_offload_params": self.config.fsdp.offload_params,
+            "is_offload": getattr(self, "is_offload", False),
+        }
 
     def _check_rollout_engine_connected(self) -> None:
         """Validate that rollout engine has been connected via connect_engine()."""

@@ -1487,6 +1487,29 @@ class RemoteInfEngine(InferenceEngine):
         )
         try:
             self._wait_for_server(address, process=process)
+            if os.environ.get("AREAL_RUNTIME_AUDIT_DIR"):
+                from areal.utils.runtime_audit import write_runtime_audit
+
+                # Query the ready server so server-side defaults/overrides are
+                # distinguishable from the arguments submitted by the launcher.
+                snapshot = {
+                    "address": address,
+                    "server_pid": process.pid,
+                    "launch_args": server_args,
+                    "backend": type(self.backend).__name__,
+                }
+                if type(self.backend).__name__ == "SGLangBackend":
+                    try:
+                        with requests.Session() as session:
+                            session.trust_env = False
+                            response = session.get(
+                                f"http://{address}/get_server_info", timeout=10
+                            )
+                            response.raise_for_status()
+                            snapshot["loaded_server_info"] = response.json()
+                    except (requests.RequestException, ValueError) as exc:
+                        snapshot["readback_error"] = type(exc).__name__
+                write_runtime_audit("inference-server-ready", snapshot)
             self.local_server_processes.append(server_info)
             return server_info
         except (TimeoutError, RuntimeError) as e:

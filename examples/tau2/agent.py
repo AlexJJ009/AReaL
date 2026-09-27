@@ -372,6 +372,17 @@ class Tau2AgentWorkflow:
         self.gen_args = gen_args or {}
         self.timeout = timeout
         self.infra_retries = infra_retries
+        from areal.utils.runtime_audit import write_runtime_audit
+
+        write_runtime_audit(
+            "tau2-workflow-initialized",
+            {
+                "environment": self.econfig,
+                "generation": self.gen_args,
+                "timeout": self.timeout,
+                "infra_retries": self.infra_retries,
+            },
+        )
 
     @staticmethod
     def should_retry_episode(exc: Exception) -> bool:

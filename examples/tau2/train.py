@@ -446,6 +446,23 @@ def main(args):
         train_dataset=train_dataset,
         valid_dataset=valid_dataset,
     ) as trainer:
+        # Record the controller only after dataset/snapshot resolution and engine
+        # initialization. Worker records independently describe loaded objects.
+        from areal.utils.runtime_audit import write_runtime_audit
+
+        write_runtime_audit(
+            "tau2-controller-initialized",
+            {
+                "config": trainer.config,
+                "workflow_kwargs": workflow_kwargs,
+                "eval_workflow_kwargs": eval_workflow_kwargs,
+                "train_prompts": len(train_dataset),
+                "validation_prompts": len(valid_dataset)
+                if valid_dataset is not None
+                else 0,
+                "recovered": trainer.recover_info is not None,
+            },
+        )
         dynamic_filter_fn = (
             "examples.tau2.train.group_filter" if config.dynamic_group_filter else None
         )

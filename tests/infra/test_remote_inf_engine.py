@@ -48,3 +48,32 @@ def test_launch_server_shuts_down_the_server_on_any_launch_failure(failure):
 
     shutdown.assert_called_once()
     assert engine.local_server_processes == []
+
+
+def test_runtime_audit_reads_ready_server_overrides(monkeypatch, tmp_path):
+    import json
+
+    monkeypatch.setenv("AREAL_RUNTIME_AUDIT_DIR", str(tmp_path))
+    backend = type("SGLangBackend", (), {})()
+    process = mock.Mock(spec=subprocess.Popen, pid=4242)
+    backend.launch_server = mock.Mock(return_value=process)
+    engine = RemoteInfEngine(InferenceEngineConfig(), backend=backend)
+    with (
+        mock.patch.object(engine, "_wait_for_server"),
+        mock.patch(
+            "areal.infra.remote_inf_engine.find_free_ports", return_value=[30000]
+        ),
+        mock.patch("areal.infra.remote_inf_engine.gethostip", return_value="127.0.0.1"),
+        mock.patch("areal.infra.remote_inf_engine.requests.Session") as session_class,
+    ):
+        session = session_class.return_value.__enter__.return_value
+        session.get.return_value.json.return_value = {
+            "context_length": 32768,
+            "api_key": "private",
+        }
+        engine.launch_server({"context_length": 16384})
+    record = json.loads(next(tmp_path.glob("*.json")).read_text())["payload"]
+    assert record["launch_args"]["context_length"] == 16384
+    assert record["loaded_server_info"]["context_length"] == 32768
+    assert record["loaded_server_info"]["api_key"] == "<redacted>"
+    assert session.trust_env is False
