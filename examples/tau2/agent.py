@@ -5,12 +5,14 @@ for OpenAI-compatible API calls during RL training.
 """
 
 import asyncio
+import json
 import os
 import time
 from collections.abc import Awaitable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, TypeVar
+from uuid import uuid4
 
 import litellm
 import tau2.evaluator.evaluator_nl_assertions as tau2_nl_evaluator
@@ -324,13 +326,59 @@ class Tau2Runner:
 
         try:
             self._bind_nl_assertion_evaluator()
-            reward_info = evaluate_simulation(
-                domain=domain,
-                task=task,
-                simulation=simulation,
-                evaluation_type=EvaluationType.ALL,
-                solo_mode=solo_mode,
-            )
+            incident_id = uuid4().hex
+            for attempt in range(2):
+                try:
+                    reward_info = evaluate_simulation(
+                        domain=domain,
+                        task=task,
+                        simulation=simulation,
+                        evaluation_type=EvaluationType.ALL,
+                        solo_mode=solo_mode,
+                    )
+                    break
+                except json.JSONDecodeError as exc:
+                    # Only repeat scoring of this exact completed simulation.
+                    # Never replay live policy/user/tool interactions or retry a
+                    # valid score; official evaluation reconstructs fresh envs.
+                    debug_dir = (
+                        Path(os.environ.get("TAU2_RUN_ROOT", "."))
+                        / "tau2-evaluator-failures"
+                    )
+                    path = debug_dir / f"{incident_id}-{attempt}.json"
+                    try:
+                        debug_dir.mkdir(parents=True, exist_ok=True)
+                        with path.open("x", encoding="utf-8") as stream:
+                            json.dump(
+                                {
+                                    "domain": domain,
+                                    "task_id": task.id,
+                                    "attempt": attempt,
+                                    "pid": os.getpid(),
+                                    "error": {
+                                        "type": type(exc).__name__,
+                                        "message": str(exc),
+                                        "doc": exc.doc,
+                                        "pos": exc.pos,
+                                    },
+                                },
+                                stream,
+                                ensure_ascii=False,
+                                indent=2,
+                            )
+                    except OSError:
+                        logger.warning(
+                            "Could not write evaluator incident %s", path, exc_info=True
+                        )
+                    logger.warning(
+                        "Malformed evaluator JSON for %s/%s, attempt %s/2; evidence %s",
+                        domain,
+                        task.id,
+                        attempt + 1,
+                        path,
+                    )
+                    if attempt:
+                        raise
             run_info.reward_info = reward_info
             run_info.reward = reward_info.reward
         except Exception as e:

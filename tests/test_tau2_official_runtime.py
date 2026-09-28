@@ -1,6 +1,7 @@
 """CPU qualification against the pinned official τ² package and data assets."""
 
 import asyncio
+import json
 import os
 
 import pytest
@@ -646,3 +647,74 @@ async def test_episode_wall_timeout_is_retryable_infra_before_reward(monkeypatch
     evaluator.assert_not_called()
     assert isinstance(caught.value.__cause__, module.Tau2EpisodeTimeoutError)
     assert Tau2AgentWorkflow.should_retry_episode(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "responses, expected_calls, expected_reward, error_type",
+    [
+        (["malformed", 1.0], 2, 1.0, None),
+        (["malformed", "malformed"], 2, None, json.JSONDecodeError),
+        ([0.0], 1, 0.0, None),
+        (["unrelated"], 1, None, RuntimeError),
+    ],
+)
+async def test_evaluator_json_retry_preserves_simulation_and_failure_class(
+    monkeypatch, tmp_path, responses, expected_calls, expected_reward, error_type
+):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import examples.tau2.agent as module
+
+    runner = Tau2Runner(
+        econfig=Tau2EnvConfig(domain="retail"),
+        gen_args={},
+        agent_base_url="http://policy.invalid/v1",
+        agent_api_key="session-secret",
+        user_api_key="user-secret",
+        timeout=1200.0,
+    )
+    task = _get_task("retail", "68", "test")
+    simulation = SimpleNamespace(messages=[], termination_reason="completed")
+    orchestrator = SimpleNamespace(run=Mock(return_value=simulation))
+    monkeypatch.setenv("TAU2_RUN_ROOT", str(tmp_path))
+    monkeypatch.setattr(runner, "_get_environment", lambda: object())
+    monkeypatch.setattr(runner, "_get_agent_and_user", lambda **kwargs: (None, None))
+    monkeypatch.setattr(runner, "_get_orchestrator", lambda **kwargs: orchestrator)
+    monkeypatch.setattr(runner, "_bind_nl_assertion_evaluator", lambda: None)
+    outcomes = iter(responses)
+    calls = []
+
+    def evaluate(**kwargs):
+        calls.append(kwargs)
+        outcome = next(outcomes)
+        if outcome == "malformed":
+            raise json.JSONDecodeError("Expecting value", "not JSON", 0)
+        if outcome == "unrelated":
+            raise RuntimeError("unrelated scorer failure")
+        return SimpleNamespace(reward=outcome)
+
+    monkeypatch.setattr(module, "evaluate_simulation", evaluate)
+    if error_type:
+        with pytest.raises(module.Tau2InfrastructureError) as caught:
+            await runner.run(task)
+        assert isinstance(caught.value.__cause__, error_type)
+        assert not Tau2AgentWorkflow.should_retry_episode(caught.value)
+    else:
+        result = await runner.run(task)
+        assert result.reward == expected_reward
+    orchestrator.run.assert_called_once()
+    assert len(calls) == expected_calls
+    assert all(call["simulation"] is simulation for call in calls)
+    assert all(call["task"] is task for call in calls)
+    assert all(call == calls[0] for call in calls)
+    paths = list((tmp_path / "tau2-evaluator-failures").glob("*.json"))
+    assert len(paths) == responses.count("malformed")
+    for path in paths:
+        raw = path.read_text()
+        record = json.loads(raw)
+        assert record["error"]["doc"] == "not JSON"
+        assert record["error"]["pos"] == 0
+        assert record["task_id"] == "68"
+        assert "session-secret" not in raw and "user-secret" not in raw
