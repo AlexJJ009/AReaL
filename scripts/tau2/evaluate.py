@@ -9,6 +9,7 @@ import json
 import math
 import sys
 from collections import defaultdict
+from collections.abc import Iterator
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
@@ -267,32 +268,112 @@ def assert_fresh_output(output_root: Path, *, check_config: bool) -> None:
         )
 
 
-def wait_for_submitted(
+def resolve_eval_concurrency(config: Tau2PPOConfig) -> int:
+    """Use the same optional-cap fallback as the native rollout controller."""
+    rollout = config.evaluation_rollout
+    cap = rollout.max_concurrent_rollouts or rollout.consumer_batch_size
+    if cap <= 0:
+        raise ValueError("Evaluation max_concurrent_rollouts must be positive")
+    return cap
+
+
+def iter_completed_rollouts(
     controller: Any,
-    submitted: list[tuple[int, dict[str, Any]]],
-) -> list[tuple[dict[str, Any], dict[str, Any] | None]]:
-    expected = {task_id: row for task_id, row in submitted}
-    if len(expected) != len(submitted):
-        raise RuntimeError("Duplicate rollout task IDs returned by controller.submit")
-    raw_results = controller.dispatcher.wait_results(len(submitted), timeout=None)
-    if len(raw_results) != len(submitted):
-        raise RuntimeError(
-            f"Evaluation coverage mismatch: {len(raw_results)} != {len(submitted)}"
-        )
-    mapped: dict[int, dict[str, Any] | None] = {}
-    for result in raw_results:
+    rows: list[dict[str, Any]],
+    *,
+    workflow_kwargs: dict[str, Any],
+    max_inflight: int,
+) -> Iterator[tuple[dict[str, Any], dict[str, Any] | None]]:
+    """Refill a bounded window after each persisted result, across trial boundaries."""
+    if max_inflight <= 0:
+        raise ValueError("Evaluation max_concurrent_rollouts must be positive")
+    if len({row["source_id"] for row in rows}) != len(rows):
+        raise ValueError("Duplicate evaluation source IDs")
+    pending: dict[int, dict[str, Any]] = {}
+    submitted: set[int] = set()
+    completed: set[int] = set()
+    next_row = 0
+    while pending or next_row < len(rows):
+        while next_row < len(rows) and len(pending) < max_inflight:
+            row = rows[next_row]
+            task_id = controller.submit(
+                row,
+                workflow="examples.tau2.agent.Tau2AgentWorkflow",
+                workflow_kwargs=workflow_kwargs,
+                group_size=1,
+                is_eval=True,
+                reward_normalization=False,
+                drop_incomplete_group=False,
+            )
+            if task_id in submitted:
+                raise RuntimeError(
+                    "Duplicate rollout task IDs returned by controller.submit"
+                )
+            submitted.add(task_id)
+            pending[task_id] = row
+            next_row += 1
+        # Select any available result; never wait for the first submitted task or
+        # for a full trial. The caller persists this result before the next refill.
+        results = controller.dispatcher.wait_results(1, timeout=None)
+        if len(results) != 1:
+            raise RuntimeError("Evaluation coverage mismatch: expected one result")
+        result = results[0]
         if result is None:
             raise RuntimeError("Rollout dispatcher returned an unbound failed result")
         task_id = result.task_id
-        if task_id not in expected:
-            raise RuntimeError(f"Unexpected rollout task ID: {task_id}")
-        if task_id in mapped:
+        if task_id in completed:
             raise RuntimeError(f"Duplicate rollout task result: {task_id}")
-        mapped[task_id] = result.trajectory
-    missing = sorted(set(expected) - set(mapped))
-    if missing:
-        raise RuntimeError(f"Missing rollout task results: {missing}")
-    return [(row, mapped[task_id]) for task_id, row in submitted]
+        if task_id not in pending:
+            raise RuntimeError(f"Unexpected rollout task ID: {task_id}")
+        row = pending.pop(task_id)
+        completed.add(task_id)
+        yield row, result.trajectory
+    if len(completed) != len(rows):
+        raise RuntimeError("Evaluation coverage mismatch: missing rollout task results")
+
+
+def collect_eval_records(
+    controller: Any,
+    rows: list[dict[str, Any]],
+    *,
+    workflow_kwargs: dict[str, Any],
+    max_inflight: int,
+    output_root: Path,
+    repeats: int,
+) -> list[dict[str, Any]]:
+    """Keep completed evidence durable even if a later dispatcher call fails."""
+    records: list[dict[str, Any]] = []
+    try:
+        for row, trajectory in iter_completed_rollouts(
+            controller, rows, workflow_kwargs=workflow_kwargs, max_inflight=max_inflight
+        ):
+            try:
+                record = record_from_trajectory(row, trajectory)
+            except Exception as exc:
+                record = {
+                    "status": "infra_failed",
+                    "domain": row["domain"],
+                    "task_id": row["task_id"],
+                    "trial": int(row["trial"]),
+                    "source_id": row["source_id"],
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+                write_record(output_root / "episodes.jsonl", record)
+                records.append(record)
+                raise
+            write_record(output_root / "episodes.jsonl", record)
+            records.append(record)
+            write_json(
+                output_root / "summary.json",
+                aggregate(records, planned=len(rows), repeats=repeats),
+            )
+    except Exception as exc:
+        summary = aggregate(records, planned=len(rows), repeats=repeats)
+        summary["status"] = "partial"
+        summary["error"] = f"{type(exc).__name__}: {exc}"
+        write_json(output_root / "summary.json", summary)
+        raise
+    return records
 
 
 def run(argv: list[str]) -> dict[str, Any]:
@@ -306,6 +387,7 @@ def run(argv: list[str]) -> dict[str, Any]:
     )
     rows = build_eval_rows(config, args.repeats)
     workflow_kwargs = build_workflow_kwargs(config)
+    max_inflight = resolve_eval_concurrency(config)
     manifest = {
         "schema_version": 1,
         "config_file": config_file,
@@ -314,6 +396,8 @@ def run(argv: list[str]) -> dict[str, Any]:
         "output_root": str(output_root),
         "repeats": args.repeats,
         "planned_episodes": len(rows),
+        "max_concurrent_episodes": max_inflight,
+        "dispatch_mode": "rolling",
         "global_seed": config.seed,
         "request_seed": config.eval_gconfig.seed,
         "temperature": config.eval_gconfig.temperature,
@@ -346,45 +430,17 @@ def run(argv: list[str]) -> dict[str, Any]:
         base_gpu_id=0,
     )
     controller = RemoteSGLangEngine.as_controller(config.evaluation_rollout, scheduler)
-    records_path = output_root / "episodes.jsonl"
-    records: list[dict[str, Any]] = []
     try:
         controller.initialize(role="eval-rollout", server_args=server_args)
         controller.start_proxy()
-        for trial in range(args.repeats):
-            submitted = []
-            for row in [item for item in rows if item["trial"] == trial]:
-                task_id = controller.submit(
-                    row,
-                    workflow="examples.tau2.agent.Tau2AgentWorkflow",
-                    workflow_kwargs=workflow_kwargs,
-                    group_size=1,
-                    is_eval=True,
-                    reward_normalization=False,
-                    drop_incomplete_group=False,
-                )
-                submitted.append((task_id, row))
-            for row, trajectory in wait_for_submitted(controller, submitted):
-                try:
-                    record = record_from_trajectory(row, trajectory)
-                except Exception as exc:
-                    record = {
-                        "status": "infra_failed",
-                        "domain": row["domain"],
-                        "task_id": row["task_id"],
-                        "trial": int(row["trial"]),
-                        "source_id": row["source_id"],
-                        "error": f"{type(exc).__name__}: {exc}",
-                    }
-                    write_record(records_path, record)
-                    records.append(record)
-                    write_json(
-                        output_root / "summary.json",
-                        aggregate(records, planned=len(rows), repeats=args.repeats),
-                    )
-                    raise
-                write_record(records_path, record)
-                records.append(record)
+        records = collect_eval_records(
+            controller,
+            rows,
+            workflow_kwargs=workflow_kwargs,
+            max_inflight=max_inflight,
+            output_root=output_root,
+            repeats=args.repeats,
+        )
     finally:
         controller.destroy()
     summary = aggregate(records, planned=len(rows), repeats=args.repeats)
