@@ -6,6 +6,7 @@ for OpenAI-compatible API calls during RL training.
 
 import asyncio
 import os
+import time
 from collections.abc import Awaitable
 from dataclasses import replace
 from pathlib import Path
@@ -169,7 +170,7 @@ class Tau2Runner:
         args.update(
             api_base=self.agent_base_url,
             api_key=self.agent_api_key,
-            timeout=min(self.timeout, 120.0),
+            timeout=self.timeout,
             num_retries=0,
         )
         # The AReaL client reserves SGLang's final context slot when computing
@@ -283,8 +284,13 @@ class Tau2Runner:
             agent=agent, user=user, env=env, task=task
         )
 
+        def run_simulation():
+            started = time.monotonic()
+            simulation = orchestrator.run()
+            return simulation, time.monotonic() - started
+
         try:
-            simulation = await asyncio.to_thread(orchestrator.run)
+            simulation, elapsed = await asyncio.to_thread(run_simulation)
             run_info.messages = simulation.messages
         except Exception as e:
             run_info.messages = orchestrator.get_trajectory()
@@ -307,7 +313,10 @@ class Tau2Runner:
 
         reason = getattr(simulation, "termination_reason", "completed")
         termination_reason = str(getattr(reason, "value", reason)).lower()
-        if termination_reason == "timeout":
+        # Official termination checks are cooperative and can skip the deadline
+        # when the last message has already marked the episode done. Retain the
+        # episode budget even when an in-flight policy request finishes late.
+        if termination_reason == "timeout" or elapsed >= self.timeout:
             error = Tau2EpisodeTimeoutError(
                 f"Episode wall-clock limit {self.timeout}s reached for {domain}/{task.id}"
             )

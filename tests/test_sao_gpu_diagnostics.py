@@ -8,6 +8,9 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import Mock
+
+import pytest
 
 from scripts.sao import gpu_diagnostics as legacy_gpu_diagnostics
 from scripts.sao.gpu_admission import GPUAdmissionConfig, GPUAdmissionQueryError
@@ -283,3 +286,89 @@ def test_read_process_owner_tolerates_exited_process(tmp_path):
         "starttime": None,
         "status": "unavailable_in_current_pid_namespace_or_exited",
     }
+
+
+@pytest.mark.parametrize("child_error", [False, True])
+def test_stubborn_monitor_cleanup_preserves_child_outcome(
+    tmp_path, monkeypatch, child_error
+):
+    class StubbornMonitor(FakeMonitorProcess):
+        pid = 12345
+
+        def poll(self):
+            return None
+
+        def wait(self, timeout=None):
+            raise subprocess.TimeoutExpired("nvidia-smi", timeout)
+
+    class FinishedChild:
+        pid = 54321
+
+        def poll(self):
+            if child_error:
+                raise RuntimeError("original child failure")
+            return 7
+
+    monitors = []
+    streams = []
+    warning = Mock()
+    monkeypatch.setattr(common_gpu_diagnostics.logger, "warning", warning)
+
+    def popen(cmd, **kwargs):
+        if cmd[0] == "nvidia-smi":
+            monitor = StubbornMonitor()
+            monitors.append(monitor)
+            streams.append(kwargs["stdout"])
+            return monitor
+        return FinishedChild()
+
+    def run():
+        return run_diagnostics(
+            ("fake-child",),
+            output_dir=tmp_path,
+            admission=_admission(),
+            runner=FakeNvidiaSmi([]),
+            popen=popen,
+            sleep=lambda _: None,
+        )
+
+    if child_error:
+        with pytest.raises(RuntimeError, match="original child failure"):
+            run()
+    else:
+        assert run() == 7
+        result = json.loads((tmp_path / "gpu-diagnostics-result.json").read_text())
+        assert result["returncode"] == 7
+    assert len(monitors) == 2
+    assert all(monitor.terminated and monitor.killed for monitor in monitors)
+    assert all(stream.closed for stream in streams)
+    assert warning.call_count == 2
+    for call in warning.call_args_list:
+        assert "exit unconfirmed" in call.args[0]
+        assert call.args[1] == StubbornMonitor.pid
+
+
+def test_monitor_cleanup_closes_all_streams_after_os_error(monkeypatch):
+    failed = Mock(pid=12345)
+    failed.poll.return_value = None
+    failed.terminate.side_effect = PermissionError("terminate denied")
+    failed.wait.side_effect = subprocess.TimeoutExpired("nvidia-smi", 0)
+    failed.kill.side_effect = PermissionError("kill denied")
+    normal = FakeMonitorProcess()
+    failed_stream = Mock()
+    failed_stream.close.side_effect = OSError("close failed")
+    normal_stream = Mock()
+    warning = Mock()
+    monkeypatch.setattr(common_gpu_diagnostics.logger, "warning", warning)
+
+    common_gpu_diagnostics._stop_monitors(
+        [failed, normal], [failed_stream, normal_stream]
+    )
+
+    assert normal.terminated
+    failed_stream.close.assert_called_once()
+    normal_stream.close.assert_called_once()
+    assert any(
+        "exit unconfirmed" in call.args[0] and call.args[1] == failed.pid
+        for call in warning.call_args_list
+    )

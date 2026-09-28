@@ -37,6 +37,7 @@ LOG_PREFIX_WIDTH = 10  # Fixed width for alignment in merged.log
 #   - light_cyan/cyan: Engines, Platforms, MCore (compute backends)
 LOGGER_COLORS_EXACT = {
     # Schedulers - blue
+    "GPUDiagnostics": "blue",
     "LocalScheduler": "blue",
     "RayScheduler": "blue",
     "SlurmScheduler": "blue",

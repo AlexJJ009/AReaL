@@ -79,6 +79,35 @@ def test_bare_user_model_uses_openai_compatible_litellm_route():
     assert _litellm_user_model("openai/test-user") == "openai/test-user"
 
 
+@pytest.mark.parametrize("episode_timeout", [1200.0, 30.0])
+def test_policy_transport_uses_episode_budget_without_changing_user_or_orchestrator(
+    monkeypatch, episode_timeout
+):
+    import examples.tau2.agent as module
+
+    runner = Tau2Runner(
+        econfig=Tau2EnvConfig(
+            max_steps=200,
+            user_llm_base_url="https://user.invalid/v1",
+            user_llm="openai/test-user",
+        ),
+        gen_args={},
+        agent_base_url="http://policy.invalid/v1",
+        agent_api_key="session",
+        user_api_key="user",
+        timeout=episode_timeout,
+    )
+    monkeypatch.setattr(module, "Orchestrator", lambda **kwargs: kwargs)
+
+    assert runner._agent_llm_args()["timeout"] == episode_timeout
+    assert runner._agent_llm_args()["num_retries"] == 0
+    assert runner._user_llm_args()["timeout"] == min(episode_timeout, 120.0)
+    assert runner._user_llm_args()["num_retries"] == 3
+    orchestrator = runner._get_orchestrator(object(), object(), object(), object())
+    assert orchestrator["timeout"] == episode_timeout
+    assert orchestrator["max_steps"] == 200
+
+
 def test_nl_assertion_evaluator_reuses_qualified_user_route(monkeypatch):
     monkeypatch.setattr(evaluator_nl_assertions, "DEFAULT_LLM_NL_ASSERTIONS", "unbound")
     monkeypatch.setattr(evaluator_nl_assertions, "DEFAULT_LLM_NL_ASSERTIONS_ARGS", {})
@@ -527,6 +556,54 @@ def test_user_tool_only_reply_is_valid_without_retry(monkeypatch, tmp_path):
     assert response.tool_calls[0].name == "check_phone"
     assert len(calls) == 1
     assert not list(tmp_path.glob("*.json"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("elapsed", [1199.0, 1200.0, 1201.0])
+async def test_terminal_episode_deadline_is_checked_before_scoring(
+    monkeypatch, elapsed
+):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import examples.tau2.agent as module
+
+    runner = Tau2Runner(
+        econfig=Tau2EnvConfig(domain="telecom"),
+        gen_args={},
+        agent_base_url="http://policy.invalid/v1",
+        agent_api_key="session",
+        timeout=1200.0,
+    )
+    times = iter([100.0, 100.0 + elapsed])
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: next(times)))
+    monkeypatch.setattr(runner, "_get_environment", lambda: object())
+    monkeypatch.setattr(runner, "_get_agent_and_user", lambda **kwargs: (None, None))
+    monkeypatch.setattr(runner, "_bind_nl_assertion_evaluator", lambda: None)
+    monkeypatch.setattr(
+        runner,
+        "_get_orchestrator",
+        lambda **kwargs: SimpleNamespace(
+            run=lambda: SimpleNamespace(messages=[], termination_reason="completed")
+        ),
+    )
+    evaluator = Mock(return_value=SimpleNamespace(reward=1.0))
+    monkeypatch.setattr(module, "evaluate_simulation", evaluator)
+    task = _get_task(
+        "telecom", get_tau2_dataset("telecom", split="train")[0]["task_id"], "train"
+    )
+
+    if elapsed >= 1200.0:
+        with pytest.raises(
+            module.Tau2InfrastructureError, match="wall-clock"
+        ) as caught:
+            await runner.run(task)
+        assert isinstance(caught.value.__cause__, module.Tau2EpisodeTimeoutError)
+        evaluator.assert_not_called()
+    else:
+        result = await runner.run(task)
+        assert result.reward == 1.0
+        evaluator.assert_called_once()
 
 
 @pytest.mark.asyncio

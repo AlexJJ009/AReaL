@@ -14,6 +14,7 @@ import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from areal.utils import logging
 from areal.utils.gpu_admission import (
     GPUAdmissionCancelled,
     GPUAdmissionConfig,
@@ -27,6 +28,7 @@ from areal.utils.gpu_admission import (
 
 DEFAULT_DEVICES = tuple(str(index) for index in range(8))
 PROC_ROOT = Path("/proc")
+logger = logging.getLogger("GPUDiagnostics")
 
 
 def _parse_proc_stat_starttime(stat: str) -> int | None:
@@ -197,20 +199,39 @@ def _stop_monitors(
     processes: Sequence[subprocess.Popen[bytes]],
     streams: Sequence[object],
 ) -> None:
+    # Diagnostics cleanup must not replace the child's outcome, even when an
+    # nvidia-smi process is stuck in the driver and cannot exit after SIGKILL.
     deadline = time.monotonic() + 2.0
-    for process in processes:
-        if process.poll() is None:
-            process.terminate()
-    for process in processes:
-        if process.poll() is not None:
-            continue
-        try:
-            process.wait(timeout=max(0.0, deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=1)
-    for stream in streams:
-        stream.close()
+    try:
+        for process in processes:
+            try:
+                if process.poll() is None:
+                    process.terminate()
+            except OSError as exc:
+                logger.warning(
+                    "GPU monitor PID %s terminate failed: %s", process.pid, exc
+                )
+        for process in processes:
+            try:
+                if process.poll() is not None:
+                    continue
+                try:
+                    process.wait(timeout=max(0.0, deadline - time.monotonic()))
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1)
+            except (subprocess.TimeoutExpired, OSError) as exc:
+                logger.warning(
+                    "GPU monitor PID %s cleanup incomplete; exit unconfirmed: %s",
+                    process.pid,
+                    exc,
+                )
+    finally:
+        for stream in streams:
+            try:
+                stream.close()
+            except OSError as exc:
+                logger.warning("GPU monitor stream close failed: %s", exc)
 
 
 def _write_json(path: Path, payload: dict[str, object]) -> None:
