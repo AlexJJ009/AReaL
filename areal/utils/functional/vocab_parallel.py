@@ -7,6 +7,7 @@ from typing import TypeVar
 
 import torch
 from torch import distributed as dist
+from torch.autograd.function import once_differentiable
 
 from areal.infra.platforms import is_npu_available
 
@@ -44,10 +45,14 @@ def _chunked_apply(
     logits: torch.Tensor,
     labels: torch.Tensor,
     chunk_size: int = 1024,
+    *,
+    recompute: bool = False,
 ) -> T:
     """Apply a function in chunks along the first dimension to reduce peak memory."""
     total_seqlen = logits.shape[0]
     assert total_seqlen > 0, "Input logits must have at least one element"
+    if recompute and torch.is_grad_enabled() and logits.requires_grad:
+        return _RecomputedChunkedApply.apply(logits, labels, fn, chunk_size)
     results: list = []
 
     for i in range(0, total_seqlen, chunk_size):
@@ -62,6 +67,52 @@ def _chunked_apply(
     return torch.cat(results)
 
 
+class _RecomputedChunkedApply(torch.autograd.Function):
+    """Recompute local vocabulary intermediates and write each gradient chunk once.
+
+    Ordinary slice autograd creates a sequence-sized gradient for every chunk.
+    This operation instead allocates one input gradient and fills it chunkwise,
+    using the original kernel's autograd for each chunk. Only first-order
+    gradients are supported, as with the distributed vocabulary operations.
+    """
+
+    @staticmethod
+    def forward(ctx, logits, labels, fn, chunk_size):
+        ctx.save_for_backward(logits, labels)
+        ctx.fn = fn
+        ctx.chunk_size = chunk_size
+        ctx.set_materialize_grads(False)
+        return _chunked_apply(fn, logits, labels, chunk_size)
+
+    @staticmethod
+    @once_differentiable
+    def backward(ctx, *grad_outputs):
+        logits, labels = ctx.saved_tensors
+        gradient = torch.empty_like(logits)
+        for start in range(0, logits.shape[0], ctx.chunk_size):
+            end = min(start + ctx.chunk_size, logits.shape[0])
+            with torch.enable_grad():
+                chunk = logits[start:end].detach().requires_grad_()
+                outputs = ctx.fn(chunk, labels[start:end])
+                if not isinstance(outputs, tuple):
+                    outputs = (outputs,)
+                terms = [
+                    (output, grad[start:end])
+                    for output, grad in zip(outputs, grad_outputs)
+                    if grad is not None
+                ]
+                if terms:
+                    (chunk_gradient,) = torch.autograd.grad(
+                        [output for output, _ in terms],
+                        chunk,
+                        [grad for _, grad in terms],
+                    )
+                    gradient[start:end].copy_(chunk_gradient)
+                else:
+                    gradient[start:end].zero_()
+        return gradient, None, None, None
+
+
 def _chunked_gather_logprobs(
     logits: torch.Tensor,
     labels: torch.Tensor,
@@ -69,7 +120,7 @@ def _chunked_gather_logprobs(
     chunk_size: int = 1024,
 ) -> torch.Tensor:
     fn = functools.partial(_gather_logprobs, temperature=temperature)
-    return _chunked_apply(fn, logits, labels, chunk_size)
+    return _chunked_apply(fn, logits, labels, chunk_size, recompute=True)
 
 
 def _chunked_gather_logprobs_entropy(
@@ -79,7 +130,7 @@ def _chunked_gather_logprobs_entropy(
     chunk_size: int = 1024,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     fn = functools.partial(_gather_logprobs_entropy, temperature=temperature)
-    return _chunked_apply(fn, logits, labels, chunk_size)
+    return _chunked_apply(fn, logits, labels, chunk_size, recompute=True)
 
 
 class _VocabParallelLogProbs(torch.autograd.Function):
@@ -582,6 +633,10 @@ def gather_logprobs(
 
     Returns:
         Log probabilities at the label positions with shape [...].
+
+    Note:
+        The chunked non-TP training path recomputes intermediates in backward
+        and supports first-order gradients only.
     """
     if tp_group is not None and dist.get_world_size(tp_group) > 1:
         fn = functools.partial(
@@ -625,6 +680,10 @@ def gather_logprobs_entropy(
         A tuple of (logprobs, entropy):
             - logprobs: Log probabilities at the label positions with shape [...].
             - entropy: Entropy of the probability distribution with shape [...].
+
+    Note:
+        The chunked non-TP training path recomputes intermediates in backward
+        and supports first-order gradients only.
     """
     if reuse_logits:
         from areal.utils.functional.vocab_parallel_kernels import (
