@@ -24,11 +24,13 @@ from the default mix: the initial policy already solves every Telecom episode, s
 adds no GRPO group contrast. Explicit `domains=[...]` overrides still accept it. It uses
 non-thinking, 32768 total context, at most4096 tokens per response, policy temperature1,
 staleness2, recomputed logprobs, decoupled loss, group reward normalization and the
-existing token ratio mask above5. It does not load a critic. Save/recovery/evaluation
-cadence is20 steps plus final, as in the previous math GRPO recipe. With
-`eval_before_train=true`, the initial evaluation uses the starting model and consumes
-the initial evaluator trigger before training; step1 does not request an unsaved
-checkpoint.
+existing token ratio mask above5. It does not load a critic. Saving, recovery
+checkpoints and dedicated evaluation run every 5 optimizer steps plus the final step
+(`saver`, `recover` and `evaluator` `freq_steps: 5`). The math GRPO recipe used 20
+steps; the τ² train set is small enough (26 updates over two epochs) that 20 would leave
+a single intermediate checkpoint. With `eval_before_train=true`, the initial evaluation
+uses the starting model and consumes the initial evaluator trigger before training;
+step1 does not request an unsaved checkpoint.
 
 SAO uses the same 4/3/1 GPU split, one trajectory per prompt, batch64, staleness2,
 TMS-enabled actor/critic colocation, a restored scalar critic from `TAU2_CRITIC_PATH`,
@@ -60,6 +62,12 @@ held-out set for trained checkpoints. `--task-set base` scores the official lead
 set, train plus test (50 airline and 114 retail tasks when Telecom is excluded). Its
 summary reports `by_domain_split` so the held-out test part stays visible. Base scores
 for trained checkpoints include tasks seen during training.
+
+Positional Hydra overrides after the flags are applied to `--config`, for example
+`econfig.user_llm=<model>` to evaluate with a different user simulator. The output root
+records the user model, endpoint and arguments in `manifest.json`, and per-episode
+user-simulator prompt/completion tokens in `user-usage.jsonl`; `summary.json` reports
+their totals.
 
 Critic formal training uses the 104 official airline/retail train tasks and fixed
 official test60 trajectories. Tuning uses83train/21dev (24/59 train and6/15dev). Each of
@@ -136,13 +144,12 @@ unrecovered failed group aborts fixed-dataset training rather than silently shri
 coverage. Each retry resets both the environment and the proxy session, so abandoned
 interactions cannot enter successful exports.
 
-## Evidence boundary
+## Design decisions
 
-The historical Pueue159 run qualified3episodes/oneSAOstep at actual sequence
-lengths10K–20K. It did not qualify full32K batches, batch64GRPO throughput or critic
-learning quality. Current delivery evidence and queued job identities are recorded in
-`docs/plans/tau2-sao/training-delivery.md`. `eval_matrix.py` plans/verifies matrix
-coverage; it does not run a scientific comparison.
+The reasons behind the harness, generation protocol, data/evaluation protocol, critic,
+GRPO and SAO choices above are recorded in
+[docs/decisions/](../../docs/decisions/README.md). `eval_matrix.py` plans/verifies
+matrix coverage; it does not run a scientific comparison.
 
 ## Overview
 
@@ -198,7 +205,9 @@ For multi-node experiment with slurm, this can be set in the config file under
 
 ### Configuration Files
 
-Four example configurations are provided:
+The τ² recipes used by the entrypoints above are `config_grpo.yaml`, `config_sao.yaml`,
+`config_sao_qualification.yaml` and `config_critic_production.yaml` (Qwen3.5-4B, one
+8-GPU node). The four upstream generic configurations below are kept for reference:
 
 | Config                         | Model           | Cluster           | Allocation                                             | Use Case                                |
 | ------------------------------ | --------------- | ----------------- | ------------------------------------------------------ | --------------------------------------- |
@@ -223,7 +232,9 @@ python3 -m sglang.launch_server \
     --tp-size 4
 ```
 
-Update the `econfig.user_llm_base_url` in your config to point to this server.
+Update the `econfig.user_llm_base_url` in your config to point to this server. The τ²
+recipes in this fork instead use a hosted DeepSeek user simulator whose key is loaded
+from `TAU2_DEEPSEEK_ENV_FILE`.
 
 ### Training Commands
 
@@ -264,17 +275,22 @@ python3 examples/tau2/train.py \
 
 ### Tau2 Related Configuration Options
 
-| Option                           | Default   | Description                                                                     |
-| -------------------------------- | --------- | ------------------------------------------------------------------------------- |
-| `econfig.domain`                 | `airline` | Tau2 domain: `airline`, `retail`, `telecom`, or the shared launcher's `mixed`   |
-| `econfig.max_steps`              | `100`     | Maximum number of steps per trajectory                                          |
-| `econfig.add_thinking_tool`      | `false`   | Whether to use thinking as a tool for the agent                                 |
-| `econfig.solo_mode`              | `false`   | If true, agent handles both agent and user roles (no user simulator needed)     |
-| `econfig.user_llm_base_url`      | `null`    | Base URL of the user simulator LLM server                                       |
-| `econfig.user_llm`               | `null`    | Model name for user simulator (e.g., `openai/self-hosted-Qwen2.5-72B`)          |
-| `econfig.user_llm_args`          | `null`    | Arguments for user LLM (e.g., `{temperature: 0.0, max_completion_tokens: 512}`) |
-| `econfig.turn_discount`          | `1.0`     | Discount factor for turn-based learning                                         |
-| `econfig.invalid_format_penalty` | `0.1`     | Penalty for invalid format in completions                                       |
+| Option                           | Default            | Description                                                                     |
+| -------------------------------- | ------------------ | ------------------------------------------------------------------------------- |
+| `econfig.domain`                 | `airline`          | Tau2 domain: `airline`, `retail`, `telecom`, or the shared launcher's `mixed`   |
+| `econfig.max_steps`              | `100`              | Official orchestrator step limit per episode; the τ² recipes set `200`          |
+| `econfig.add_thinking_tool`      | `false`            | Whether to use thinking as a tool for the agent                                 |
+| `econfig.enable_thinking`        | `false`            | Policy chat-template thinking; `true` is rejected                               |
+| `econfig.context_window_tokens`  | `32768`            | Rendered prompt plus completion budget; other values are rejected               |
+| `econfig.max_completion_tokens`  | `4096`             | Tokens per assistant response, at most 4096                                     |
+| `econfig.solo_mode`              | `false`            | If true, agent handles both agent and user roles (no user simulator needed)     |
+| `econfig.user_llm_base_url`      | `null`             | Base URL of the user simulator LLM server                                       |
+| `econfig.user_llm`               | `null`             | Model name for user simulator (e.g., `openai/self-hosted-Qwen2.5-72B`)          |
+| `econfig.user_llm_api_key_env`   | `DEEPSEEK_API_KEY` | Environment variable holding the user simulator key                             |
+| `econfig.user_llm_args`          | `null`             | Arguments for user LLM (e.g., `{temperature: 0.0, max_completion_tokens: 512}`) |
+| `econfig.user_llm_num_retries`   | `3`                | Maximum retries for one user-simulator request                                  |
+| `econfig.turn_discount`          | `1.0`              | Discount factor for turn-based learning                                         |
+| `econfig.invalid_format_penalty` | `0.1`              | Penalty for invalid format in completions                                       |
 
 ## Results
 
@@ -306,11 +322,12 @@ For reward curves of experiments on a larger scale, please refer to the
    `generated/` directory under `cluster.fileroot`. You can analyze these for debugging
    and evaluation.
 
-1. **Tree training**: The configs enable `enable_tree_training=true` by default, which
-   optimizes training by sharing prefix computations across rollouts with the same
-   prompt. This option can largely accelerate training but will possibly increase GPU
-   memory usage if `actor.mb_spec.max_tokens_per_mb` is large. And this setting may
-   cause instability during the training of the MoE model.
+1. **Tree training**: `config_1.7b_airline.yaml` enables `enable_tree_training=true`
+   (the τ² recipes leave it off), which optimizes training by sharing prefix
+   computations across rollouts with the same prompt. This option can largely accelerate
+   training but will possibly increase GPU memory usage if
+   `actor.mb_spec.max_tokens_per_mb` is large. And this setting may cause instability
+   during the training of the MoE model.
 
 ## Customization
 
