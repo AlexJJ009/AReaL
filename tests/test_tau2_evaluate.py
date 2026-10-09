@@ -721,3 +721,91 @@ def test_load_eval_config_applies_hydra_overrides(monkeypatch):
         "econfig.user_llm=doubao",
         "~econfig.user_llm_args.max_completion_tokens",
     ]
+
+
+def _write_trajectory_record(root, source_id, **fields):
+    directory = root / "trajectories" / source_id
+    directory.mkdir(parents=True, exist_ok=True)
+    record = {"source_id": source_id, "recorded_at": 1.0, **fields}
+    (directory / f"{len(list(directory.iterdir()))}.json").write_text(
+        json.dumps(record)
+    )
+
+
+class UnboundRejectController(RollingController):
+    """Task 1 never calls the policy, so the dispatcher returns a bare None."""
+
+    def wait_results(self, count, timeout=None):
+        task_id = max(self.pending)
+        self.pending.pop(task_id)
+        if task_id == 1:
+            return [None]
+        return [SimpleNamespace(task_id=task_id, trajectory={"task_id": task_id})]
+
+
+def _row_record(row, trajectory):
+    return {
+        "status": "completed",
+        "domain": row["domain"],
+        "task_id": row["task_id"],
+        "trial": row["trial"],
+        "source_id": row["source_id"],
+        "official_score": 1.0,
+    }
+
+
+def test_collect_scores_policy_free_episode_from_its_record(tmp_path, monkeypatch):
+    monkeypatch.setattr(tau2_evaluate, "record_from_trajectory", _row_record)
+    rows = [{**row, "attempt_id": row["source_id"]} for row in _rolling_rows(2)]
+    _write_trajectory_record(
+        tmp_path,
+        "1",
+        status="completed",
+        policy_turns=0,
+        official_score=0.0,
+        stop_reason="user_stop",
+    )
+
+    records = tau2_evaluate.collect_eval_records(
+        UnboundRejectController(),
+        rows,
+        workflow_kwargs={},
+        max_inflight=2,
+        output_root=tmp_path,
+        repeats=1,
+    )
+
+    by_source = {r["source_id"]: r for r in records}
+    assert by_source["1"]["official_score"] == 0.0
+    assert by_source["1"]["policy_turns"] == 0
+    assert by_source["1"]["stop_reason"] == "user_stop"
+    summary = tau2_evaluate.aggregate(records, planned=2, repeats=1)
+    assert summary["status"] == "complete"
+    assert summary["metrics"]["eval/policy_free_episodes"] == 1
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {},
+        {"status": "completed", "policy_turns": 3, "official_score": 0.0},
+        {"status": "error", "policy_turns": 0, "error": "boom"},
+    ],
+)
+def test_unbound_reject_without_policy_free_record_still_aborts(
+    tmp_path, monkeypatch, fields
+):
+    monkeypatch.setattr(tau2_evaluate, "record_from_trajectory", _row_record)
+    rows = [{**row, "attempt_id": row["source_id"]} for row in _rolling_rows(2)]
+    if fields:
+        _write_trajectory_record(tmp_path, "1", **fields)
+
+    with pytest.raises(RuntimeError, match="unbound failed"):
+        tau2_evaluate.collect_eval_records(
+            UnboundRejectController(),
+            rows,
+            workflow_kwargs={},
+            max_inflight=2,
+            output_root=tmp_path,
+            repeats=1,
+        )

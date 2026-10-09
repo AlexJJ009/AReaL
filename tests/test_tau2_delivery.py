@@ -271,6 +271,12 @@ def test_tau2_concat_export_cardinality_guard_allows_single_or_non_concat():
         export_style="concat",
         data={"domain": "telecom", "task_id": "ok"},
     )
+    # The user simulator may stop before any policy call; official τ² scores it.
+    Tau2AgentWorkflow.validate_exported_interactions(
+        interactions={},
+        export_style="concat",
+        data={"domain": "retail", "task_id": "policy-free"},
+    )
     Tau2AgentWorkflow.validate_exported_interactions(
         interactions={"leaf-1": object(), "leaf-2": object()},
         export_style="individual",

@@ -2,6 +2,7 @@
 
 import sys
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import tau2.utils.llm_utils
 import yaml
@@ -23,6 +24,12 @@ _POLICY_SESSION_KEY_ENV_NAMES = frozenset(
         "AREAL_PROXY_SESSION_API_KEY",
     }
 )
+
+
+def trajectory_record_dir(root: str | Path, source_id: str) -> Path:
+    """Per-episode directory holding one JSON record per attempt."""
+
+    return Path(root) / source_id.replace("/", "_")
 
 
 @dataclass

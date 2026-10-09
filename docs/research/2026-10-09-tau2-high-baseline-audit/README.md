@@ -117,3 +117,54 @@ gold 固定为 "no longer needed"，用户多数时候选 "ordered by mistake"�
    时需去掉或调大。
 1. 重训 airline+retail critic，再跑 SAO；GRPO 可直接跑。
 1. 若仍需提升学习量，考虑调大 actor lr 或增加步数（本次未改）。
+
+## 7. Doubao 2.1 Turbo 评测中止与官方行为对齐（同日补充）
+
+### 7.1 中止原因
+
+`step0-base-t0-doubao21turbo` 跑到 74/656 个 episode 时中止。其中 6 个 episode 都是 Doubao
+第一句用户回复就触发了 `UserSimulator.is_stop()`，官方 orchestrator 以 `user_stop` 结束，policy
+一次都没被调用。结论来自排除法：tau2 在第一句用户回复后 到调用 agent 之前，只有 stop token 这一条路会正常打分结束；异常、超时、空回复都会 变成
+infra error，不会打印 FINISHED。用量行（每个只有 1 次 user 调用，prompt tokens 与第一轮完全一致）也与此相符。
+
+用同一配置探测 236 次（其中 192 次并发），没有一次复现出 stop token。所以根因 （Doubao 为什么偶尔在第一轮就输出 stop
+token）仍未确认；当时的回复原文没有保存。
+
+下游链路：proxy session 里没有 interaction，`set_reward` 返回 400，concat 导出 0 条轨迹，触发
+`Tau2ExportCardinalityError` 并被当作暂时性故障重试。retail/69 t0 连续两次都这样，整轮评测中止。官方 tau2 会把这个
+episode 正常记分。
+
+### 7.2 修改
+
+| 位置                                          | 修改                                                                                                                                                                                                                                                         |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `examples/tau2/agent.py`                      | 设置 `TAU2_TRAJECTORY_DIR` 时，每次 episode 尝试都写一份 JSON（成功、零 policy 回合、异常或取消都写），包含完整官方消息、`stop_reason`、`policy_turns`、`reward_info`、错误信息；失败时保留 orchestrator 已产生的部分轨迹                                    |
+| `examples/tau2/agent.py`                      | concat 导出 0 条轨迹不再报 cardinality 错误，因此不再被重试                                                                                                                                                                                                  |
+| `areal/experimental/openai/proxy/workflow.py` | 正常模式下导出为空时返回 None（拒绝该轨迹），与 online 模式一致                                                                                                                                                                                              |
+| `scripts/tau2/evaluate.py`                    | 写 `trajectories/<source_id>/<attempt>.json`。被拒绝的结果没有 task_id，用 episode 自己的记录（completed 且 `policy_turns == 0`）把它绑定回对应 episode，按官方分数记为 completed；其余没有 task_id 的失败仍然中止。summary 新增 `eval/policy_free_episodes` |
+
+训练行为：零 policy 回合的 episode 被拒绝（以前是重试一次后再拒绝），GRPO 组按 `drop_incomplete_group`
+处理。训练默认不写轨迹文件。
+
+### 7.3 与官方 `tau2 run` 仍不一致的行为
+
+逐项对照官方源码（pinned b7ea907）。前三项已在源码中复核：`runner/progress.py`、
+`metrics/agent_metrics.py`、`runner/batch.py`。
+
+| #   | 行为                               | 官方                                                                      | 我们                                                                                                 | 影响                                         |
+| --- | ---------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| 1   | episode 失败重试                   | 任何异常都整段重跑，最多再试 3 次                                         | 只重试 timeout、连接、限流、5xx、导出形状这几类错误，只重试 1 次；其他错误让评测中止                 | 官方能恢复的失败，我们会中止整轮             |
+| 2   | 最终失败的 episode                 | 记为 `INFRASTRUCTURE_ERROR`，从 avg_reward 和 pass^k 中排除，评测继续     | 整轮中止，summary 标为 partial                                                                       | 计数口径不同                                 |
+| 3   | 随机种子                           | `random.seed(300)` 为每个 trial 生成 seed，传给 agent 和 user 的 LLM 请求 | orchestrator 不传 seed，`eval_gconfig.seed` 必须为空                                                 | 可复现性；provider 是否支持 seed 未核实      |
+| 4   | policy 上下文溢出                  | 无专门处理，按异常重试，最终排除（推断）                                  | `context_limit`，记 0 分并计入                                                                       | 我们的分数偏保守                             |
+| 5   | 墙钟超时                           | 默认不设                                                                  | 1200 s，超时或总耗时 ≥ 1200 s 的已完成 episode 都当 infra error 重试                                 | 慢但有效的 episode 被丢弃重采                |
+| 6   | 用户空回复、用户工具 JSON 格式错误 | 抛异常后整段重跑                                                          | 原地重试一次请求，再失败就中止                                                                       | 计数口径不同                                 |
+| 7   | NL judge                           | `gpt-4.1-2025-04-14`，temperature 0                                       | 用户模拟器同款模型和参数                                                                             | 只影响 reward_basis 含 NL_ASSERTION 的任务   |
+| 8   | 用户 LLM 参数                      | 只有 temperature 0                                                        | 训练配置还有 `max_completion_tokens: 512`、`top_p` 1.0、120 s 超时；step 0 评测启动时已去掉 512 上限 | 512 上限可能截断用户回复                     |
+| 9   | policy LLM 参数                    | temperature 0，num_retries 3                                              | 另有 max_completion_tokens 4096、上下文 32K、num_retries 0                                           | 回复可能被截断；单次传输错误会升级为整段重跑 |
+| 10  | 汇总                               | avg_reward 加 pass^1..k                                                   | 只报 pass1_mean                                                                                      | 只是报告形式不同                             |
+
+另有几项一致或只影响展示：max_steps 200、max_errors 10、不开 communication 校验、 LLMAgent、无 think
+工具、airline/retail 无用户工具、cost/日志相关 monkey patch。
+
+是否把 1–6 改成官方行为，还没有决定。这些改动会改变评测口径，需要先确认。

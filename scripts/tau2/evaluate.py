@@ -10,7 +10,7 @@ import math
 import os
 import sys
 from collections import defaultdict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
@@ -25,7 +25,7 @@ from examples.tau2.contracts import (
     resolve_pinned_hf_snapshot,
 )
 from examples.tau2.train import get_tau2_dataset, validate_tau2_recipe
-from examples.tau2.utils import Tau2PPOConfig
+from examples.tau2.utils import Tau2PPOConfig, trajectory_record_dir
 
 from areal.api.alloc_mode import ModelAllocation
 from areal.api.cli_args import SGLangConfig, load_expr_config
@@ -251,6 +251,63 @@ def record_from_trajectory(
     }
 
 
+def latest_trajectory_record(root: Path, source_id: str) -> dict[str, Any] | None:
+    directory = trajectory_record_dir(root, source_id)
+    records = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in directory.glob("*.json")
+    ]
+    return max(records, key=lambda r: r["recorded_at"]) if records else None
+
+
+def find_policy_free_episode(
+    pending: dict[int, dict[str, Any]], trajectory_root: Path
+) -> int | None:
+    """Bind an unbound rejected result to an episode that never called the policy.
+
+    The proxy rejects such episodes because there is nothing to export, so the
+    dispatcher returns None without a task ID. Its own completed record is final:
+    a zero-turn episode is never retried. Any pending zero-turn episode will
+    produce exactly one such None, so binding the first one found is exact.
+    """
+    for task_id, row in pending.items():
+        record = latest_trajectory_record(trajectory_root, row["source_id"])
+        if (
+            record is not None
+            and record.get("status") == "completed"
+            and record.get("policy_turns") == 0
+        ):
+            return task_id
+    return None
+
+
+def record_from_policy_free_episode(
+    row: dict[str, Any], trajectory_root: Path
+) -> dict[str, Any]:
+    record = latest_trajectory_record(trajectory_root, row["source_id"])
+    if record is None or record.get("policy_turns") != 0:
+        raise RuntimeError(f"Missing trajectory for {row['source_id']}")
+    official_score = float(record["official_score"])
+    if official_score not in (0.0, 1.0):
+        raise RuntimeError(
+            f"Official τ² score must be binary for {row['source_id']}: {official_score}"
+        )
+    return {
+        "status": "completed",
+        "domain": row["domain"],
+        "task_id": row["task_id"],
+        "split": row.get("split", "test"),
+        "trial": int(row["trial"]),
+        "source_id": row["source_id"],
+        "attempt_id": row["attempt_id"],
+        "reward": official_score,
+        "official_score": official_score,
+        "task_budget_failure": bool(record.get("task_budget_failure", False)),
+        "policy_turns": 0,
+        "stop_reason": record.get("stop_reason"),
+    }
+
+
 def write_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -305,6 +362,8 @@ def aggregate(
         "eval/planned_episodes": planned,
         "eval/completed_episodes": len(completed),
         "eval/infra_failed_episodes": len(failed),
+        # Scored normally, as official τ² does, but carry no policy tokens.
+        "eval/policy_free_episodes": sum(r.get("policy_turns") == 0 for r in completed),
         "eval/pass1_mean": sum(scores) / len(scores) if scores else 0.0,
     }
     by_domain: dict[str, dict[str, float | int]] = {}
@@ -379,8 +438,13 @@ def iter_completed_rollouts(
     *,
     workflow_kwargs: dict[str, Any],
     max_inflight: int,
+    bind_unbound: Callable[[dict[int, dict[str, Any]]], int | None] | None = None,
 ) -> Iterator[tuple[dict[str, Any], dict[str, Any] | None]]:
-    """Refill a bounded window after each persisted result, across trial boundaries."""
+    """Refill a bounded window after each persisted result, across trial boundaries.
+
+    A rejected result arrives as None without a task ID; ``bind_unbound`` may
+    attribute it to a pending episode, which is then yielded with no trajectory.
+    """
     if max_inflight <= 0:
         raise ValueError("Evaluation max_concurrent_rollouts must be positive")
     if len({row["source_id"] for row in rows}) != len(rows):
@@ -415,7 +479,14 @@ def iter_completed_rollouts(
             raise RuntimeError("Evaluation coverage mismatch: expected one result")
         result = results[0]
         if result is None:
-            raise RuntimeError("Rollout dispatcher returned an unbound failed result")
+            task_id = bind_unbound(pending) if bind_unbound is not None else None
+            if task_id is None:
+                raise RuntimeError(
+                    "Rollout dispatcher returned an unbound failed result"
+                )
+            completed.add(task_id)
+            yield pending.pop(task_id), None
+            continue
         task_id = result.task_id
         if task_id in completed:
             raise RuntimeError(f"Duplicate rollout task result: {task_id}")
@@ -439,12 +510,23 @@ def collect_eval_records(
 ) -> list[dict[str, Any]]:
     """Keep completed evidence durable even if a later dispatcher call fails."""
     records: list[dict[str, Any]] = []
+    trajectory_root = output_root / "trajectories"
     try:
         for row, trajectory in iter_completed_rollouts(
-            controller, rows, workflow_kwargs=workflow_kwargs, max_inflight=max_inflight
+            controller,
+            rows,
+            workflow_kwargs=workflow_kwargs,
+            max_inflight=max_inflight,
+            bind_unbound=lambda pending: find_policy_free_episode(
+                pending, trajectory_root
+            ),
         ):
             try:
-                record = record_from_trajectory(row, trajectory)
+                record = (
+                    record_from_policy_free_episode(row, trajectory_root)
+                    if trajectory is None
+                    else record_from_trajectory(row, trajectory)
+                )
             except Exception as exc:
                 record = {
                     "status": "infra_failed",
@@ -524,6 +606,7 @@ def run(argv: list[str]) -> dict[str, Any]:
     # Workers inherit these: keep simulator failure and usage records with this run.
     os.environ["TAU2_RUN_ROOT"] = str(output_root)
     os.environ["TAU2_USAGE_LOG"] = str(output_root / "user-usage.jsonl")
+    os.environ["TAU2_TRAJECTORY_DIR"] = str(output_root / "trajectories")
     scheduler = LocalScheduler(exp_config=config)
     alloc = ModelAllocation.from_str(
         config.evaluation_rollout.backend, name="eval-rollout"

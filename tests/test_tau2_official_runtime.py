@@ -749,3 +749,104 @@ def test_user_llm_usage_sums_only_user_turns():
         "user_prompt_tokens": 250,
         "user_completion_tokens": 10,
     }
+
+
+def _workflow_with_fake_runner(monkeypatch, tmp_path, run):
+    import examples.tau2.agent as agent_mod
+    from examples.tau2.agent import Tau2AgentWorkflow
+
+    class FakeRunner:
+        def __init__(self, **kwargs):
+            self.messages = []
+
+        async def run(self, task):
+            return await run(self, task)
+
+    monkeypatch.setattr(agent_mod, "Tau2Runner", FakeRunner)
+    monkeypatch.setattr(agent_mod, "_get_task", lambda **kwargs: object())
+    monkeypatch.setenv("TAU2_TRAJECTORY_DIR", str(tmp_path))
+    monkeypatch.delenv("TAU2_USAGE_LOG", raising=False)
+    monkeypatch.setenv("TAU2_TEST_USER_KEY", "user-secret")
+    return Tau2AgentWorkflow(
+        econfig=Tau2EnvConfig(
+            domain="retail",
+            user_llm="deepseek-flash",
+            user_llm_base_url="http://user.invalid/v1",
+            user_llm_api_key_env="TAU2_TEST_USER_KEY",
+        )
+    )
+
+
+def _read_records(tmp_path, source_id):
+    return [
+        json.loads(path.read_text()) for path in (tmp_path / source_id).glob("*.json")
+    ]
+
+
+def test_workflow_records_policy_free_episode_trajectory(monkeypatch, tmp_path):
+    from tau2.data_model.message import AssistantMessage, UserMessage
+    from tau2.orchestrator.orchestrator import DEFAULT_FIRST_AGENT_MESSAGE
+
+    from examples.tau2.utils import Tau2RunInfo
+
+    async def run(runner, task):
+        messages = [
+            DEFAULT_FIRST_AGENT_MESSAGE.model_copy(deep=True),
+            UserMessage(role="user", content=f"bye {STOP}"),
+        ]
+        return Tau2RunInfo.model_construct(
+            reward=0.0,
+            messages=messages,
+            reward_info=None,
+            error_type=None,
+            stop_reason="user_stop",
+        )
+
+    workflow = _workflow_with_fake_runner(monkeypatch, tmp_path, run)
+    result = asyncio.run(
+        workflow.run(
+            {"task_id": "69", "split": "test", "source_id": "retail:69:trial0"},
+            base_url="http://policy.invalid/v1",
+            api_key="session-secret",
+        )
+    )
+
+    assert result.stop_reason == "user_stop"
+    (record,) = _read_records(tmp_path, "retail:69:trial0")
+    assert record["status"] == "completed"
+    assert record["policy_turns"] == 0
+    assert record["official_score"] == 0.0
+    assert record["messages"][-1]["content"] == f"bye {STOP}"
+    # The fixed greeting is not a policy call; a generated reply is.
+    assert isinstance(DEFAULT_FIRST_AGENT_MESSAGE, AssistantMessage)
+
+
+def test_workflow_records_failed_attempt_with_partial_trajectory(monkeypatch, tmp_path):
+    from tau2.data_model.message import AssistantMessage, UserMessage
+
+    from examples.tau2.agent import Tau2InfrastructureError
+
+    async def run(runner, task):
+        runner.messages = [
+            UserMessage(role="user", content="hello"),
+            AssistantMessage(role="assistant", content="hi", raw_data={"id": "x"}),
+        ]
+        raise Tau2InfrastructureError("user simulator exploded")
+
+    workflow = _workflow_with_fake_runner(monkeypatch, tmp_path, run)
+    with pytest.raises(Tau2InfrastructureError):
+        asyncio.run(
+            workflow.run(
+                {"task_id": "7", "split": "test", "source_id": "retail:7:trial1"},
+                base_url="http://policy.invalid/v1",
+                api_key="session-secret",
+            )
+        )
+
+    (record,) = _read_records(tmp_path, "retail:7:trial1")
+    assert record["status"] == "error"
+    assert record["error_type"] == "Tau2InfrastructureError"
+    assert record["policy_turns"] == 1
+    assert [m["content"] for m in record["messages"]] == ["hello", "hi"]
+    raw = (next((tmp_path / "retail:7:trial1").glob("*.json"))).read_text()
+    assert "session-secret" not in raw and "user-secret" not in raw

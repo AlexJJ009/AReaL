@@ -64,6 +64,7 @@ Failure classification:
 | Event                                                                     | Treatment                                                                                                         |
 | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
 | Normal end                                                                | Official 0/1, full trajectory kept                                                                                |
+| User simulator stops (`###STOP###` etc.) before any policy call           | Official 0/1 (`user_stop`), no retry; offline eval counts it, training drops it (no policy tokens to export)      |
 | Policy context exhausted (`context_limit`) or `max_steps` reached         | Valid task failure, reward 0, kept for training, no retry                                                         |
 | Policy emits bad tool arguments, loops, or empty output                   | Model failure inside the official protocol                                                                        |
 | Episode wall clock reaches `episode_timeout_seconds` (1200)               | Infrastructure failure raised before scoring; bounded episode retry; never converted to reward 0                  |

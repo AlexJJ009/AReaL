@@ -315,6 +315,14 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
             drop_retry_orphans=self.drop_retry_orphans,
         )
         await self._validate_exported_interactions(interactions, data)
+        # The agent finished without calling the policy, so there is nothing to
+        # train on. Reject it like an empty online session.
+        if not interactions:
+            logger.warning(
+                f"Session {proxy_client.session_id} has no interactions, "
+                "trajectory will be rejected."
+            )
+            return None
         if episode_result is not None:
             episode_id = self._episode_tensor_id(
                 f"{proxy_task_id}:{proxy_client.session_id}"

@@ -19,7 +19,7 @@ import tau2.evaluator.evaluator_nl_assertions as tau2_nl_evaluator
 from litellm import register_model
 from tau2.agent.base_agent import HalfDuplexAgent
 from tau2.agent.llm_agent import LLMAgent, LLMAgentState, LLMSoloAgent
-from tau2.data_model.message import UserMessage
+from tau2.data_model.message import AssistantMessage, Message, UserMessage
 from tau2.data_model.tasks import Task
 from tau2.environment.environment import Environment
 from tau2.environment.tool import Tool
@@ -32,7 +32,7 @@ from tau2.user.user_simulator_base import HalfDuplexUser
 # Import utilities (also patches tau2.utils.llm_utils)
 from examples.tau2.contracts import bind_policy_request
 from examples.tau2.user_simulator import RetryingUserSimulator
-from examples.tau2.utils import Tau2EnvConfig, Tau2RunInfo
+from examples.tau2.utils import Tau2EnvConfig, Tau2RunInfo, trajectory_record_dir
 
 from areal.experimental.openai.types import (
     CONTEXT_LENGTH_EXCEEDED_MARKER,
@@ -171,6 +171,27 @@ def append_usage_record(path: str, record: dict[str, Any]) -> None:
         )
 
 
+def policy_turns(messages: list[Message]) -> int:
+    """Count policy completions; the orchestrator's fixed greeting has no raw_data."""
+
+    return sum(
+        isinstance(m, AssistantMessage) and m.raw_data is not None for m in messages
+    )
+
+
+def write_trajectory_record(root: str, record: dict[str, Any]) -> None:
+    """Persist one episode attempt; never mask the episode's own outcome."""
+
+    try:
+        directory = trajectory_record_dir(root, record["source_id"])
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{record['attempt']}.json"
+        with path.open("x", encoding="utf-8") as stream:
+            json.dump(record, stream, ensure_ascii=False, indent=2, default=str)
+    except Exception:
+        logger.warning("Could not write τ² trajectory record", exc_info=True)
+
+
 class Tau2Runner:
     """Run the official synchronous τ² orchestrator on a worker thread."""
 
@@ -191,6 +212,8 @@ class Tau2Runner:
         self.timeout = timeout
         self.domain = econfig.domain
         self.solo_mode = econfig.solo_mode
+        # Kept on the runner so a failed episode's partial trajectory survives.
+        self.messages: list[Message] = []
 
     def _get_environment(self) -> Environment:
         environment_constructor = registry.get_env_constructor(self.domain)
@@ -325,9 +348,9 @@ class Tau2Runner:
 
         try:
             simulation, elapsed = await asyncio.to_thread(run_simulation)
-            run_info.messages = simulation.messages
+            run_info.messages = self.messages = simulation.messages
         except Exception as e:
-            run_info.messages = orchestrator.get_trajectory()
+            run_info.messages = self.messages = orchestrator.get_trajectory()
             run_info.error = str(e)
             if is_context_budget_error(e):
                 run_info.error_type = "task_budget"
@@ -513,7 +536,10 @@ class Tau2AgentWorkflow:
     ) -> None:
         if export_style != "concat":
             return
-        if len(interactions) == 1:
+        # Zero leaves means the policy was never called (e.g. the official user
+        # simulator stopped on its first turn). Official τ² scores that episode
+        # normally; it is not a transient failure and must not be replayed.
+        if len(interactions) <= 1:
             return
         task_id = data.get("task_id", "<unknown>")
         domain = data.get("domain", "<unknown>")
@@ -610,7 +636,54 @@ class Tau2AgentWorkflow:
         # orchestrator and per-request LiteLLM timeouts provide the cooperative
         # bound; if the caller cancels, join the episode before the proxy session
         # is allowed to close so no calls or tool effects survive the session.
-        run_info = await _await_without_orphaning(runner.run(task))
+        trajectory_root = os.environ.get("TAU2_TRAJECTORY_DIR")
+        record = {
+            "source_id": data.get("source_id") or f"{domain}:{task_id}",
+            "attempt": uuid4().hex,
+            "domain": domain,
+            "task_id": task_id,
+            "split": split,
+            "trial": data.get("trial"),
+            "user_llm": econfig.user_llm,
+        }
+        try:
+            run_info = await _await_without_orphaning(runner.run(task))
+        except BaseException as exc:
+            # Record interrupted and failed attempts too, with whatever
+            # trajectory the official orchestrator produced before failing.
+            if trajectory_root:
+                write_trajectory_record(
+                    trajectory_root,
+                    {
+                        **record,
+                        "recorded_at": time.time(),
+                        "status": "error",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "policy_turns": policy_turns(runner.messages),
+                        "messages": [
+                            m.model_dump(mode="json") for m in runner.messages
+                        ],
+                    },
+                )
+            raise
+        if trajectory_root:
+            write_trajectory_record(
+                trajectory_root,
+                {
+                    **record,
+                    "recorded_at": time.time(),
+                    "status": "completed",
+                    "stop_reason": run_info.stop_reason,
+                    "official_score": float(run_info.reward),
+                    "task_budget_failure": run_info.error_type == "task_budget",
+                    "reward_info": run_info.reward_info.model_dump(mode="json")
+                    if run_info.reward_info is not None
+                    else None,
+                    "policy_turns": policy_turns(run_info.messages),
+                    "messages": [m.model_dump(mode="json") for m in run_info.messages],
+                },
+            )
         usage_log = os.environ.get("TAU2_USAGE_LOG")
         if usage_log:
             append_usage_record(
@@ -623,6 +696,7 @@ class Tau2AgentWorkflow:
                     "user_llm": econfig.user_llm,
                     "official_score": float(run_info.reward),
                     **user_llm_usage(run_info.messages),
+                    "stop_reason": run_info.stop_reason,
                 },
             )
 
