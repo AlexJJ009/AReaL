@@ -1,0 +1,195 @@
+{
+ "airline/test": {
+  "n": 20,
+  "reward_basis": {
+   "COMMUNICATE+DB": 20
+  },
+  "component_counts": {
+   "DB": 20,
+   "COMMUNICATE": 20
+  },
+  "nonempty": {
+   "nl_assertions": 20,
+   "communicate_info": 1,
+   "actions": 18,
+   "env_assertions": 0
+  },
+  "do_nothing_pass": [
+   "2",
+   "6",
+   "13",
+   "26",
+   "31",
+   "45",
+   "48"
+  ],
+  "nl_needed": [],
+  "errors": []
+ },
+ "airline/train": {
+  "n": 30,
+  "reward_basis": {
+   "COMMUNICATE+DB": 30
+  },
+  "component_counts": {
+   "DB": 30,
+   "COMMUNICATE": 30
+  },
+  "nonempty": {
+   "nl_assertions": 30,
+   "communicate_info": 5,
+   "actions": 25,
+   "env_assertions": 0
+  },
+  "do_nothing_pass": [
+   "0",
+   "1",
+   "4",
+   "5",
+   "9",
+   "10",
+   "27",
+   "28",
+   "34",
+   "36",
+   "38",
+   "41",
+   "43",
+   "46",
+   "47",
+   "49"
+  ],
+  "nl_needed": [],
+  "errors": []
+ },
+ "retail/test": {
+  "n": 40,
+  "reward_basis": {
+   "DB+NL_ASSERTION": 39,
+   "DB": 1
+  },
+  "component_counts": {
+   "DB": 40,
+   "NL_ASSERTION": 39
+  },
+  "nonempty": {
+   "nl_assertions": 11,
+   "communicate_info": 11,
+   "actions": 40,
+   "env_assertions": 0
+  },
+  "do_nothing_pass": [
+   "12",
+   "65"
+  ],
+  "nl_needed": [
+   "36",
+   "38",
+   "39",
+   "40",
+   "45",
+   "60",
+   "62",
+   "68",
+   "70",
+   "108",
+   "111"
+  ],
+  "errors": []
+ },
+ "retail/train": {
+  "n": 74,
+  "reward_basis": {
+   "DB+NL_ASSERTION": 73,
+   "DB": 1
+  },
+  "component_counts": {
+   "DB": 74,
+   "NL_ASSERTION": 73
+  },
+  "nonempty": {
+   "nl_assertions": 29,
+   "communicate_info": 25,
+   "actions": 72,
+   "env_assertions": 0
+  },
+  "do_nothing_pass": [
+   "10",
+   "25",
+   "50",
+   "57"
+  ],
+  "nl_needed": [
+   "2",
+   "3",
+   "4",
+   "16",
+   "19",
+   "21",
+   "24",
+   "28",
+   "29",
+   "37",
+   "43",
+   "44",
+   "46",
+   "47",
+   "54",
+   "59",
+   "63",
+   "67",
+   "76",
+   "89",
+   "95",
+   "103",
+   "104",
+   "105",
+   "106",
+   "107",
+   "109",
+   "110",
+   "113"
+  ],
+  "errors": []
+ },
+ "telecom/test": {
+  "n": 40,
+  "reward_basis": {
+   "ENV_ASSERTION": 28,
+   "ACTION+ENV_ASSERTION": 12
+  },
+  "component_counts": {
+   "ENV_ASSERTION": 40,
+   "ACTION": 12
+  },
+  "nonempty": {
+   "nl_assertions": 0,
+   "communicate_info": 0,
+   "actions": 40,
+   "env_assertions": 40
+  },
+  "do_nothing_pass": [],
+  "nl_needed": [],
+  "errors": []
+ },
+ "telecom/train": {
+  "n": 74,
+  "reward_basis": {
+   "ENV_ASSERTION": 66,
+   "ACTION+ENV_ASSERTION": 8
+  },
+  "component_counts": {
+   "ENV_ASSERTION": 74,
+   "ACTION": 8
+  },
+  "nonempty": {
+   "nl_assertions": 0,
+   "communicate_info": 0,
+   "actions": 74,
+   "env_assertions": 74
+  },
+  "do_nothing_pass": [],
+  "nl_needed": [],
+  "errors": []
+ }
+}
