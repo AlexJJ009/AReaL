@@ -38,22 +38,40 @@ def _task_row(index: int, critic_split: str, split: str = "train") -> dict:
     }
 
 
+def _test_row(domain: str, index: int) -> dict:
+    return {
+        **_task_row(0, "test", split="test"),
+        "domain": domain,
+        "task_id": f"test-{domain}-{index}",
+        "source_id": f"tau2:{domain}:test-{domain}-{index}",
+    }
+
+
 def _patched_tau2_datasets(monkeypatch) -> None:
     def fake_get_tau2_dataset(**kwargs):
         split = kwargs["split"]
         experiment_mode = kwargs["experiment_mode"]
+        domains = set(kwargs["domain"])
+        # Every fifth train task is dev: 6 airline, 15 retail, 15 telecom.
         rows = [
-            _task_row(index, "dev" if index % 5 == 0 and index < 180 else "train")
+            _task_row(index, "dev" if index % 5 == 0 else "train")
             for index in range(178)
         ]
+        rows = [row for row in rows if row["domain"] in domains]
         if split == "train" and experiment_mode == "formal":
             selected = rows
         elif split == "train":
-            selected = [row for row in rows if row["critic_split"] == "train"][:142]
+            selected = [row for row in rows if row["critic_split"] == "train"]
         elif split == "dev":
-            selected = [row for row in rows if row["critic_split"] == "dev"][:36]
+            selected = [row for row in rows if row["critic_split"] == "dev"]
         elif split == "test":
-            selected = [_task_row(index, "test", split="test") for index in range(100)]
+            counts = {"airline": 20, "retail": 40, "telecom": 40}
+            selected = [
+                _test_row(domain, index)
+                for domain, count in counts.items()
+                if domain in domains
+                for index in range(count)
+            ]
         else:
             raise AssertionError(f"unexpected split {split}")
         return Dataset.from_list(selected)
@@ -91,12 +109,18 @@ def test_build_tau2_critic_datasets_uses_official_formal_train_and_test(
         train_critic.build_tau2_critic_datasets(config)
     )
 
-    assert len(train_dataset) == 178
-    assert len(validation_dataset) == 100
+    assert len(train_dataset) == 104
+    assert len(validation_dataset) == 60
+    assert summary["episodes_by_split_domain"] == {
+        "train:airline": 30,
+        "train:retail": 74,
+        "test:airline": 20,
+        "test:retail": 40,
+    }
     assert summary["source"] == "official_tau2_train_tasks"
     assert summary["experiment_mode"] == "formal"
     assert summary["validation_split"] == "test"
-    assert summary["test_rows"] == 100
+    assert summary["test_rows"] == 60
     assert summary["policy_provenance"] == {
         "policy_id": "Qwen/Qwen3.5-4B",
         "policy_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
@@ -124,11 +148,12 @@ def test_production_config_resolves_formal_online_training_contract(
         validation_rows=len(validation_dataset),
     )
 
-    assert len(train_dataset) == 178
-    assert len(validation_dataset) == 100
-    assert config.total_train_steps == 24
+    assert tuple(config.domains) == ("airline", "retail")
+    assert len(train_dataset) == 104
+    assert len(validation_dataset) == 60
+    assert config.total_train_steps == 14
     assert config.total_train_epochs == 2
-    assert config.num_critic_only_steps == 24
+    assert config.num_critic_only_steps == 14
     assert config.algorithm == "critic"
     assert config.experiment_mode == "formal"
     assert config.train_dataset.batch_size == 16
@@ -180,8 +205,8 @@ def test_check_config_does_not_resolve_model_snapshot(monkeypatch, tmp_path, cap
 
     captured = capsys.readouterr()
     assert "model_snapshot_resolution: 0" in captured.out
-    assert "train_rows: 178" in captured.out
-    assert "validation_rows: 100" in captured.out
+    assert "train_rows: 104" in captured.out
+    assert "validation_rows: 60" in captured.out
     assert "validation_split: test" in captured.out
 
 
@@ -207,13 +232,13 @@ def test_tune_override_keeps_train_dev_split_and_best_selection(monkeypatch, tmp
         validation_rows=len(validation_dataset),
     )
 
-    assert len(train_dataset) == 142
-    assert len(validation_dataset) == 36
-    assert config.total_train_steps == 18
-    assert config.num_critic_only_steps == 18
+    assert len(train_dataset) == 83
+    assert len(validation_dataset) == 21
+    assert config.total_train_steps == 12
+    assert config.num_critic_only_steps == 12
     assert summary["experiment_mode"] == "tune"
     assert summary["validation_split"] == "dev"
-    assert summary["dev_rows"] == 36
+    assert summary["dev_rows"] == 21
 
 
 def test_tune_override_allows_bounded_two_step_probe(monkeypatch, tmp_path):
@@ -240,10 +265,56 @@ def test_tune_override_allows_bounded_two_step_probe(monkeypatch, tmp_path):
         validation_rows=len(validation_dataset),
     )
 
-    assert len(train_dataset) == 142
-    assert len(validation_dataset) == 36
+    assert len(train_dataset) == 83
+    assert len(validation_dataset) == 21
     assert config.total_train_steps == 2
     assert config.num_critic_only_steps == 2
+
+
+def test_three_domain_override_keeps_historical_validation_size(monkeypatch, tmp_path):
+    _patched_tau2_datasets(monkeypatch)
+    monkeypatch.setenv("TAU2_RUN_ROOT", str(tmp_path / "run"))
+
+    config, _ = load_expr_config(
+        [
+            "--config",
+            "examples/tau2/config_critic_production.yaml",
+            "domains=[airline,retail,telecom]",
+        ],
+        train_critic.Tau2PPOConfig,
+    )
+    train_dataset, validation_dataset, _ = train_critic.build_tau2_critic_datasets(
+        config
+    )
+    train_critic.fill_derived_train_steps(config, train_rows=len(train_dataset))
+    train_critic.validate_tau2_critic_config(
+        config,
+        train_rows=len(train_dataset),
+        validation_rows=len(validation_dataset),
+    )
+
+    assert len(train_dataset) == 178
+    assert len(validation_dataset) == 100
+    assert config.total_train_steps == 24
+
+
+def test_validation_row_count_mismatch_rejects(monkeypatch, tmp_path):
+    _patched_tau2_datasets(monkeypatch)
+    monkeypatch.setenv("TAU2_RUN_ROOT", str(tmp_path / "run"))
+
+    config, _ = load_expr_config(
+        ["--config", "examples/tau2/config_critic_production.yaml"],
+        train_critic.Tau2PPOConfig,
+    )
+    train_dataset, _, _ = train_critic.build_tau2_critic_datasets(config)
+    train_critic.fill_derived_train_steps(config, train_rows=len(train_dataset))
+
+    with pytest.raises(ValueError, match="expected=60 observed=100"):
+        train_critic.validate_tau2_critic_config(
+            config,
+            train_rows=len(train_dataset),
+            validation_rows=100,
+        )
 
 
 def test_formal_override_rejects_partial_training_steps(monkeypatch, tmp_path):

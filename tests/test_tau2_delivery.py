@@ -84,7 +84,7 @@ def test_formal_and_tuning_splits_use_official_tau2_data_without_test_selection(
 
 
 def test_config_grpo_freezes_4_3_1_async_grpo_contract(grpo_config: Tau2PPOConfig):
-    assert validate_tau2_recipe(grpo_config) == ("airline", "retail", "telecom")
+    assert validate_tau2_recipe(grpo_config) == ("airline", "retail")
 
     assert grpo_config.actor.backend == "fsdp:d4p1t1"
     assert grpo_config.rollout.backend == "sglang:d3p1t1"
@@ -109,7 +109,8 @@ def test_config_grpo_freezes_4_3_1_async_grpo_contract(grpo_config: Tau2PPOConfi
     assert grpo_config.saver.freq_steps == grpo_config.evaluator.freq_steps
     assert grpo_config.saver.freq_steps == 5
     assert grpo_config.recover.freq_steps == 5
-    assert grpo_config.eval_gconfig.n_samples == 8
+    assert grpo_config.eval_gconfig.n_samples == 4
+    assert grpo_config.eval_gconfig.temperature == 0.0
     assert grpo_config.rollout.agent.drop_retry_orphans
     assert grpo_config.evaluation_rollout.agent.drop_retry_orphans
 

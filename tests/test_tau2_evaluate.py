@@ -15,10 +15,12 @@ assert SPEC.loader is not None
 SPEC.loader.exec_module(tau2_evaluate)
 
 
-def _official_rows():
+def _official_rows(domains=("airline", "retail", "telecom")):
     rows = []
     counts = {"airline": 20, "retail": 40, "telecom": 40}
     for domain, count in counts.items():
+        if domain not in domains:
+            continue
         for idx in range(count):
             rows.append(
                 {"domain": domain, "task_id": f"{domain}-{idx}", "split": "test"}
@@ -33,14 +35,80 @@ def test_script_imports_without_running_main():
     assert callable(tau2_evaluate.run)
 
 
+@pytest.mark.parametrize(
+    "temperature_args, expected", [([], 0.0), (["--temperature", "1"], 1.0)]
+)
+def test_load_eval_config_historical_sampling_uses_requested_temperature(
+    monkeypatch, temperature_args, expected
+):
+    """New evaluation overrides a historical config without changing training."""
+
+    config = SimpleNamespace(
+        gconfig=SimpleNamespace(temperature=1.0),
+        eval_gconfig=SimpleNamespace(temperature=0.75, seed=None),
+    )
+    monkeypatch.setattr(
+        tau2_evaluate, "load_expr_config", lambda *_: (config, "historical.yaml")
+    )
+    monkeypatch.setattr(tau2_evaluate, "validate_tau2_recipe", lambda _: None)
+    args = tau2_evaluate.parse_args(
+        [
+            "--config",
+            "historical.yaml",
+            "--model-path",
+            "checkpoint",
+            "--output-root",
+            "eval",
+        ]
+        + temperature_args
+    )
+
+    loaded, _ = tau2_evaluate.load_eval_config(args)
+
+    assert loaded.eval_gconfig.temperature == expected
+    assert loaded.gconfig.temperature == 1.0
+    assert args.repeats == 4
+
+
+@pytest.mark.parametrize("temperature", ["-1", "nan", "inf"])
+def test_load_eval_config_invalid_temperature_rejects(monkeypatch, temperature):
+    """Invalid overrides cannot silently produce an unintended sampling policy."""
+
+    config = SimpleNamespace(eval_gconfig=SimpleNamespace(seed=None))
+    monkeypatch.setattr(
+        tau2_evaluate, "load_expr_config", lambda *_: (config, "historical.yaml")
+    )
+    args = tau2_evaluate.parse_args(
+        [
+            "--config",
+            "historical.yaml",
+            "--model-path",
+            "checkpoint",
+            "--output-root",
+            "eval",
+            "--temperature",
+            temperature,
+        ]
+    )
+
+    with pytest.raises(ValueError, match="temperature must be finite and non-negative"):
+        tau2_evaluate.load_eval_config(args)
+
+
 def test_build_eval_rows_expands_official_test_repeats(monkeypatch):
     """Official test rows are expanded into independently identified trials."""
 
-    monkeypatch.setattr(tau2_evaluate, "get_tau2_dataset", lambda **_: _official_rows())
+    monkeypatch.setattr(
+        tau2_evaluate, "get_tau2_dataset", lambda **kw: _official_rows(kw["domain"])
+    )
     config = type(
         "Config",
         (),
-        {"seed": 42, "experiment_mode": "formal"},
+        {
+            "seed": 42,
+            "experiment_mode": "formal",
+            "domains": ["airline", "retail", "telecom"],
+        },
     )()
 
     rows = tau2_evaluate.build_eval_rows(config, repeats=8)
@@ -50,6 +118,135 @@ def test_build_eval_rows_expands_official_test_repeats(monkeypatch):
     assert rows[1]["source_id"] == "airline:airline-0:trial1"
     assert rows[7]["trial"] == 7
     assert rows[8]["source_id"] == "airline:airline-1:trial0"
+
+
+def test_build_eval_rows_covers_only_configured_domains(monkeypatch):
+    """Dropping Telecom shrinks the official test coverage to airline+retail."""
+
+    monkeypatch.setattr(
+        tau2_evaluate, "get_tau2_dataset", lambda **kw: _official_rows(kw["domain"])
+    )
+    config = SimpleNamespace(
+        seed=42, experiment_mode="formal", domains=["airline", "retail"]
+    )
+
+    rows = tau2_evaluate.build_eval_rows(config, repeats=4)
+
+    assert len(rows) == 240
+    assert {row["domain"] for row in rows} == {"airline", "retail"}
+    assert rows[3]["trial"] == 3
+
+
+def _official_split_rows(domains, split):
+    counts = {
+        "test": {"airline": 20, "retail": 40, "telecom": 40},
+        "train": {"airline": 30, "retail": 74, "telecom": 74},
+    }[split]
+    return [
+        {"domain": domain, "task_id": f"{split}-{idx}", "split": split}
+        for domain, count in counts.items()
+        if domain in domains
+        for idx in range(count)
+    ]
+
+
+def test_build_eval_rows_base_covers_train_and_test(monkeypatch):
+    """Base evaluation is the official train+test union with split tags kept."""
+
+    calls = []
+
+    def fake_dataset(**kw):
+        calls.append((kw["split"], kw["experiment_mode"]))
+        return _official_split_rows(kw["domain"], kw["split"])
+
+    monkeypatch.setattr(tau2_evaluate, "get_tau2_dataset", fake_dataset)
+    monkeypatch.setattr(
+        tau2_evaluate,
+        "official_base_task_ids",
+        lambda domain: {
+            row["task_id"]
+            for split in ("train", "test")
+            for row in _official_split_rows((domain,), split)
+        },
+    )
+    config = SimpleNamespace(
+        seed=42, experiment_mode="tune", domains=["airline", "retail"]
+    )
+
+    rows = tau2_evaluate.build_eval_rows(config, repeats=4, task_set="base")
+
+    assert len(rows) == (50 + 114) * 4
+    assert {(row["domain"], row["split"]) for row in rows} == {
+        ("airline", "test"),
+        ("airline", "train"),
+        ("retail", "test"),
+        ("retail", "train"),
+    }
+    # The full train pool is used even when the resolved config is in tune mode.
+    assert ("train", "formal") in calls
+    assert len({row["source_id"] for row in rows}) == len(rows)
+
+
+def test_build_eval_rows_base_mismatch_with_official_rejects(monkeypatch):
+    """Base coverage is checked against the official base list, not just counts."""
+
+    monkeypatch.setattr(
+        tau2_evaluate,
+        "get_tau2_dataset",
+        lambda **kw: _official_split_rows(kw["domain"], kw["split"]),
+    )
+    monkeypatch.setattr(
+        tau2_evaluate, "official_base_task_ids", lambda domain: {"other"}
+    )
+    config = SimpleNamespace(seed=42, experiment_mode="formal", domains=["airline"])
+
+    with pytest.raises(ValueError, match="does not equal official base"):
+        tau2_evaluate.build_eval_rows(config, repeats=1, task_set="base")
+
+
+def test_aggregate_reports_base_scores_by_domain_split():
+    records = [
+        {
+            "status": "completed",
+            "domain": "retail",
+            "trial": 0,
+            "split": split,
+            "official_score": score,
+        }
+        for split, score in (("test", 1.0), ("test", 0.0), ("train", 1.0))
+    ]
+
+    summary = tau2_evaluate.aggregate(records, planned=3, repeats=1)
+
+    assert summary["by_domain_split"] == {
+        "retail:test": {"episodes": 2, "pass1_mean": 0.5},
+        "retail:train": {"episodes": 1, "pass1_mean": 1.0},
+    }
+    assert summary["by_domain_trial"] == {
+        "retail:0": {"episodes": 3, "pass1_mean": 2 / 3}
+    }
+
+
+def test_parse_args_task_set_defaults_to_test_and_rejects_unknown():
+    base = ["--config", "c.yaml", "--model-path", "m", "--output-root", "o"]
+    assert tau2_evaluate.parse_args(base).task_set == "test"
+    assert tau2_evaluate.parse_args(base + ["--task-set", "base"]).task_set == "base"
+    with pytest.raises(SystemExit):
+        tau2_evaluate.parse_args(base + ["--task-set", "train"])
+
+
+def test_build_eval_rows_missing_domain_rows_rejects(monkeypatch):
+    """A loader that drops a configured domain cannot pass as full coverage."""
+
+    monkeypatch.setattr(
+        tau2_evaluate, "get_tau2_dataset", lambda **_: _official_rows(("airline",))
+    )
+    config = SimpleNamespace(
+        seed=42, experiment_mode="formal", domains=["airline", "retail"]
+    )
+
+    with pytest.raises(ValueError, match="coverage mismatch: 80 != 240"):
+        tau2_evaluate.build_eval_rows(config, repeats=4)
 
 
 def test_aggregate_reports_pass1_not_best_of_repeats():
@@ -391,9 +588,16 @@ def test_collect_persists_each_result_before_refill_and_retains_partial_on_failu
 
 
 def test_rolling_covers_all_800_episodes_with_64_inflight(monkeypatch):
-    monkeypatch.setattr(tau2_evaluate, "get_tau2_dataset", lambda **_: _official_rows())
+    monkeypatch.setattr(
+        tau2_evaluate, "get_tau2_dataset", lambda **kw: _official_rows(kw["domain"])
+    )
     rows = tau2_evaluate.build_eval_rows(
-        SimpleNamespace(seed=42, experiment_mode="formal"), repeats=8
+        SimpleNamespace(
+            seed=42,
+            experiment_mode="formal",
+            domains=["airline", "retail", "telecom"],
+        ),
+        repeats=8,
     )
     controller = RollingController()
     completed = list(

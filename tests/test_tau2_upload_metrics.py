@@ -281,3 +281,63 @@ def test_offline_eval_refuses_partial_run(tmp_path):
     _write_json(tmp_path / "summary.json", {"status": "partial"})
     with pytest.raises(ValueError, match="incomplete"):
         upload_metrics.load_offline_eval_metrics(tmp_path)
+
+
+def test_offline_eval_uses_manifest_domains_without_telecom(tmp_path):
+    _write_json(
+        tmp_path / "manifest.json",
+        {"repeats": 4, "planned_episodes": 240, "domains": ["airline", "retail"]},
+    )
+    _write_json(tmp_path / "summary.json", {"status": "complete"})
+    episodes = [
+        {
+            "trial": trial,
+            "domain": domain,
+            "task_id": str(task),
+            "status": "completed",
+            "official_score": float(domain == "retail"),
+        }
+        for trial in range(4)
+        for domain, count in (("airline", 20), ("retail", 40))
+        for task in range(count)
+    ]
+    path = tmp_path / "episodes.jsonl"
+    path.write_text("\n".join(json.dumps(row) for row in episodes))
+    rows = upload_metrics.load_offline_eval_metrics(tmp_path)
+    assert len(rows) == 4
+    assert rows[0]["eval/reward_mean"] == pytest.approx(40 / 60)
+    assert "eval/telecom/reward_mean" not in rows[0]
+    episodes.append({**episodes[0], "domain": "telecom", "task_id": "x"})
+    path.write_text("\n".join(json.dumps(row) for row in episodes))
+    with pytest.raises(ValueError, match="coverage mismatch"):
+        upload_metrics.load_offline_eval_metrics(tmp_path)
+
+
+def test_offline_eval_base_task_set_expects_full_domain_counts(tmp_path):
+    _write_json(
+        tmp_path / "manifest.json",
+        {
+            "repeats": 1,
+            "planned_episodes": 164,
+            "domains": ["airline", "retail"],
+            "task_set": "base",
+        },
+    )
+    _write_json(tmp_path / "summary.json", {"status": "complete"})
+    episodes = [
+        {
+            "trial": 0,
+            "domain": domain,
+            "task_id": str(task),
+            "status": "completed",
+            "official_score": 1.0,
+        }
+        for domain, count in (("airline", 50), ("retail", 114))
+        for task in range(count)
+    ]
+    (tmp_path / "episodes.jsonl").write_text(
+        "\n".join(json.dumps(row) for row in episodes)
+    )
+    rows = upload_metrics.load_offline_eval_metrics(tmp_path)
+    assert rows[0]["eval/retail/episodes"] == 114
+    assert rows[0]["eval/reward_mean"] == 1.0

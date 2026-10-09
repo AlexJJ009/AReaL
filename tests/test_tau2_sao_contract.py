@@ -499,15 +499,22 @@ def test_qualification_configs_resolve_for_all_entrypoints(monkeypatch, tmp_path
                         grpo.evaluation_rollout, name
                     )
                 assert config.valid_dataset == grpo.valid_dataset
-                assert config.eval_gconfig.n_samples == 8
-                assert config.evaluation_rollout.max_concurrent_rollouts == 4
+                assert config.eval_gconfig.n_samples == 4
+                assert config.eval_gconfig.temperature == 0.0
+                assert config.gconfig.temperature == 1.0
+                assert config.evaluation_rollout.max_concurrent_rollouts == 8
+                assert tuple(config.domains) == ("airline", "retail")
+                assert tuple(grpo.domains) == ("airline", "retail")
                 assert config.rollout.agent.drop_retry_orphans
                 assert config.evaluation_rollout.agent.drop_retry_orphans
                 assert config.train_batch_episodes == 64
                 assert config.train_dataset.batch_size == 64
                 assert config.total_train_epochs == 2
-                assert config.effective_episodes == 2848
-                assert sum(config.domain_effective_episodes.values()) == 1424
+                assert config.effective_episodes == 1664
+                assert config.domain_effective_episodes == {
+                    "airline": 240,
+                    "retail": 592,
+                }
                 assert config.saver.freq_steps == 5
                 assert config.recover.freq_steps == 5
                 assert config.evaluator.freq_steps == 5
@@ -522,9 +529,9 @@ def test_qualification_configs_resolve_for_all_entrypoints(monkeypatch, tmp_path
         ["--config", "examples/tau2/config_sao.yaml", "effective_episodes=null"],
         Tau2PPOConfig,
     )
-    config.total_train_steps = 46
-    assert resolve_effective_episodes(config, train_items=1424) == 2848
-    assert config.effective_episodes == 2848
+    config.total_train_steps = 26
+    assert resolve_effective_episodes(config, train_items=832) == 1664
+    assert config.effective_episodes == 1664
 
     config, _ = load_expr_config(
         [
@@ -535,19 +542,19 @@ def test_qualification_configs_resolve_for_all_entrypoints(monkeypatch, tmp_path
         ],
         Tau2PPOConfig,
     )
-    assert resolve_effective_episodes(config, train_items=1424) == 64
+    assert resolve_effective_episodes(config, train_items=832) == 64
 
     config, _ = load_expr_config(
         [
             "--config",
             "examples/tau2/config_sao.yaml",
-            "effective_episodes=2848",
+            "effective_episodes=1664",
             "total_train_steps=1",
         ],
         Tau2PPOConfig,
     )
     with pytest.raises(ValueError, match="actual scheduled coverage"):
-        resolve_effective_episodes(config, train_items=1424)
+        resolve_effective_episodes(config, train_items=832)
 
     other_domains = {
         "airline": ("retail", "telecom"),
@@ -574,12 +581,12 @@ def test_qualification_configs_resolve_for_all_entrypoints(monkeypatch, tmp_path
         )
         assert validate_tau2_recipe(config) == (domain,)
 
+    # The SAO recipe no longer budgets Telecom episodes.
     for domain, per_epoch in (
         ("airline", 240),
         ("retail", 592),
-        ("telecom", 592),
     ):
-        pruned = tuple(other for other in other_domains if other != domain)
+        pruned = tuple(other for other in ("airline", "retail") if other != domain)
         config, _ = load_expr_config(
             [
                 "--config",

@@ -240,10 +240,14 @@ case "${SELECTOR}:${MODE}" in
     if [[ "${ALGORITHM}" == "sao" ]]; then
       : "${TAU2_CRITIC_PATH:?Set TAU2_CRITIC_PATH to the restored critic checkpoint}"
       reject_sao_domain_identity_overrides "$@"
+      # config_sao.yaml budgets only airline and retail; Telecom is not trained.
       case "${MODE}" in
-        airline) DOMAIN_PRUNE=("~domain_effective_episodes.retail" "~domain_effective_episodes.telecom") ;;
-        retail) DOMAIN_PRUNE=("~domain_effective_episodes.airline" "~domain_effective_episodes.telecom") ;;
-        telecom) DOMAIN_PRUNE=("~domain_effective_episodes.airline" "~domain_effective_episodes.retail") ;;
+        airline) DOMAIN_PRUNE=("~domain_effective_episodes.retail") ;;
+        retail) DOMAIN_PRUNE=("~domain_effective_episodes.airline") ;;
+        telecom)
+          printf 'SAO policy recipe has no Telecom episode budget\n' >&2
+          exit 2
+          ;;
       esac
       exec "${PYTHON_BIN}" "${REPO_ROOT}/examples/tau2/train.py" \
         --config "${REPO_ROOT}/examples/tau2/config_sao.yaml" \

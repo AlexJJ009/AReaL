@@ -1,5 +1,5 @@
-# Production online critic fit: 178 official train tasks over two epochs,
-# 24 critic-only updates, fixed actor, fixed 100-task official test eval.
+# Production online critic fit: 104 official airline/retail train tasks over two
+# epochs, 14 critic-only updates, fixed actor, fixed 60-task official test eval.
 experiment_name: tau2-critic-production
 trial_name: ${oc.env:TAU2_TRIAL_NAME,tau2-critic-production}
 seed: 42
@@ -10,7 +10,7 @@ num_critic_only_steps: 0
 critic_updates_before_actor: 0
 algorithm: critic
 experiment_mode: formal
-domains: [airline, retail, telecom]
+domains: [airline, retail]
 train_batch_episodes: 16
 effective_episodes: null
 domain_effective_episodes: {}

@@ -10,49 +10,65 @@ required.
 
 | Entry                                                                  | Purpose                                                     |
 | ---------------------------------------------------------------------- | ----------------------------------------------------------- |
-| `scripts/tau2/train_mixed.sh`                                          | Async GRPO on all three official train domains              |
+| `scripts/tau2/train_mixed.sh`                                          | Async GRPO on the airline and retail official train domains |
 | `scripts/tau2/train_airline.sh`, `train_retail.sh`, `train_telecom.sh` | The same GRPO recipe restricted to one domain               |
 | `scripts/tau2/train_critic.sh`                                         | Online mixed critic training with fresh episodes each epoch |
 | `scripts/tau2/run.sh qualification mixed`                              | Historical three-episode SAO integration recipe             |
-| `scripts/tau2/run.sh policy {mixed,airline,retail,telecom} sao`        | Formal SAO recipe using the native async evaluator          |
+| `scripts/tau2/run.sh policy {mixed,airline,retail} sao`                | Formal SAO recipe using the native async evaluator          |
 
 GRPO uses 4 training GPUs, 3 rollout GPUs, and 1 dedicated checkpoint-evaluation GPU. A
 full training batch is 8 prompts x 8 trajectories = 64 episodes. The last epoch batch
 may be smaller but always retains complete groups of eight. The default is two passes
-over all 178 official train tasks (46 updates). It uses non-thinking, 32768 total
-context, at most4096 tokens per response, policy temperature1, staleness2, recomputed
-logprobs, decoupled loss, group reward normalization and the existing token ratio mask
-above5. It does not load a critic. Save/recovery/evaluation cadence is20 steps plus
-final, as in the previous math GRPO recipe. With `eval_before_train=true`, the initial
-evaluation uses the starting model and consumes the initial evaluator trigger before
-training; step1 does not request an unsaved checkpoint.
+over the 104 official airline and retail train tasks (26 updates). Telecom is excluded
+from the default mix: the initial policy already solves every Telecom episode, so it
+adds no GRPO group contrast. Explicit `domains=[...]` overrides still accept it. It uses
+non-thinking, 32768 total context, at most4096 tokens per response, policy temperature1,
+staleness2, recomputed logprobs, decoupled loss, group reward normalization and the
+existing token ratio mask above5. It does not load a critic. Save/recovery/evaluation
+cadence is20 steps plus final, as in the previous math GRPO recipe. With
+`eval_before_train=true`, the initial evaluation uses the starting model and consumes
+the initial evaluator trigger before training; step1 does not request an unsaved
+checkpoint.
 
 SAO uses the same 4/3/1 GPU split, one trajectory per prompt, batch64, staleness2,
 TMS-enabled actor/critic colocation, a restored scalar critic from `TAU2_CRITIC_PATH`,
 and frozen critic attention. The mixed formal schedule is explicit in the config: 240
-airline, 592 retail, and 592 telecom episodes per epoch. Two epochs give 2848 total
-episodes and 46 updates. Single-domain SAO entrypoints prune only the unselected domain
-budgets; `train.py` derives `effective_episodes` from the resolved schedule after
+airline and 592 retail episodes per epoch. Two epochs give 1664 total episodes and 26
+updates. The critic must be trained on the same airline/retail task mix. Single-domain
+SAO entrypoints prune only the unselected domain budget; the SAO recipe has no Telecom
+budget; `train.py` derives `effective_episodes` from the resolved schedule after
 overrides, task limits, epochs and partial `total_train_steps`. SAO saves,
 recovery-checkpoints, and dedicated evaluation run every5 optimizer steps plus the final
 forced checkpoint/evaluation. The SAO policy recipe defaults W&B online; the inherited
 GRPO and critic recipes remain offline by default unless `TAU2_WANDB_MODE` overrides
 them.
 
-`experiment_mode=tune` selects142train/36dev, stratified by task and domain with seed42.
-`experiment_mode=formal` trains on178officialtrain and evaluates 100officialtest tasks
-with fixed settings; test results never select a checkpoint. The dedicated evaluator
-reports per-domain coverage and rewards, and rejects missing/infra-failed episodes
-instead of reporting a partial mean.
+`experiment_mode=tune` selects83train/21dev, stratified by task and domain with seed42.
+`experiment_mode=formal` trains on 104 official train and evaluates 60 official test
+tasks (20 airline, 40 retail), four repeats each, with fixed settings; test results
+never select a checkpoint. The dedicated evaluator reports per-domain coverage and
+rewards, and rejects missing/infra-failed episodes instead of reporting a partial mean.
 
-Critic formal training uses all 178 official train tasks and fixed official test100
-trajectories. Tuning uses142train/36dev (24/59/59 train and6/15/15dev). Each of two
-epochs samples a fresh episode for each training task, in the same task order and batch
-membership. Each batch waits for its complete ordered results, then updates the critic
-once. Batch16 retains the tail: formal has356real training episodes, 24updates and
-a2-task tail; tune has284episodes,18updates and a14-task tail. The actor remains fixed.
-Physical tail replication preserves equal weighting and is not counted as additional
-sampling.
+Policy training uses temperature 1; new checkpoint evaluations use temperature 0. The
+standalone `scripts/tau2/evaluate.py` entrypoint defaults to `--temperature 0` even when
+loading a historical resolved training config. Use `--temperature 1` explicitly to
+reproduce the old sampling protocol. Report the temperature alongside the scores and
+keep results from the two protocols separate.
+
+`evaluate.py --task-set test` (default) scores the official test split only, the
+held-out set for trained checkpoints. `--task-set base` scores the official leaderboard
+set, train plus test (50 airline and 114 retail tasks when Telecom is excluded). Its
+summary reports `by_domain_split` so the held-out test part stays visible. Base scores
+for trained checkpoints include tasks seen during training.
+
+Critic formal training uses the 104 official airline/retail train tasks and fixed
+official test60 trajectories. Tuning uses83train/21dev (24/59 train and6/15dev). Each of
+two epochs samples a fresh episode for each training task, in the same task order and
+batch membership. Each batch waits for its complete ordered results, then updates the
+critic once. Batch16 retains the tail: formal has208real training episodes, 14updates
+and an8-task tail; tune has166episodes,12updates and a3-task tail. The actor remains
+fixed. Physical tail replication preserves equal weighting and is not counted as
+additional sampling.
 
 Validation trajectories are collected once and reused at step0, every5steps and final;
 checkpoints are saved every5steps and final. Formal test metrics never select a

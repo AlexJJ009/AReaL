@@ -18,6 +18,10 @@ TRAIN_DONE_RE = re.compile(r"Train step\s+(\d+)/\d+ done\.")
 RECOVER_RE = re.compile(r"Recovering from StepInfo\(.*global_step=(\d+)")
 NUMBER_RE = re.compile(r"^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$", re.I)
 DOMAINS = ("airline", "retail", "telecom")
+OFFICIAL_TASK_COUNTS = {
+    "test": {"airline": 20, "retail": 40, "telecom": 40},
+    "base": {"airline": 50, "retail": 114, "telecom": 114},
+}
 
 
 def _json(path: Path) -> dict[str, Any]:
@@ -239,7 +243,11 @@ def load_offline_eval_metrics(run_root: Path) -> list[dict[str, Any]]:
         for line in (run_root / "episodes.jsonl").read_text().splitlines()
         if line.strip()
     ]
-    expected = 100 * repeats
+    # Manifests written before Telecom was dropped carry no domain or task-set key.
+    domains = tuple(manifest.get("domains", DOMAINS))
+    counts = OFFICIAL_TASK_COUNTS[manifest.get("task_set", "test")]
+    task_counts = {domain: counts[domain] for domain in domains}
+    expected = sum(task_counts.values()) * repeats
     if len(episodes) != expected or manifest["planned_episodes"] != expected:
         raise ValueError("Offline evaluation coverage mismatch")
     seen = set()
@@ -252,7 +260,7 @@ def load_offline_eval_metrics(run_root: Path) -> list[dict[str, Any]]:
         if (
             item["status"] != "completed"
             or not 0 <= trial < repeats
-            or domain not in DOMAINS
+            or domain not in domains
         ):
             raise ValueError(f"Invalid offline evaluation cell: {identity}")
         score = float(item["official_score"])
@@ -267,14 +275,14 @@ def load_offline_eval_metrics(run_root: Path) -> list[dict[str, Any]]:
             "source/kind": "offline_eval",
         }
         total = 0.0
-        for domain, count in (("airline", 20), ("retail", 40), ("telecom", 40)):
+        for domain, count in task_counts.items():
             scores = grouped.get((trial, domain), [])
             if len(scores) != count:
                 raise ValueError(f"Missing {domain} coverage in trial {trial}")
             row[f"eval/{domain}/reward_mean"] = sum(scores) / count
             row[f"eval/{domain}/episodes"] = count
             total += sum(scores)
-        row["eval/reward_mean"] = total / 100
+        row["eval/reward_mean"] = total / sum(task_counts.values())
         rows.append(row)
     return rows
 

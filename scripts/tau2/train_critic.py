@@ -21,9 +21,10 @@ from omegaconf import OmegaConf
 
 from examples.tau2.contracts import (
     MAX_ASSISTANT_TOKENS,
+    OFFICIAL_SPLIT_SNAPSHOTS,
     OFFICIAL_TAU2_REPOSITORY,
     OFFICIAL_TAU2_REVISION,
-    SUPPORTED_DOMAINS,
+    normalize_domains,
     resolve_pinned_hf_snapshot,
 )
 from examples.tau2.evaluation import repeat_groups_for_dispatch
@@ -292,8 +293,8 @@ def validate_tau2_critic_config(
         raise ValueError(
             "Tau2 critic training uses algorithm=critic, experiment_mode=tune|formal"
         )
-    if tuple(config.domains) != SUPPORTED_DOMAINS:
-        raise ValueError("Tau2 critic training must use all three official domains")
+    if tuple(config.domains) != normalize_domains(config.domains):
+        raise ValueError("Tau2 critic domains must be explicit and in canonical order")
     if config.train_batch_episodes != config.train_dataset.batch_size:
         raise ValueError("train_batch_episodes must equal train_dataset.batch_size")
     if config.train_dataset.drop_last:
@@ -373,12 +374,26 @@ def validate_tau2_critic_config(
     if not config.critic.freeze_critic_attention:
         raise ValueError("Tau2 critic production fit requires frozen attention")
     if validation_rows is not None:
-        expected_validation_rows = 100 if config.experiment_mode == "formal" else 36
+        expected_validation_rows = _expected_validation_rows(config)
         if validation_rows != expected_validation_rows:
             raise ValueError(
                 "Tau2 critic fixed validation set has unexpected task count: "
                 f"expected={expected_validation_rows} observed={validation_rows}"
             )
+
+
+def _expected_validation_rows(config: Tau2PPOConfig) -> int:
+    domains = normalize_domains(config.domains)
+    if config.experiment_mode == "formal":
+        return sum(int(OFFICIAL_SPLIT_SNAPSHOTS[d]["test"]) for d in domains)
+    # Mirrors split_critic_tasks: dev tasks are carved out of each train pool.
+    total = 0
+    for domain in domains:
+        pool = int(OFFICIAL_SPLIT_SNAPSHOTS[domain]["train"])
+        if config.critic_tasks_per_domain is not None:
+            pool = min(pool, config.critic_tasks_per_domain)
+        total += max(1, min(pool - 1, round(pool * config.critic_dev_fraction)))
+    return total
 
 
 def fill_derived_train_steps(config: Tau2PPOConfig, *, train_rows: int) -> int:
@@ -412,9 +427,10 @@ def build_tau2_critic_datasets(
     config: Tau2PPOConfig,
 ) -> tuple[Any, Any, dict[str, Any]]:
     provenance = collection_provenance(config, actor_source=config.actor.path)
+    domains = normalize_domains(config.domains)
     validation_split = "test" if config.experiment_mode == "formal" else "dev"
     dataset_kwargs = dict(
-        domain=SUPPORTED_DOMAINS,
+        domain=domains,
         provenance=provenance,
         seed=config.seed,
         experiment_mode=config.experiment_mode,
@@ -448,13 +464,13 @@ def build_tau2_critic_datasets(
             f"train:{domain}": sum(
                 1 for row in train_dataset if row["domain"] == domain
             )
-            for domain in SUPPORTED_DOMAINS
+            for domain in domains
         }
         | {
             f"{validation_split}:{domain}": sum(
                 1 for row in validation_dataset if row["domain"] == domain
             )
-            for domain in SUPPORTED_DOMAINS
+            for domain in domains
         },
     }
     if validation_split == "dev":

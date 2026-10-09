@@ -18,8 +18,9 @@ from typing import Any
 from omegaconf import OmegaConf
 
 from examples.tau2.contracts import (
+    OFFICIAL_SPLIT_SNAPSHOTS,
     OFFICIAL_TAU2_REVISION,
-    SUPPORTED_DOMAINS,
+    normalize_domains,
     resolve_pinned_hf_snapshot,
 )
 from examples.tau2.train import get_tau2_dataset, validate_tau2_recipe
@@ -35,6 +36,8 @@ from areal.utils.printing import tabulate_stats
 
 logger = logging.getLogger("Tau2Train")
 
+TASK_SETS = ("test", "base")
+
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -45,7 +48,20 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="HF snapshot/local model path loaded by the single-GPU eval server.",
     )
     parser.add_argument("--output-root", required=True)
-    parser.add_argument("--repeats", type=int, default=8)
+    parser.add_argument("--repeats", type=int, default=4)
+    parser.add_argument(
+        "--task-set",
+        choices=TASK_SETS,
+        default="test",
+        help="test: official test split only. base: the official leaderboard set "
+        "(train+test), with per-split scores reported separately.",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.0,
+        help="Evaluation temperature (default: 0). Use 1 for the historical protocol.",
+    )
     parser.add_argument("--check-config", action="store_true")
     return parser.parse_args(argv)
 
@@ -59,6 +75,9 @@ def load_eval_config(args: argparse.Namespace) -> tuple[Tau2PPOConfig, str]:
         )
     if args.repeats <= 0:
         raise ValueError("repeats must be positive")
+    if not math.isfinite(args.temperature) or args.temperature < 0:
+        raise ValueError("temperature must be finite and non-negative")
+    config.eval_gconfig.temperature = args.temperature
     validate_tau2_recipe(config)
     return config, config_file
 
@@ -106,22 +125,47 @@ def bind_eval_config(
     config.rollout = rollout
     config.evaluation_rollout = rollout
 
-    # Repeated offline eval is pass@1 over independent stochastic trials. Preserve
-    # the resolved validation sampling config; trials provide the repetition axis.
+    # Average per-trial success; task rows provide the repetition axis. Preserve
+    # the resolved evaluation settings apart from the group size below.
     config.eval_gconfig.n_samples = 1
     config.eval_gconfig.reward_normalization = False
     config.eval_gconfig.drop_incomplete_group = False
     return config
 
 
-def build_eval_rows(config: Tau2PPOConfig, repeats: int) -> list[dict[str, Any]]:
+def official_base_task_ids(domain: str) -> set[str]:
+    from tau2.registry import registry
+
+    return {
+        str(task_id) for task_id in registry.get_task_splits_loader(domain)()["base"]
+    }
+
+
+def build_eval_rows(
+    config: Tau2PPOConfig, repeats: int, task_set: str = "test"
+) -> list[dict[str, Any]]:
+    if task_set not in TASK_SETS:
+        raise ValueError(f"Unsupported task set: {task_set}")
+    domains = normalize_domains(config.domains)
+    splits = ("test",) if task_set == "test" else ("test", "train")
+    tasks = []
+    for split in splits:
+        # Base needs the full official train pool; tune mode would carve out dev.
+        tasks.extend(
+            get_tau2_dataset(
+                domain=domains,
+                split=split,
+                seed=config.seed,
+                experiment_mode=config.experiment_mode if split == "test" else "formal",
+            )
+        )
+    if task_set == "base":
+        for domain in domains:
+            selected = {str(t["task_id"]) for t in tasks if t["domain"] == domain}
+            if selected != official_base_task_ids(domain):
+                raise ValueError(f"{domain} train+test does not equal official base")
     rows = []
-    for row in get_tau2_dataset(
-        domain=SUPPORTED_DOMAINS,
-        split="test",
-        seed=config.seed,
-        experiment_mode=config.experiment_mode,
-    ):
+    for row in tasks:
         base = dict(row)
         for trial in range(repeats):
             item = dict(base)
@@ -129,9 +173,18 @@ def build_eval_rows(config: Tau2PPOConfig, repeats: int) -> list[dict[str, Any]]
             item["source_id"] = f"{item['domain']}:{item['task_id']}:trial{trial}"
             item["attempt_id"] = item["source_id"]
             rows.append(item)
-    expected = 100 * repeats
+    expected = (
+        sum(
+            int(OFFICIAL_SPLIT_SNAPSHOTS[domain][split])
+            for domain in domains
+            for split in splits
+        )
+        * repeats
+    )
     if len(rows) != expected:
-        raise ValueError(f"Official test coverage mismatch: {len(rows)} != {expected}")
+        raise ValueError(
+            f"Official {task_set} coverage mismatch: {len(rows)} != {expected}"
+        )
     return rows
 
 
@@ -218,24 +271,27 @@ def aggregate(
     by_domain: dict[str, dict[str, float | int]] = {}
     by_trial: dict[str, dict[str, float | int]] = {}
     by_domain_trial: dict[str, dict[str, float | int]] = {}
+    # Base runs mix official train and test tasks; keep each part's score.
+    by_domain_split: dict[str, dict[str, float | int]] = {}
     groups: dict[tuple[str, str], list[float]] = defaultdict(list)
     for record in completed:
         groups[("domain", record["domain"])].append(float(record["official_score"]))
         groups[("trial", str(record["trial"]))].append(float(record["official_score"]))
+        groups[
+            (f"domain_split:{record['domain']}", str(record.get("split", "test")))
+        ].append(float(record["official_score"]))
         groups[(f"domain_trial:{record['domain']}", str(record["trial"]))].append(
             float(record["official_score"])
         )
     for (kind, key), values in groups.items():
-        target = (
-            by_domain
-            if kind == "domain"
-            else by_trial
-            if kind == "trial"
-            else by_domain_trial
-        )
-        target_key = (
-            key if not kind.startswith("domain_trial:") else f"{kind[13:]}:{key}"
-        )
+        if kind == "domain":
+            target, target_key = by_domain, key
+        elif kind == "trial":
+            target, target_key = by_trial, key
+        elif kind.startswith("domain_split:"):
+            target, target_key = by_domain_split, f"{kind[13:]}:{key}"
+        else:
+            target, target_key = by_domain_trial, f"{kind[13:]}:{key}"
         target[target_key] = {
             "episodes": len(values),
             "pass1_mean": sum(values) / len(values),
@@ -252,6 +308,7 @@ def aggregate(
         "by_domain": by_domain,
         "by_trial": by_trial,
         "by_domain_trial": by_domain_trial,
+        "by_domain_split": by_domain_split,
     }
 
 
@@ -385,7 +442,7 @@ def run(argv: list[str]) -> dict[str, Any]:
     config = bind_eval_config(
         raw_config, model_path=model_path, output_root=output_root
     )
-    rows = build_eval_rows(config, args.repeats)
+    rows = build_eval_rows(config, args.repeats, args.task_set)
     workflow_kwargs = build_workflow_kwargs(config)
     max_inflight = resolve_eval_concurrency(config)
     manifest = {
@@ -394,6 +451,8 @@ def run(argv: list[str]) -> dict[str, Any]:
         "tau2_revision": OFFICIAL_TAU2_REVISION,
         "model_path": model_path,
         "output_root": str(output_root),
+        "domains": list(normalize_domains(config.domains)),
+        "task_set": args.task_set,
         "repeats": args.repeats,
         "planned_episodes": len(rows),
         "max_concurrent_episodes": max_inflight,
