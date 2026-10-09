@@ -648,3 +648,76 @@ def test_resolve_eval_concurrency_matches_native_fallback(
         )
     )
     assert tau2_evaluate.resolve_eval_concurrency(config) == expected
+
+
+def test_summarize_user_usage_keeps_last_retry_and_counts_missing(tmp_path):
+    path = tmp_path / "user-usage.jsonl"
+    lines = [
+        {
+            "source_id": "a",
+            "user_llm_calls": 9,
+            "user_prompt_tokens": 900,
+            "user_completion_tokens": 90,
+        },
+        {
+            "source_id": "a",
+            "user_llm_calls": 2,
+            "user_prompt_tokens": 200,
+            "user_completion_tokens": 20,
+        },
+        {
+            "source_id": "orphan",
+            "user_llm_calls": 1,
+            "user_prompt_tokens": 5,
+            "user_completion_tokens": 1,
+        },
+    ]
+    path.write_text("\n".join(json.dumps(line) for line in lines))
+    records = [
+        {"source_id": "a", "status": "completed"},
+        {"source_id": "b", "status": "completed"},
+        {"source_id": "c", "status": "failed"},
+    ]
+
+    usage = tau2_evaluate.summarize_user_usage(path, records)
+
+    assert usage["episodes_with_usage"] == 1
+    assert usage["episodes_missing_usage"] == 1
+    assert usage["user_prompt_tokens"] == 200
+    assert usage["mean_completion_tokens_per_episode"] == 20
+
+
+def test_load_eval_config_applies_hydra_overrides(monkeypatch):
+    seen = {}
+    config = SimpleNamespace(
+        gconfig=SimpleNamespace(temperature=1.0),
+        eval_gconfig=SimpleNamespace(temperature=1.0, seed=None),
+    )
+
+    def fake_load(argv, _cls):
+        seen["argv"] = argv
+        return config, "c.yaml"
+
+    monkeypatch.setattr(tau2_evaluate, "load_expr_config", fake_load)
+    monkeypatch.setattr(tau2_evaluate, "validate_tau2_recipe", lambda _: None)
+    args = tau2_evaluate.parse_args(
+        [
+            "--config",
+            "c.yaml",
+            "--model-path",
+            "m",
+            "--output-root",
+            "o",
+            "econfig.user_llm=doubao",
+            "~econfig.user_llm_args.max_completion_tokens",
+        ]
+    )
+
+    tau2_evaluate.load_eval_config(args)
+
+    assert seen["argv"] == [
+        "--config",
+        "c.yaml",
+        "econfig.user_llm=doubao",
+        "~econfig.user_llm_args.max_completion_tokens",
+    ]

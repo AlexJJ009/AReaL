@@ -718,3 +718,34 @@ async def test_evaluator_json_retry_preserves_simulation_and_failure_class(
         assert record["error"]["pos"] == 0
         assert record["task_id"] == "68"
         assert "session-secret" not in raw and "user-secret" not in raw
+
+
+def test_user_llm_usage_sums_only_user_turns():
+    from tau2.data_model.message import AssistantMessage, UserMessage
+
+    from examples.tau2.agent import user_llm_usage
+
+    messages = [
+        UserMessage(
+            role="user",
+            content="hi",
+            usage={"prompt_tokens": 100, "completion_tokens": 10},
+        ),
+        AssistantMessage(
+            role="assistant",
+            content="ok",
+            usage={"prompt_tokens": 999, "completion_tokens": 99},
+        ),
+        UserMessage(
+            role="user",
+            content="bye",
+            usage={"prompt_tokens": 150, "completion_tokens": None},
+        ),
+        UserMessage(role="user", content="no usage"),
+    ]
+
+    assert user_llm_usage(messages) == {
+        "user_llm_calls": 2,
+        "user_prompt_tokens": 250,
+        "user_completion_tokens": 10,
+    }

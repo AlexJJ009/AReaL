@@ -19,6 +19,7 @@ import tau2.evaluator.evaluator_nl_assertions as tau2_nl_evaluator
 from litellm import register_model
 from tau2.agent.base_agent import HalfDuplexAgent
 from tau2.agent.llm_agent import LLMAgent, LLMAgentState, LLMSoloAgent
+from tau2.data_model.message import UserMessage
 from tau2.data_model.tasks import Task
 from tau2.environment.environment import Environment
 from tau2.environment.tool import Tool
@@ -137,6 +138,37 @@ def _litellm_user_model(model: str) -> str:
     """Route a bare OpenAI-compatible model ID through LiteLLM's OpenAI adapter."""
 
     return model if "/" in model else f"openai/{model}"
+
+
+def user_llm_usage(messages: list[Any]) -> dict[str, int]:
+    """Sum the user-simulator tokens tau2 records on each accepted user turn.
+
+    Discarded retry attempts and NL-judge calls are not attached to messages.
+    """
+
+    usage = {"user_llm_calls": 0, "user_prompt_tokens": 0, "user_completion_tokens": 0}
+    for message in messages:
+        if not isinstance(message, UserMessage) or not message.usage:
+            continue
+        usage["user_llm_calls"] += 1
+        usage["user_prompt_tokens"] += int(message.usage.get("prompt_tokens") or 0)
+        usage["user_completion_tokens"] += int(
+            message.usage.get("completion_tokens") or 0
+        )
+    return usage
+
+
+def append_usage_record(path: str, record: dict[str, Any]) -> None:
+    """Append one episode line; single small appends keep concurrent writers whole."""
+
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as stream:
+            stream.write(json.dumps(record, sort_keys=True) + "\n")
+    except OSError:
+        logger.warning(
+            "Could not append user-simulator usage to %s", path, exc_info=True
+        )
 
 
 class Tau2Runner:
@@ -579,6 +611,20 @@ class Tau2AgentWorkflow:
         # bound; if the caller cancels, join the episode before the proxy session
         # is allowed to close so no calls or tool effects survive the session.
         run_info = await _await_without_orphaning(runner.run(task))
+        usage_log = os.environ.get("TAU2_USAGE_LOG")
+        if usage_log:
+            append_usage_record(
+                usage_log,
+                {
+                    "source_id": data.get("source_id"),
+                    "domain": domain,
+                    "task_id": task_id,
+                    "trial": data.get("trial"),
+                    "user_llm": econfig.user_llm,
+                    "official_score": float(run_info.reward),
+                    **user_llm_usage(run_info.messages),
+                },
+            )
 
         reward_info = (
             run_info.reward_info.model_dump()

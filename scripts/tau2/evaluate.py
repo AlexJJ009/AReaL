@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 from collections import defaultdict
 from collections.abc import Iterator
@@ -63,11 +64,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Evaluation temperature (default: 0). Use 1 for the historical protocol.",
     )
     parser.add_argument("--check-config", action="store_true")
+    parser.add_argument(
+        "overrides",
+        nargs="*",
+        help="Hydra overrides applied to --config, e.g. econfig.user_llm=<model>.",
+    )
     return parser.parse_args(argv)
 
 
 def load_eval_config(args: argparse.Namespace) -> tuple[Tau2PPOConfig, str]:
-    config, config_file = load_expr_config(["--config", args.config], Tau2PPOConfig)
+    config, config_file = load_expr_config(
+        ["--config", args.config, *args.overrides], Tau2PPOConfig
+    )
     if config.eval_gconfig is not None and config.eval_gconfig.seed is not None:
         raise ValueError(
             "τ² repeated eval requires eval_gconfig.seed=null so trials do not "
@@ -249,6 +257,37 @@ def write_json(path: Path, payload: Any) -> None:
         json.dumps(payload, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+
+
+def summarize_user_usage(path: Path, records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Join per-episode user-simulator tokens to the completed evaluation cells."""
+
+    completed = {r["source_id"] for r in records if r.get("status") == "completed"}
+    usage: dict[str, dict[str, Any]] = {}
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                item = json.loads(line)
+                # Retried episodes append again; the last line matches the kept record.
+                usage[str(item["source_id"])] = item
+    matched = [usage[source_id] for source_id in completed if source_id in usage]
+    totals = {
+        key: sum(int(item[key]) for item in matched)
+        for key in ("user_llm_calls", "user_prompt_tokens", "user_completion_tokens")
+    }
+    return {
+        "episodes_with_usage": len(matched),
+        "episodes_missing_usage": len(completed) - len(matched),
+        **totals,
+        "mean_prompt_tokens_per_episode": totals["user_prompt_tokens"] / len(matched)
+        if matched
+        else 0.0,
+        "mean_completion_tokens_per_episode": totals["user_completion_tokens"]
+        / len(matched)
+        if matched
+        else 0.0,
+        "excludes": "NL-judge calls and discarded user retry attempts",
+    }
 
 
 def write_record(path: Path, record: dict[str, Any]) -> None:
@@ -465,6 +504,10 @@ def run(argv: list[str]) -> dict[str, Any]:
         "max_total_tokens": config.econfig.context_window_tokens,
         "enable_thinking": config.econfig.enable_thinking,
         "add_thinking_tool": config.econfig.add_thinking_tool,
+        "overrides": list(args.overrides),
+        "user_llm": config.econfig.user_llm,
+        "user_llm_base_url": config.econfig.user_llm_base_url,
+        "user_llm_args": dict(config.econfig.user_llm_args or {}),
     }
     write_json(output_root / "manifest.json", manifest)
     write_json(
@@ -478,6 +521,9 @@ def run(argv: list[str]) -> dict[str, Any]:
         return {"manifest": manifest, "summary": summary}
 
     logging.setup_file_logging(str(output_root / "eval.log"))
+    # Workers inherit these: keep simulator failure and usage records with this run.
+    os.environ["TAU2_RUN_ROOT"] = str(output_root)
+    os.environ["TAU2_USAGE_LOG"] = str(output_root / "user-usage.jsonl")
     scheduler = LocalScheduler(exp_config=config)
     alloc = ModelAllocation.from_str(
         config.evaluation_rollout.backend, name="eval-rollout"
@@ -503,6 +549,9 @@ def run(argv: list[str]) -> dict[str, Any]:
     finally:
         controller.destroy()
     summary = aggregate(records, planned=len(rows), repeats=args.repeats)
+    summary["user_llm_usage"] = summarize_user_usage(
+        output_root / "user-usage.jsonl", records
+    )
     write_json(output_root / "summary.json", summary)
     logger.info("Evaluation Results: %s", tabulate_stats(summary["metrics"]))
     if summary["status"] != "complete":
