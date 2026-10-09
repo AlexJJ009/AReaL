@@ -10,7 +10,6 @@ import math
 import os
 import sys
 from collections import defaultdict
-from collections.abc import Callable, Iterator
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
@@ -24,14 +23,19 @@ from examples.tau2.contracts import (
     normalize_domains,
     resolve_pinned_hf_snapshot,
 )
+from examples.tau2.official_runner import (
+    INFRASTRUCTURE_ERROR,
+    collect_episodes,
+    expand_trials,
+    official_metrics,
+)
 from examples.tau2.train import get_tau2_dataset, validate_tau2_recipe
-from examples.tau2.utils import Tau2PPOConfig, trajectory_record_dir
+from examples.tau2.utils import Tau2PPOConfig
 
 from areal.api.alloc_mode import ModelAllocation
 from areal.api.cli_args import SGLangConfig, load_expr_config
 from areal.engine import RemoteSGLangEngine
 from areal.infra import LocalScheduler
-from areal.infra.rpc.rtensor import RTensor
 from areal.utils import logging
 from areal.utils.printing import tabulate_stats
 
@@ -62,6 +66,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         type=float,
         default=0.0,
         help="Evaluation temperature (default: 0). Use 1 for the historical protocol.",
+    )
+    parser.add_argument(
+        "--tasks",
+        default=None,
+        help="Comma-separated domain:task_id subset of --task-set, for smoke runs.",
     )
     parser.add_argument("--check-config", action="store_true")
     parser.add_argument(
@@ -172,15 +181,7 @@ def build_eval_rows(
             selected = {str(t["task_id"]) for t in tasks if t["domain"] == domain}
             if selected != official_base_task_ids(domain):
                 raise ValueError(f"{domain} train+test does not equal official base")
-    rows = []
-    for row in tasks:
-        base = dict(row)
-        for trial in range(repeats):
-            item = dict(base)
-            item["trial"] = trial
-            item["source_id"] = f"{item['domain']}:{item['task_id']}:trial{trial}"
-            item["attempt_id"] = item["source_id"]
-            rows.append(item)
+    rows = expand_trials(tasks, repeats)
     expected = (
         sum(
             int(OFFICIAL_SPLIT_SNAPSHOTS[domain][split])
@@ -196,6 +197,19 @@ def build_eval_rows(
     return rows
 
 
+def select_tasks(rows: list[dict[str, Any]], tasks: str | None) -> list[dict[str, Any]]:
+    """Keep only the named domain:task_id pairs of a validated task set."""
+
+    if tasks is None:
+        return rows
+    wanted = {item.strip() for item in tasks.split(",") if item.strip()}
+    selected = [r for r in rows if f"{r['domain']}:{r['task_id']}" in wanted]
+    found = {f"{r['domain']}:{r['task_id']}" for r in selected}
+    if found != wanted:
+        raise ValueError(f"Unknown tasks for this task set: {sorted(wanted - found)}")
+    return selected
+
+
 def build_workflow_kwargs(config: Tau2PPOConfig) -> dict[str, Any]:
     return {
         "econfig": asdict(config.econfig),
@@ -207,104 +221,8 @@ def build_workflow_kwargs(config: Tau2PPOConfig) -> dict[str, Any]:
             "temperature": config.eval_gconfig.temperature,
             "max_completion_tokens": config.eval_gconfig.max_new_tokens,
         },
-        "timeout": config.episode_timeout_seconds,
+        "timeout": config.eval_episode_timeout_seconds,
         "infra_retries": config.infra_retries,
-    }
-
-
-def record_from_trajectory(
-    row: dict[str, Any], trajectory: dict[str, Any]
-) -> dict[str, Any]:
-    if trajectory is None:
-        raise RuntimeError(f"Missing trajectory for {row['source_id']}")
-    localized = RTensor.localize(trajectory)
-    rewards = localized.get("rewards")
-    if rewards is None:
-        raise RuntimeError(f"Missing rewards for {row['source_id']}")
-    score = float(rewards.reshape(-1)[-1].item())
-    official_scores = localized.get("official_scores")
-    official_score = (
-        float(official_scores.reshape(-1)[-1].item())
-        if official_scores is not None
-        else score
-    )
-    if not math.isfinite(score):
-        raise RuntimeError(f"Non-finite reward for {row['source_id']}: {score}")
-    if not math.isfinite(official_score) or official_score not in (0.0, 1.0):
-        raise RuntimeError(
-            f"Official τ² score must be binary for {row['source_id']}: {official_score}"
-        )
-    task_budget_failure = localized.get("task_budget_failure")
-    return {
-        "status": "completed",
-        "domain": row["domain"],
-        "task_id": row["task_id"],
-        "split": row.get("split", "test"),
-        "trial": int(row["trial"]),
-        "source_id": row["source_id"],
-        "attempt_id": row["attempt_id"],
-        "reward": score,
-        "official_score": official_score,
-        "task_budget_failure": bool(task_budget_failure.reshape(-1)[-1].item())
-        if task_budget_failure is not None
-        else False,
-    }
-
-
-def latest_trajectory_record(root: Path, source_id: str) -> dict[str, Any] | None:
-    directory = trajectory_record_dir(root, source_id)
-    records = [
-        json.loads(path.read_text(encoding="utf-8"))
-        for path in directory.glob("*.json")
-    ]
-    return max(records, key=lambda r: r["recorded_at"]) if records else None
-
-
-def find_policy_free_episode(
-    pending: dict[int, dict[str, Any]], trajectory_root: Path
-) -> int | None:
-    """Bind an unbound rejected result to an episode that never called the policy.
-
-    The proxy rejects such episodes because there is nothing to export, so the
-    dispatcher returns None without a task ID. Its own completed record is final:
-    a zero-turn episode is never retried. Any pending zero-turn episode will
-    produce exactly one such None, so binding the first one found is exact.
-    """
-    for task_id, row in pending.items():
-        record = latest_trajectory_record(trajectory_root, row["source_id"])
-        if (
-            record is not None
-            and record.get("status") == "completed"
-            and record.get("policy_turns") == 0
-        ):
-            return task_id
-    return None
-
-
-def record_from_policy_free_episode(
-    row: dict[str, Any], trajectory_root: Path
-) -> dict[str, Any]:
-    record = latest_trajectory_record(trajectory_root, row["source_id"])
-    if record is None or record.get("policy_turns") != 0:
-        raise RuntimeError(f"Missing trajectory for {row['source_id']}")
-    official_score = float(record["official_score"])
-    if official_score not in (0.0, 1.0):
-        raise RuntimeError(
-            f"Official τ² score must be binary for {row['source_id']}: {official_score}"
-        )
-    return {
-        "status": "completed",
-        "domain": row["domain"],
-        "task_id": row["task_id"],
-        "split": row.get("split", "test"),
-        "trial": int(row["trial"]),
-        "source_id": row["source_id"],
-        "attempt_id": row["attempt_id"],
-        "reward": official_score,
-        "official_score": official_score,
-        "task_budget_failure": bool(record.get("task_budget_failure", False)),
-        "policy_turns": 0,
-        "stop_reason": record.get("stop_reason"),
     }
 
 
@@ -355,17 +273,31 @@ def write_record(path: Path, record: dict[str, Any]) -> None:
 def aggregate(
     records: list[dict[str, Any]], *, planned: int, repeats: int
 ) -> dict[str, Any]:
+    """Official metrics plus per-split and per-trial pass@1 views.
+
+    Infrastructure errors are excluded from every score, as in
+    ``tau2.metrics.agent_metrics``, and always counted.
+    """
+    official = official_metrics(records, repeats=repeats)
+    overall = official["overall"]
     completed = [r for r in records if r.get("status") == "completed"]
-    failed = [r for r in records if r.get("status") != "completed"]
-    scores = [float(r["official_score"]) for r in completed]
     metrics: dict[str, float | int] = {
         "eval/planned_episodes": planned,
         "eval/completed_episodes": len(completed),
-        "eval/infra_failed_episodes": len(failed),
-        # Scored normally, as official τ² does, but carry no policy tokens.
-        "eval/policy_free_episodes": sum(r.get("policy_turns") == 0 for r in completed),
-        "eval/pass1_mean": sum(scores) / len(scores) if scores else 0.0,
+        "eval/infra_excluded_episodes": overall["infra_excluded_episodes"],
+        "eval/policy_free_episodes": overall["policy_free_episodes"],
+        "eval/avg_reward": overall["avg_reward"],
+        "eval/pass1_mean": overall["avg_reward"],
     }
+    for k, value in overall["pass_hat_k"].items():
+        metrics[f"eval/pass^{k}"] = value
+    for domain, result in official["by_domain"].items():
+        metrics[f"eval/domain/{domain}/avg_reward"] = result["avg_reward"]
+        metrics[f"eval/domain/{domain}/infra_excluded_episodes"] = result[
+            "infra_excluded_episodes"
+        ]
+        for k, value in result["pass_hat_k"].items():
+            metrics[f"eval/domain/{domain}/pass^{k}"] = value
     by_domain: dict[str, dict[str, float | int]] = {}
     by_trial: dict[str, dict[str, float | int]] = {}
     by_domain_trial: dict[str, dict[str, float | int]] = {}
@@ -397,11 +329,17 @@ def aggregate(
         metrics[f"eval/{kind}/{key}/pass1_mean"] = sum(values) / len(values)
         metrics[f"eval/{kind}/{key}/episodes"] = len(values)
     return {
-        "status": "complete" if len(completed) == planned and not failed else "partial",
+        "status": "complete" if len(records) == planned else "partial",
         "repeats": repeats,
         "planned_episodes": planned,
         "completed_episodes": len(completed),
-        "infra_failed_episodes": len(failed),
+        "infra_excluded_episodes": overall["infra_excluded_episodes"],
+        "infra_excluded": [
+            {k: r.get(k) for k in ("source_id", "attempts", "error_type", "error")}
+            for r in records
+            if r.get("status") == INFRASTRUCTURE_ERROR
+        ],
+        "official": official,
         "metrics": metrics,
         "by_domain": by_domain,
         "by_trial": by_trial,
@@ -432,73 +370,6 @@ def resolve_eval_concurrency(config: Tau2PPOConfig) -> int:
     return cap
 
 
-def iter_completed_rollouts(
-    controller: Any,
-    rows: list[dict[str, Any]],
-    *,
-    workflow_kwargs: dict[str, Any],
-    max_inflight: int,
-    bind_unbound: Callable[[dict[int, dict[str, Any]]], int | None] | None = None,
-) -> Iterator[tuple[dict[str, Any], dict[str, Any] | None]]:
-    """Refill a bounded window after each persisted result, across trial boundaries.
-
-    A rejected result arrives as None without a task ID; ``bind_unbound`` may
-    attribute it to a pending episode, which is then yielded with no trajectory.
-    """
-    if max_inflight <= 0:
-        raise ValueError("Evaluation max_concurrent_rollouts must be positive")
-    if len({row["source_id"] for row in rows}) != len(rows):
-        raise ValueError("Duplicate evaluation source IDs")
-    pending: dict[int, dict[str, Any]] = {}
-    submitted: set[int] = set()
-    completed: set[int] = set()
-    next_row = 0
-    while pending or next_row < len(rows):
-        while next_row < len(rows) and len(pending) < max_inflight:
-            row = rows[next_row]
-            task_id = controller.submit(
-                row,
-                workflow="examples.tau2.agent.Tau2AgentWorkflow",
-                workflow_kwargs=workflow_kwargs,
-                group_size=1,
-                is_eval=True,
-                reward_normalization=False,
-                drop_incomplete_group=False,
-            )
-            if task_id in submitted:
-                raise RuntimeError(
-                    "Duplicate rollout task IDs returned by controller.submit"
-                )
-            submitted.add(task_id)
-            pending[task_id] = row
-            next_row += 1
-        # Select any available result; never wait for the first submitted task or
-        # for a full trial. The caller persists this result before the next refill.
-        results = controller.dispatcher.wait_results(1, timeout=None)
-        if len(results) != 1:
-            raise RuntimeError("Evaluation coverage mismatch: expected one result")
-        result = results[0]
-        if result is None:
-            task_id = bind_unbound(pending) if bind_unbound is not None else None
-            if task_id is None:
-                raise RuntimeError(
-                    "Rollout dispatcher returned an unbound failed result"
-                )
-            completed.add(task_id)
-            yield pending.pop(task_id), None
-            continue
-        task_id = result.task_id
-        if task_id in completed:
-            raise RuntimeError(f"Duplicate rollout task result: {task_id}")
-        if task_id not in pending:
-            raise RuntimeError(f"Unexpected rollout task ID: {task_id}")
-        row = pending.pop(task_id)
-        completed.add(task_id)
-        yield row, result.trajectory
-    if len(completed) != len(rows):
-        raise RuntimeError("Evaluation coverage mismatch: missing rollout task results")
-
-
 def collect_eval_records(
     controller: Any,
     rows: list[dict[str, Any]],
@@ -508,43 +379,26 @@ def collect_eval_records(
     output_root: Path,
     repeats: int,
 ) -> list[dict[str, Any]]:
-    """Keep completed evidence durable even if a later dispatcher call fails."""
+    """Persist each official episode outcome before the next one is consumed."""
     records: list[dict[str, Any]] = []
-    trajectory_root = output_root / "trajectories"
+
+    def persist(record: dict[str, Any]) -> None:
+        write_record(output_root / "episodes.jsonl", record)
+        records.append(record)
+        write_json(
+            output_root / "summary.json",
+            aggregate(records, planned=len(rows), repeats=repeats),
+        )
+
     try:
-        for row, trajectory in iter_completed_rollouts(
+        collect_episodes(
             controller,
             rows,
             workflow_kwargs=workflow_kwargs,
             max_inflight=max_inflight,
-            bind_unbound=lambda pending: find_policy_free_episode(
-                pending, trajectory_root
-            ),
-        ):
-            try:
-                record = (
-                    record_from_policy_free_episode(row, trajectory_root)
-                    if trajectory is None
-                    else record_from_trajectory(row, trajectory)
-                )
-            except Exception as exc:
-                record = {
-                    "status": "infra_failed",
-                    "domain": row["domain"],
-                    "task_id": row["task_id"],
-                    "trial": int(row["trial"]),
-                    "source_id": row["source_id"],
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-                write_record(output_root / "episodes.jsonl", record)
-                records.append(record)
-                raise
-            write_record(output_root / "episodes.jsonl", record)
-            records.append(record)
-            write_json(
-                output_root / "summary.json",
-                aggregate(records, planned=len(rows), repeats=repeats),
-            )
+            trajectory_root=output_root / "trajectories",
+            on_record=persist,
+        )
     except Exception as exc:
         summary = aggregate(records, planned=len(rows), repeats=repeats)
         summary["status"] = "partial"
@@ -563,7 +417,9 @@ def run(argv: list[str]) -> dict[str, Any]:
     config = bind_eval_config(
         raw_config, model_path=model_path, output_root=output_root
     )
-    rows = build_eval_rows(config, args.repeats, args.task_set)
+    rows = select_tasks(
+        build_eval_rows(config, args.repeats, args.task_set), args.tasks
+    )
     workflow_kwargs = build_workflow_kwargs(config)
     max_inflight = resolve_eval_concurrency(config)
     manifest = {
@@ -574,6 +430,9 @@ def run(argv: list[str]) -> dict[str, Any]:
         "output_root": str(output_root),
         "domains": list(normalize_domains(config.domains)),
         "task_set": args.task_set,
+        "tasks": args.tasks,
+        "episode_timeout_seconds": config.eval_episode_timeout_seconds,
+        "infra_retries": config.infra_retries,
         "repeats": args.repeats,
         "planned_episodes": len(rows),
         "max_concurrent_episodes": max_inflight,
@@ -606,7 +465,6 @@ def run(argv: list[str]) -> dict[str, Any]:
     # Workers inherit these: keep simulator failure and usage records with this run.
     os.environ["TAU2_RUN_ROOT"] = str(output_root)
     os.environ["TAU2_USAGE_LOG"] = str(output_root / "user-usage.jsonl")
-    os.environ["TAU2_TRAJECTORY_DIR"] = str(output_root / "trajectories")
     scheduler = LocalScheduler(exp_config=config)
     alloc = ModelAllocation.from_str(
         config.evaluation_rollout.backend, name="eval-rollout"
@@ -637,10 +495,14 @@ def run(argv: list[str]) -> dict[str, Any]:
     )
     write_json(output_root / "summary.json", summary)
     logger.info("Evaluation Results: %s", tabulate_stats(summary["metrics"]))
-    if summary["status"] != "complete":
-        raise RuntimeError(
-            "Incomplete τ² evaluation; infra failures are not reward zero"
+    if summary["infra_excluded_episodes"]:
+        logger.warning(
+            "Excluded %d infrastructure-error episode(s) from metrics, as tau2 run "
+            "does; see summary.json infra_excluded",
+            summary["infra_excluded_episodes"],
         )
+    if summary["status"] != "complete":
+        raise RuntimeError("Incomplete τ² evaluation: not every episode resolved")
     return {"manifest": manifest, "summary": summary}
 
 

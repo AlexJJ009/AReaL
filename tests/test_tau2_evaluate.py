@@ -6,7 +6,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-import torch
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts/tau2/evaluate.py"
 SPEC = importlib.util.spec_from_file_location("tau2_evaluate", MODULE_PATH)
@@ -209,11 +208,14 @@ def test_aggregate_reports_base_scores_by_domain_split():
         {
             "status": "completed",
             "domain": "retail",
+            "task_id": str(index),
             "trial": 0,
             "split": split,
             "official_score": score,
         }
-        for split, score in (("test", 1.0), ("test", 0.0), ("train", 1.0))
+        for index, (split, score) in enumerate(
+            (("test", 1.0), ("test", 0.0), ("train", 1.0))
+        )
     ]
 
     summary = tau2_evaluate.aggregate(records, planned=3, repeats=1)
@@ -291,34 +293,6 @@ def test_aggregate_reports_pass1_not_best_of_repeats():
     assert summary["by_trial"]["0"] == {"episodes": 2, "pass1_mean": 0.5}
 
 
-def test_aggregate_marks_infra_failure_partial_without_reward_zero():
-    """Infrastructure failures reduce coverage and do not enter score means."""
-
-    records = [
-        {
-            "status": "completed",
-            "domain": "airline",
-            "task_id": "a",
-            "trial": 0,
-            "official_score": 1.0,
-        },
-        {
-            "status": "infra_failed",
-            "domain": "airline",
-            "task_id": "b",
-            "trial": 0,
-            "error": "RuntimeError: worker died",
-        },
-    ]
-
-    summary = tau2_evaluate.aggregate(records, planned=2, repeats=1)
-
-    assert summary["status"] == "partial"
-    assert summary["completed_episodes"] == 1
-    assert summary["infra_failed_episodes"] == 1
-    assert summary["metrics"]["eval/pass1_mean"] == 1.0
-
-
 def test_bind_eval_config_preserves_validation_sampling(tmp_path):
     """Standalone eval keeps the resolved eval config except explicit N=1 trials."""
 
@@ -383,36 +357,6 @@ def test_assert_fresh_output_rejects_existing_results(tmp_path):
         tau2_evaluate.assert_fresh_output(tmp_path, check_config=True)
 
 
-def test_record_from_trajectory_localizes_rtensor_reward(monkeypatch):
-    """A completed trajectory produces a compact per-task ledger record."""
-
-    monkeypatch.setattr(
-        tau2_evaluate.RTensor,
-        "localize",
-        lambda obj: obj,
-    )
-    row = {
-        "domain": "telecom",
-        "task_id": "t-1",
-        "split": "test",
-        "trial": 3,
-        "source_id": "telecom:t-1:trial3",
-        "attempt_id": "telecom:t-1:trial3",
-    }
-    trajectory = {
-        "rewards": torch.tensor([0.25]),
-        "official_scores": torch.tensor([1.0]),
-        "task_budget_failure": torch.tensor([False]),
-    }
-
-    record = tau2_evaluate.record_from_trajectory(row, trajectory)
-
-    assert record["status"] == "completed"
-    assert record["official_score"] == 1.0
-    assert record["reward"] == 0.25
-    assert record["trial"] == 3
-
-
 def test_write_record_appends_jsonl(tmp_path):
     path = tmp_path / "episodes.jsonl"
 
@@ -421,219 +365,6 @@ def test_write_record_appends_jsonl(tmp_path):
 
     lines = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
     assert lines == [{"a": 1, "b": 2}, {"a": 3}]
-
-
-def test_record_from_trajectory_rejects_missing_reward():
-    row = {"source_id": "airline:a:trial0"}
-
-    with pytest.raises(RuntimeError, match="Missing rewards"):
-        tau2_evaluate.record_from_trajectory(row, {})
-
-
-class RollingController:
-    def __init__(self):
-        self.dispatcher = self
-        self.pending = {}
-        self.submissions = []
-        self.max_pending = 0
-        self.waits = 0
-
-    def submit(self, row, **kwargs):
-        assert kwargs["group_size"] == 1
-        assert kwargs["is_eval"] is True
-        task_id = len(self.submissions)
-        self.submissions.append(row)
-        self.pending[task_id] = row
-        self.max_pending = max(self.max_pending, len(self.pending))
-        return task_id
-
-    def wait_results(self, count, timeout=None):
-        assert count == 1
-        assert timeout is None
-        self.waits += 1
-        # Task zero is a straggler. Every newer task can finish first.
-        task_id = max(self.pending)
-        self.pending.pop(task_id)
-        return [SimpleNamespace(task_id=task_id, trajectory={"task_id": task_id})]
-
-
-def _rolling_rows(count=8):
-    return [
-        {"source_id": str(i), "trial": i // 4, "domain": "retail", "task_id": str(i)}
-        for i in range(count)
-    ]
-
-
-def test_rolling_refills_without_trial_or_submission_order_barrier():
-    controller = RollingController()
-    rows = _rolling_rows()
-    results = tau2_evaluate.iter_completed_rollouts(
-        controller, rows, workflow_kwargs={}, max_inflight=2
-    )
-    first, trajectory = next(results)
-    assert first == rows[1]
-    assert trajectory["task_id"] == 1
-    assert len(controller.submissions) == 2
-    second, _ = next(results)
-    assert second == rows[2]
-    assert len(controller.submissions) == 3
-    completed = [first, second] + [row for row, _ in results]
-    assert [row["source_id"] for row in completed] == [
-        "1",
-        "2",
-        "3",
-        "4",
-        "5",
-        "6",
-        "7",
-        "0",
-    ]
-    assert controller.max_pending == 2
-    assert controller.waits == 8
-    assert len({row["source_id"] for row in completed}) == len(rows)
-    assert controller.submissions == rows
-
-
-@pytest.mark.parametrize(
-    "bad_result, message",
-    [
-        ([], "coverage mismatch"),
-        ([None], "unbound failed"),
-        ([SimpleNamespace(task_id=100, trajectory={})], "Unexpected rollout"),
-        ([SimpleNamespace(task_id=1, trajectory={})], "Duplicate rollout task result"),
-    ],
-)
-def test_rolling_rejects_missing_unbound_unexpected_and_duplicate_results(
-    bad_result, message
-):
-    controller = RollingController()
-    results = tau2_evaluate.iter_completed_rollouts(
-        controller, _rolling_rows(), workflow_kwargs={}, max_inflight=2
-    )
-    next(results)
-    controller.wait_results = lambda *args, **kwargs: bad_result
-    with pytest.raises(RuntimeError, match=message):
-        next(results)
-
-
-def test_rolling_rejects_duplicate_submission_ids():
-    controller = RollingController()
-    controller.submit = lambda *args, **kwargs: 7
-    with pytest.raises(RuntimeError, match="Duplicate rollout task IDs"):
-        list(
-            tau2_evaluate.iter_completed_rollouts(
-                controller, _rolling_rows(), workflow_kwargs={}, max_inflight=2
-            )
-        )
-
-
-def test_rolling_rejects_duplicate_episode_ids_before_submitting():
-    controller = RollingController()
-    rows = _rolling_rows(1) * 2
-    with pytest.raises(ValueError, match="Duplicate evaluation source IDs"):
-        list(
-            tau2_evaluate.iter_completed_rollouts(
-                controller, rows, workflow_kwargs={}, max_inflight=2
-            )
-        )
-    assert not controller.submissions
-
-
-def test_collect_persists_each_result_before_refill_and_retains_partial_on_failure(
-    tmp_path, monkeypatch
-):
-    controller = RollingController()
-    original_submit = controller.submit
-    original_wait = controller.wait_results
-
-    def submit(row, **kwargs):
-        if len(controller.submissions) == 2:
-            summary = json.loads((tmp_path / "summary.json").read_text())
-            assert summary["completed_episodes"] == 1
-            assert len((tmp_path / "episodes.jsonl").read_text().splitlines()) == 1
-        return original_submit(row, **kwargs)
-
-    def wait(*args, **kwargs):
-        if controller.waits:
-            raise ConnectionError("provider disconnected")
-        return original_wait(*args, **kwargs)
-
-    controller.submit = submit
-    controller.wait_results = wait
-    monkeypatch.setattr(
-        tau2_evaluate,
-        "record_from_trajectory",
-        lambda row, _: {**row, "status": "completed", "official_score": 1.0},
-    )
-    with pytest.raises(ConnectionError, match="provider disconnected"):
-        tau2_evaluate.collect_eval_records(
-            controller,
-            _rolling_rows(),
-            workflow_kwargs={},
-            max_inflight=2,
-            output_root=tmp_path,
-            repeats=2,
-        )
-    summary = json.loads((tmp_path / "summary.json").read_text())
-    records = [
-        json.loads(line)
-        for line in (tmp_path / "episodes.jsonl").read_text().splitlines()
-    ]
-    assert summary["status"] == "partial"
-    assert summary["completed_episodes"] == 1
-    assert summary["metrics"]["eval/pass1_mean"] == 1.0
-    assert "provider disconnected" in summary["error"]
-    assert len(records) == 1
-    assert records[0]["source_id"] == "1"
-
-
-def test_rolling_covers_all_800_episodes_with_64_inflight(monkeypatch):
-    monkeypatch.setattr(
-        tau2_evaluate, "get_tau2_dataset", lambda **kw: _official_rows(kw["domain"])
-    )
-    rows = tau2_evaluate.build_eval_rows(
-        SimpleNamespace(
-            seed=42,
-            experiment_mode="formal",
-            domains=["airline", "retail", "telecom"],
-        ),
-        repeats=8,
-    )
-    controller = RollingController()
-    completed = list(
-        tau2_evaluate.iter_completed_rollouts(
-            controller, rows, workflow_kwargs={}, max_inflight=64
-        )
-    )
-    assert len(completed) == 800
-    assert {row["source_id"] for row, _ in completed} == {
-        row["source_id"] for row in rows
-    }
-    assert controller.max_pending == 64
-    assert not controller.pending
-
-
-def test_collect_missing_trajectory_retains_failure_without_reward(tmp_path):
-    controller = RollingController()
-    controller.wait_results = lambda *args, **kwargs: [
-        SimpleNamespace(task_id=0, trajectory=None)
-    ]
-    with pytest.raises(RuntimeError, match="Missing trajectory"):
-        tau2_evaluate.collect_eval_records(
-            controller,
-            _rolling_rows(1),
-            workflow_kwargs={},
-            max_inflight=1,
-            output_root=tmp_path,
-            repeats=1,
-        )
-    record = json.loads((tmp_path / "episodes.jsonl").read_text())
-    assert record["status"] == "infra_failed"
-    assert "reward" not in record
-    summary = json.loads((tmp_path / "summary.json").read_text())
-    assert summary["status"] == "partial"
-    assert summary["completed_episodes"] == 0
-    assert summary["infra_failed_episodes"] == 1
 
 
 @pytest.mark.parametrize(
@@ -723,89 +454,54 @@ def test_load_eval_config_applies_hydra_overrides(monkeypatch):
     ]
 
 
-def _write_trajectory_record(root, source_id, **fields):
-    directory = root / "trajectories" / source_id
-    directory.mkdir(parents=True, exist_ok=True)
-    record = {"source_id": source_id, "recorded_at": 1.0, **fields}
-    (directory / f"{len(list(directory.iterdir()))}.json").write_text(
-        json.dumps(record)
-    )
+def test_aggregate_excludes_infra_errors_like_official_and_reports_them():
+    records = [
+        {
+            "status": "completed",
+            "domain": "airline",
+            "task_id": "a",
+            "trial": 0,
+            "official_score": 1.0,
+        },
+        {
+            "status": "infrastructure_error",
+            "domain": "airline",
+            "task_id": "b",
+            "trial": 0,
+            "source_id": "airline:b:trial0",
+            "attempts": 4,
+            "error_type": "EmptyUserResponseError",
+            "error": "Empty user response",
+        },
+    ]
 
-
-class UnboundRejectController(RollingController):
-    """Task 1 never calls the policy, so the dispatcher returns a bare None."""
-
-    def wait_results(self, count, timeout=None):
-        task_id = max(self.pending)
-        self.pending.pop(task_id)
-        if task_id == 1:
-            return [None]
-        return [SimpleNamespace(task_id=task_id, trajectory={"task_id": task_id})]
-
-
-def _row_record(row, trajectory):
-    return {
-        "status": "completed",
-        "domain": row["domain"],
-        "task_id": row["task_id"],
-        "trial": row["trial"],
-        "source_id": row["source_id"],
-        "official_score": 1.0,
-    }
-
-
-def test_collect_scores_policy_free_episode_from_its_record(tmp_path, monkeypatch):
-    monkeypatch.setattr(tau2_evaluate, "record_from_trajectory", _row_record)
-    rows = [{**row, "attempt_id": row["source_id"]} for row in _rolling_rows(2)]
-    _write_trajectory_record(
-        tmp_path,
-        "1",
-        status="completed",
-        policy_turns=0,
-        official_score=0.0,
-        stop_reason="user_stop",
-    )
-
-    records = tau2_evaluate.collect_eval_records(
-        UnboundRejectController(),
-        rows,
-        workflow_kwargs={},
-        max_inflight=2,
-        output_root=tmp_path,
-        repeats=1,
-    )
-
-    by_source = {r["source_id"]: r for r in records}
-    assert by_source["1"]["official_score"] == 0.0
-    assert by_source["1"]["policy_turns"] == 0
-    assert by_source["1"]["stop_reason"] == "user_stop"
     summary = tau2_evaluate.aggregate(records, planned=2, repeats=1)
+
+    # tau2 run finishes, scores the evaluated episodes and counts the excluded one.
     assert summary["status"] == "complete"
-    assert summary["metrics"]["eval/policy_free_episodes"] == 1
+    assert summary["completed_episodes"] == 1
+    assert summary["infra_excluded_episodes"] == 1
+    assert summary["metrics"]["eval/avg_reward"] == 1.0
+    assert summary["metrics"]["eval/pass^1"] == 1.0
+    assert summary["infra_excluded"] == [
+        {
+            "source_id": "airline:b:trial0",
+            "attempts": 4,
+            "error_type": "EmptyUserResponseError",
+            "error": "Empty user response",
+        }
+    ]
+    assert tau2_evaluate.aggregate(records[:1], planned=2, repeats=1)["status"] == (
+        "partial"
+    )
 
 
-@pytest.mark.parametrize(
-    "fields",
-    [
-        {},
-        {"status": "completed", "policy_turns": 3, "official_score": 0.0},
-        {"status": "error", "policy_turns": 0, "error": "boom"},
-    ],
-)
-def test_unbound_reject_without_policy_free_record_still_aborts(
-    tmp_path, monkeypatch, fields
-):
-    monkeypatch.setattr(tau2_evaluate, "record_from_trajectory", _row_record)
-    rows = [{**row, "attempt_id": row["source_id"]} for row in _rolling_rows(2)]
-    if fields:
-        _write_trajectory_record(tmp_path, "1", **fields)
-
-    with pytest.raises(RuntimeError, match="unbound failed"):
-        tau2_evaluate.collect_eval_records(
-            UnboundRejectController(),
-            rows,
-            workflow_kwargs={},
-            max_inflight=2,
-            output_root=tmp_path,
-            repeats=1,
-        )
+def test_select_tasks_keeps_named_subset_and_rejects_unknown():
+    rows = [
+        {"domain": "retail", "task_id": "51", "trial": 0},
+        {"domain": "retail", "task_id": "38", "trial": 0},
+    ]
+    assert tau2_evaluate.select_tasks(rows, None) == rows
+    assert tau2_evaluate.select_tasks(rows, "retail:38") == rows[1:]
+    with pytest.raises(ValueError, match="Unknown tasks"):
+        tau2_evaluate.select_tasks(rows, "retail:38,airline:1")

@@ -2,6 +2,7 @@
 
 import argparse
 import math
+import os
 import random
 import sys
 import warnings
@@ -421,9 +422,23 @@ def main(args):
         timeout=config.episode_timeout_seconds,
         infra_retries=config.infra_retries,
     )
+    from areal.utils.stats_logger import StatsLogger
+
+    log_path = StatsLogger.get_log_path(
+        experiment_name=config.experiment_name,
+        trial_name=config.trial_name,
+        fileroot=config.cluster.fileroot,
+    )
+    # Training rollouts keep the official message trajectory of every attempt.
+    workflow_kwargs["trajectory_dir"] = os.path.join(
+        log_path, "tau2-trajectories", "rollout"
+    )
 
     # Evaluation sampling is explicit and shared across dev/test.
     eval_workflow_kwargs = workflow_kwargs.copy()
+    eval_workflow_kwargs["timeout"] = config.eval_episode_timeout_seconds
+    # The evaluator binds evaluation=True and a per-run attempt-record directory.
+    eval_workflow_kwargs.pop("trajectory_dir")
     eval_workflow_kwargs["gen_args"] = dict(
         top_p=config.eval_gconfig.top_p,
         frequency_penalty=config.eval_gconfig.frequency_penalty,

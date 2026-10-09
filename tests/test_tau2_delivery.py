@@ -284,63 +284,117 @@ def test_tau2_concat_export_cardinality_guard_allows_single_or_non_concat():
     )
 
 
-def test_tau2_eval_wait_none_writes_failed_status_not_completed(tmp_path):
+class _OfficialEvalController:
+    """Dedicated eval controller whose episodes end as scripted per source_id."""
+
+    def __init__(self, outcomes):
+        self.dispatcher = self
+        self.outcomes = outcomes
+        self.pending = []
+        self.kwargs = []
+
+    def submit(self, row, workflow, workflow_kwargs, **kwargs):
+        import torch
+
+        assert kwargs["group_size"] == 1 and kwargs["is_eval"]
+        self.kwargs.append(workflow_kwargs)
+        task_id = len(self.kwargs) - 1
+        outcome = self.outcomes[row["source_id"]]
+        root = Path(workflow_kwargs["trajectory_dir"])
+        if outcome == "policy_free":
+            directory = root / row["source_id"]
+            directory.mkdir(parents=True)
+            (directory / "a.json").write_text(
+                json.dumps(
+                    {
+                        "recorded_at": 1.0,
+                        "status": "completed",
+                        "policy_turns": 0,
+                        "official_score": 1.0,
+                        "stop_reason": "user_stop",
+                    }
+                )
+            )
+            result = None
+        elif outcome == "infra":
+            result = None
+        else:
+            result = SimpleNamespace(
+                trajectory={
+                    "rewards": torch.tensor([outcome]),
+                    "task_budget_failure": torch.tensor([outcome == 0.0]),
+                }
+            )
+        self.pending.append((task_id, result))
+        return task_id
+
+    def wait_results(self, count, timeout=None, with_task_ids=False):
+        assert count == 1 and with_task_ids
+        return [self.pending.pop()]
+
+
+def _official_eval_trainer(tmp_path, outcomes, tasks):
     trainer = object.__new__(Tau2AsyncEvalTrainer)
     statuses: list[dict] = []
     trainer.config = SimpleNamespace(
-        eval_gconfig=SimpleNamespace(n_samples=1),
+        eval_gconfig=SimpleNamespace(n_samples=2),
+        evaluation_rollout=SimpleNamespace(
+            max_concurrent_rollouts=8, consumer_batch_size=1
+        ),
         experiment_mode="formal",
+        experiment_name="exp",
+        trial_name="trial",
+        cluster=SimpleNamespace(fileroot=str(tmp_path)),
     )
-    trainer.valid_dataloader = [[{"domain": "airline", "task_id": "0"}]]
-    trainer._async_eval_rollout = SimpleNamespace(
-        submit=lambda *args, **kwargs: None,
-        wait=lambda count, timeout=None: None,
-    )
+    trainer.valid_dataloader = [tasks]
+    trainer._async_eval_rollout = _OfficialEvalController(outcomes)
     trainer._load_eval_checkpoint = lambda checkpoint_path, version: None
     trainer._write_eval_status = lambda version, payload: statuses.append(
         {"version": version, **payload}
     )
+    return trainer, statuses
 
-    with pytest.raises(TypeError):
+
+def test_tau2_in_training_eval_scores_and_excludes_like_official(tmp_path):
+    outcomes = {
+        "airline:44:trial0": 0.0,  # context-limited training-style export
+        "airline:44:trial1": "policy_free",
+        "retail:1:trial0": 1.0,
+        "retail:1:trial1": "infra",
+    }
+    trainer, statuses = _official_eval_trainer(
+        tmp_path,
+        outcomes,
+        [{"domain": "airline", "task_id": "44"}, {"domain": "retail", "task_id": "1"}],
+    )
+
+    trainer._run_eval_job(5, tmp_path / "checkpoint", "workflow", {"timeout": 9}, False)
+
+    status = statuses[-1]
+    assert status["status"] == "completed"
+    assert status["domains"]["airline"]["episodes"] == 2
+    assert status["domains"]["airline"]["reward_mean"] == 0.5
+    assert status["domains"]["airline"]["policy_free_episodes"] == 1
+    # The exhausted episode is excluded from the denominator and counted.
+    assert status["domains"]["retail"]["episodes"] == 1
+    assert status["domains"]["retail"]["reward_mean"] == 1.0
+    assert status["domains"]["retail"]["infra_excluded_episodes"] == 1
+    assert status["metrics"]["eval/infra_excluded_episodes"] == 1
+    assert status["metrics"]["eval/reward_mean"] == pytest.approx(2 / 3)
+    assert [r["source_id"] for r in status["infra_excluded"]] == ["retail:1:trial1"]
+    kwargs = trainer._async_eval_rollout.kwargs
+    assert all(k["evaluation"] and k["timeout"] == 9 for k in kwargs)
+    assert len({k["trajectory_dir"] for k in kwargs}) == 1
+
+
+def test_tau2_in_training_eval_failure_marks_status_failed(tmp_path):
+    trainer, statuses = _official_eval_trainer(
+        tmp_path, {}, [{"domain": "airline", "task_id": "0"}]
+    )
+    with pytest.raises(KeyError):
         trainer._run_eval_job(5, tmp_path / "checkpoint", "workflow", {}, False)
-
     assert json.loads(json.dumps(statuses[-1]))["status"] == "failed"
     assert all(status["status"] != "completed" for status in statuses)
-
-
-def test_tau2_eval_context_budget_result_counts_as_completed_episode(tmp_path):
-    import torch
-
-    trainer = object.__new__(Tau2AsyncEvalTrainer)
-    statuses: list[dict] = []
-    trainer.config = SimpleNamespace(
-        eval_gconfig=SimpleNamespace(n_samples=1),
-        experiment_mode="formal",
-    )
-    trainer.valid_dataloader = [[{"domain": "airline", "task_id": "44"}]]
-    trainer._async_eval_rollout = SimpleNamespace(
-        submit=lambda *args, **kwargs: None,
-        wait=lambda count, timeout=None: [
-            {
-                "rewards": torch.tensor([0.0]),
-                "terminated": torch.tensor([False]),
-                "truncated": torch.tensor([True]),
-                "task_budget_failure": torch.tensor([True]),
-            }
-        ],
-    )
-    trainer._load_eval_checkpoint = lambda checkpoint_path, version: None
-    trainer._write_eval_status = lambda version, payload: statuses.append(
-        {"version": version, **payload}
-    )
-
-    trainer._run_eval_job(5, tmp_path / "checkpoint", "workflow", {}, False)
-
-    assert statuses[-1]["status"] == "completed"
-    assert statuses[-1]["domains"]["airline"] == {
-        "episodes": 1,
-        "reward_mean": 0.0,
-    }
 
 
 @pytest.mark.parametrize("global_step,forced", [(44, False), (45, True)])
@@ -469,57 +523,32 @@ def test_recovered_non_frequency_step_catches_up_counter_without_eval(
     assert trainer.evaluator.freq_ctl.state_dict()["step"]["steps"] == 19
 
 
-def test_context_error_wrapped_as_rate_limit_does_not_retry():
+def test_tau2_episode_retry_covers_any_exception_like_official_runner():
+    import asyncio
+
     import litellm
 
     from examples.tau2.agent import (
+        OFFICIAL_RETRY_ATTEMPTS,
+        OFFICIAL_RETRY_DELAY,
         Tau2AgentWorkflow,
         Tau2InfrastructureError,
-        is_context_budget_error,
     )
 
-    cause = litellm.RateLimitError(
-        message="areal_context_limit: exhausted", model="dummy", llm_provider="openai"
-    )
-    failure = Tau2InfrastructureError(str(cause))
-    failure.__cause__ = cause
-    assert not Tau2AgentWorkflow.should_retry_episode(failure)
-    backend_contract = litellm.RateLimitError(
-        message=(
-            "OpenAIException - Error code: 500 - {'detail': "
-            '"RuntimeError: Failed after 3 retries each. Payload: '
-            "{'sampling_params': {'max_new_tokens': 3773}, "
-            "'return_logprob': True}. Endpoint: /generate. Last error: "
-            "Requested token count exceeds the model's maximum context length "
-            "of 32768 tokens. You requested a total of 32768 tokens: "
-            "28995 tokens from the input messages and 3773 tokens for the "
-            'completion."}'
+    # tau2.runner.progress retries every Exception, including context overflow
+    # and deterministic errors; shutdown/cancellation is not an Exception.
+    for failure in (
+        Tau2InfrastructureError("areal_context_limit: exhausted"),
+        litellm.RateLimitError(
+            message="Too many requests", model="dummy", llm_provider="openai"
         ),
-        model="dummy",
-        llm_provider="openai",
-    )
-    failure = Tau2InfrastructureError(str(backend_contract))
-    failure.__cause__ = backend_contract
-    assert is_context_budget_error(failure)
-    assert not Tau2AgentWorkflow.should_retry_episode(failure)
-    user_context = litellm.RateLimitError(
-        message=(
-            "Requested token count exceeds the model's maximum context length "
-            "of 32768 tokens. You requested a total of 32768 tokens."
-        ),
-        model="deepseek-flash",
-        llm_provider="openai",
-    )
-    failure = Tau2InfrastructureError(str(user_context))
-    failure.__cause__ = user_context
-    assert not is_context_budget_error(failure)
-    assert not Tau2AgentWorkflow.should_retry_episode(failure)
-    transient = litellm.RateLimitError(
-        message="Too many requests", model="dummy", llm_provider="openai"
-    )
-    failure = Tau2InfrastructureError(str(transient))
-    failure.__cause__ = transient
-    assert Tau2AgentWorkflow.should_retry_episode(failure)
+        ValueError("UserMessage must have either content or tool_calls"),
+    ):
+        assert Tau2AgentWorkflow.should_retry_episode(failure)
+    assert not isinstance(asyncio.CancelledError(), Exception)
+    workflow = Tau2AgentWorkflow()
+    assert (workflow.infra_retries, workflow.retry_delay) == (3, 1.0)
+    assert (OFFICIAL_RETRY_ATTEMPTS, OFFICIAL_RETRY_DELAY) == (3, 1.0)
 
 
 def test_tail_dispatch_preserves_native_token_mean_loss_and_gradient():
@@ -642,3 +671,35 @@ def test_finite_rollout_restarts_for_second_epoch_without_resampling_tail():
         [row["id"] for batch in batches[i : i + 2] for row in batch] for i in (0, 2)
     ] == [list(range(5)), list(range(5))]
     assert sampler.epoch == 1
+
+
+@pytest.mark.asyncio
+async def test_proxy_replays_tau2_episode_three_more_times_with_official_delay(
+    monkeypatch,
+):
+    from examples.tau2.agent import Tau2AgentWorkflow
+
+    sleeps = []
+
+    async def _record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(
+        "areal.experimental.openai.proxy.workflow.asyncio.sleep", _record_sleep
+    )
+    monkeypatch.setattr(
+        "areal.experimental.openai.proxy.workflow.stats_tracker.get",
+        lambda *_args, **_kwargs: SimpleNamespace(scalar=lambda **_kw: None),
+    )
+    workflow = OpenAIProxyWorkflow(mode="inline", agent=Tau2AgentWorkflow())
+    calls = []
+
+    async def _arun_episode(self, engine, data):
+        calls.append(data)
+        raise ValueError("UserMessage must have either content or tool_calls")
+
+    workflow._arun_episode = MethodType(_arun_episode, workflow)
+    with pytest.raises(ValueError):
+        await workflow.arun_episode("engine", {"task_id": "x"})
+    assert len(calls) == 4
+    assert sleeps == [1.0, 1.0, 1.0]

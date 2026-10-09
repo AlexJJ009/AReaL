@@ -442,6 +442,25 @@ def test_wait_results_selects_completed_tasks_when_deterministic():
     assert dispatcher._active_task_ids == {0}
 
 
+def test_wait_results_with_task_ids_keeps_rejected_results_attributable():
+    dispatcher = object.__new__(BatchTaskDispatcher)
+    dispatcher.deterministic_order = True
+    dispatcher._result_cv = threading.Condition()
+    dispatcher._active_task_ids = {0, 1}
+    dispatcher._active_task_inputs = dict.fromkeys(range(2))
+    dispatcher._pending_results = {
+        0: _FakeTimedResult(task_id=0, create_time=1.0, data=None),
+        1: _FakeTimedResult(task_id=1, create_time=2.0, data="one"),
+    }
+    dispatcher._check_thread_exception = lambda: None
+
+    assert dispatcher.wait_results(2, timeout=0, with_task_ids=True) == [
+        (0, None),
+        (1, "one"),
+    ]
+    assert dispatcher._active_task_ids == set()
+
+
 def test_wait_for_task_removes_result_before_deterministic_batch_selection():
     dispatcher = object.__new__(BatchTaskDispatcher)
     dispatcher.deterministic_order = True

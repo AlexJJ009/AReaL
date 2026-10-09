@@ -122,11 +122,15 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
     domain_effective_episodes: dict[str, int] = field(default_factory=dict)
     dynamic_group_filter: bool = False
     episode_timeout_seconds: float = 600.0
+    # Evaluation wall clock, applied as `tau2 run --timeout`: a TIMEOUT episode is
+    # scored 0 and counted.
+    eval_episode_timeout_seconds: float = 1800.0
     experiment_mode: str = "qualification"
     critic_dev_fraction: float = 0.2
     critic_tasks_per_domain: int | None = None
     critic_rollouts_per_task: int = 1
-    infra_retries: int = 1
+    # Episode attempts after the first, as `tau2 run --max-retries` (default 3).
+    infra_retries: int = 3
     task_limit: int | None = None
 
     def __post_init__(self) -> None:
@@ -135,6 +139,8 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
             raise ValueError(f"Unsupported τ² algorithm: {self.algorithm}")
         if self.episode_timeout_seconds <= 0:
             raise ValueError("episode_timeout_seconds must be positive")
+        if self.eval_episode_timeout_seconds <= 0:
+            raise ValueError("eval_episode_timeout_seconds must be positive")
         if self.experiment_mode not in ("qualification", "tune", "formal"):
             raise ValueError("experiment_mode must be qualification, tune or formal")
         if self.infra_retries < 0 or self.critic_rollouts_per_task < 1:

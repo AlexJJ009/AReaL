@@ -19,6 +19,8 @@ import tau2.evaluator.evaluator_nl_assertions as tau2_nl_evaluator
 from litellm import register_model
 from tau2.agent.base_agent import HalfDuplexAgent
 from tau2.agent.llm_agent import LLMAgent, LLMAgentState, LLMSoloAgent
+from tau2.config import DEFAULT_RETRY_ATTEMPTS as OFFICIAL_RETRY_ATTEMPTS
+from tau2.config import DEFAULT_RETRY_MIN_WAIT as OFFICIAL_RETRY_DELAY
 from tau2.data_model.message import AssistantMessage, Message, UserMessage
 from tau2.data_model.tasks import Task
 from tau2.environment.environment import Environment
@@ -31,7 +33,7 @@ from tau2.user.user_simulator_base import HalfDuplexUser
 
 # Import utilities (also patches tau2.utils.llm_utils)
 from examples.tau2.contracts import bind_policy_request
-from examples.tau2.user_simulator import RetryingUserSimulator
+from examples.tau2.user_simulator import RecordingUserSimulator
 from examples.tau2.utils import Tau2EnvConfig, Tau2RunInfo, trajectory_record_dir
 
 from areal.experimental.openai.types import (
@@ -192,6 +194,40 @@ def write_trajectory_record(root: str, record: dict[str, Any]) -> None:
         logger.warning("Could not write τ² trajectory record", exc_info=True)
 
 
+def record_evaluator_incident(
+    domain: str, task_id: str, exc: json.JSONDecodeError
+) -> None:
+    """Keep the malformed NL-judge reply that failed an evaluation attempt."""
+
+    debug_dir = Path(os.environ.get("TAU2_RUN_ROOT", ".")) / "tau2-evaluator-failures"
+    path = debug_dir / f"{uuid4().hex}.json"
+    try:
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        with path.open("x", encoding="utf-8") as stream:
+            json.dump(
+                {
+                    "domain": domain,
+                    "task_id": task_id,
+                    "pid": os.getpid(),
+                    "error": {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                        "doc": exc.doc,
+                        "pos": exc.pos,
+                    },
+                },
+                stream,
+                ensure_ascii=False,
+                indent=2,
+            )
+    except OSError:
+        logger.warning("Could not write evaluator incident %s", path, exc_info=True)
+        return
+    logger.warning(
+        "Malformed evaluator JSON for %s/%s; evidence %s", domain, task_id, path
+    )
+
+
 class Tau2Runner:
     """Run the official synchronous τ² orchestrator on a worker thread."""
 
@@ -203,6 +239,7 @@ class Tau2Runner:
         agent_api_key: str,
         user_api_key: str | None = None,
         timeout: float = 600.0,
+        evaluation: bool = False,
     ):
         self.econfig = econfig
         self.gen_args = gen_args
@@ -210,6 +247,8 @@ class Tau2Runner:
         self.agent_api_key = agent_api_key
         self.user_api_key = user_api_key
         self.timeout = timeout
+        # Evaluation reproduces `tau2 run` outcomes; training keeps ADR 0002/0007.
+        self.evaluation = evaluation
         self.domain = econfig.domain
         self.solo_mode = econfig.solo_mode
         # Kept on the runner so a failed episode's partial trajectory survives.
@@ -287,7 +326,7 @@ class Tau2Runner:
                 llm="openai/dummy",
                 llm_args=self._agent_llm_args(),
             )
-            user = RetryingUserSimulator(
+            user = RecordingUserSimulator(
                 debug_dir=Path(os.environ.get("TAU2_RUN_ROOT", "."))
                 / "tau2-user-failures",
                 task_id=task.id,
@@ -352,7 +391,9 @@ class Tau2Runner:
         except Exception as e:
             run_info.messages = self.messages = orchestrator.get_trajectory()
             run_info.error = str(e)
-            if is_context_budget_error(e):
+            # Official τ² has no context-window outcome: the provider error is
+            # retried and finally excluded, so evaluation raises it instead.
+            if is_context_budget_error(e) and not self.evaluation:
                 run_info.error_type = "task_budget"
                 run_info.terminated = False
                 run_info.truncated = True
@@ -370,10 +411,14 @@ class Tau2Runner:
 
         reason = getattr(simulation, "termination_reason", "completed")
         termination_reason = str(getattr(reason, "value", reason)).lower()
-        # Official termination checks are cooperative and can skip the deadline
-        # when the last message has already marked the episode done. Retain the
-        # episode budget even when an in-flight policy request finishes late.
-        if termination_reason == "timeout" or elapsed >= self.timeout:
+        # Evaluation scores TIMEOUT through the official evaluator (reward 0) and
+        # keeps episodes that finished, like `tau2 run --timeout`. Training treats
+        # the wall clock as infrastructure: official termination checks are
+        # cooperative and can skip the deadline when the last message has already
+        # marked the episode done, so the episode budget is enforced here.
+        if not self.evaluation and (
+            termination_reason == "timeout" or elapsed >= self.timeout
+        ):
             error = Tau2EpisodeTimeoutError(
                 f"Episode wall-clock limit {self.timeout}s reached for {domain}/{task.id}"
             )
@@ -381,65 +426,23 @@ class Tau2Runner:
 
         try:
             self._bind_nl_assertion_evaluator()
-            incident_id = uuid4().hex
-            for attempt in range(2):
-                try:
-                    reward_info = evaluate_simulation(
-                        domain=domain,
-                        task=task,
-                        simulation=simulation,
-                        evaluation_type=EvaluationType.ALL,
-                        solo_mode=solo_mode,
-                    )
-                    break
-                except json.JSONDecodeError as exc:
-                    # Only repeat scoring of this exact completed simulation.
-                    # Never replay live policy/user/tool interactions or retry a
-                    # valid score; official evaluation reconstructs fresh envs.
-                    debug_dir = (
-                        Path(os.environ.get("TAU2_RUN_ROOT", "."))
-                        / "tau2-evaluator-failures"
-                    )
-                    path = debug_dir / f"{incident_id}-{attempt}.json"
-                    try:
-                        debug_dir.mkdir(parents=True, exist_ok=True)
-                        with path.open("x", encoding="utf-8") as stream:
-                            json.dump(
-                                {
-                                    "domain": domain,
-                                    "task_id": task.id,
-                                    "attempt": attempt,
-                                    "pid": os.getpid(),
-                                    "error": {
-                                        "type": type(exc).__name__,
-                                        "message": str(exc),
-                                        "doc": exc.doc,
-                                        "pos": exc.pos,
-                                    },
-                                },
-                                stream,
-                                ensure_ascii=False,
-                                indent=2,
-                            )
-                    except OSError:
-                        logger.warning(
-                            "Could not write evaluator incident %s", path, exc_info=True
-                        )
-                    logger.warning(
-                        "Malformed evaluator JSON for %s/%s, attempt %s/2; evidence %s",
-                        domain,
-                        task.id,
-                        attempt + 1,
-                        path,
-                    )
-                    if attempt:
-                        raise
-            run_info.reward_info = reward_info
-            run_info.reward = reward_info.reward
+            reward_info = evaluate_simulation(
+                domain=domain,
+                task=task,
+                simulation=simulation,
+                evaluation_type=EvaluationType.ALL,
+                solo_mode=solo_mode,
+            )
         except Exception as e:
+            # Official τ² scores inside the simulation run, so a scoring failure
+            # replays the whole episode through the episode-level retry.
+            if isinstance(e, json.JSONDecodeError):
+                record_evaluator_incident(domain, task.id, e)
             raise Tau2InfrastructureError(
                 f"τ² evaluator failed for {domain}/{task.id}: {type(e).__name__}: {e}"
             ) from e
+        run_info.reward_info = reward_info
+        run_info.reward = reward_info.reward
 
         budget_markers = (
             "max_step",
@@ -479,7 +482,9 @@ class Tau2AgentWorkflow:
         econfig: Tau2EnvConfig | dict | None = None,
         gen_args: dict | None = None,
         timeout: float = 600.0,
-        infra_retries: int = 1,
+        infra_retries: int = OFFICIAL_RETRY_ATTEMPTS,
+        evaluation: bool = False,
+        trajectory_dir: str | None = None,
     ):
         if econfig is None:
             econfig = Tau2EnvConfig()
@@ -489,6 +494,10 @@ class Tau2AgentWorkflow:
         self.gen_args = gen_args or {}
         self.timeout = timeout
         self.infra_retries = infra_retries
+        # Fixed pause between episode attempts, as in `tau2 run --retry-delay`.
+        self.retry_delay = OFFICIAL_RETRY_DELAY
+        self.evaluation = evaluation
+        self.trajectory_dir = trajectory_dir
         from areal.utils.runtime_audit import write_runtime_audit
 
         write_runtime_audit(
@@ -498,34 +507,19 @@ class Tau2AgentWorkflow:
                 "generation": self.gen_args,
                 "timeout": self.timeout,
                 "infra_retries": self.infra_retries,
+                "retry_delay": self.retry_delay,
+                "evaluation": self.evaluation,
+                "trajectory_dir": self.trajectory_dir,
             },
         )
 
     @staticmethod
     def should_retry_episode(exc: Exception) -> bool:
-        """Retry transient provider failures, never scored model failures or bugs."""
-        if not isinstance(exc, Tau2InfrastructureError):
-            return False
-        if is_context_budget_error(exc):
-            return False
-        # Provider context/config failures are deterministic, even when an
-        # OpenAI-compatible wrapper labels them as rate limiting.
-        message = str(exc).lower()
-        if "maximum context length" in message or "context_length_exceeded" in message:
-            return False
-        cause = exc.__cause__
-        if isinstance(cause, Tau2ExportCardinalityError):
-            return True
-        return isinstance(
-            cause,
-            (
-                Tau2EpisodeTimeoutError,
-                litellm.APIConnectionError,
-                litellm.Timeout,
-                litellm.RateLimitError,
-                litellm.InternalServerError,
-            ),
-        )
+        """Replay any failed attempt, as `tau2.runner.progress` does.
+
+        Cancellation is a BaseException and never reaches this check.
+        """
+        return isinstance(exc, Exception)
 
     @staticmethod
     def validate_exported_interactions(
@@ -630,13 +624,14 @@ class Tau2AgentWorkflow:
             agent_api_key=api_key,
             user_api_key=user_api_key,
             timeout=self.timeout,
+            evaluation=self.evaluation,
         )
 
         # asyncio cannot kill a thread created by to_thread(). The official
         # orchestrator and per-request LiteLLM timeouts provide the cooperative
         # bound; if the caller cancels, join the episode before the proxy session
         # is allowed to close so no calls or tool effects survive the session.
-        trajectory_root = os.environ.get("TAU2_TRAJECTORY_DIR")
+        trajectory_root = self.trajectory_dir
         record = {
             "source_id": data.get("source_id") or f"{domain}:{task_id}",
             "attempt": uuid4().hex,

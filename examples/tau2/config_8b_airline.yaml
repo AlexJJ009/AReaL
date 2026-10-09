@@ -128,7 +128,6 @@ econfig:
   user_llm: openai/self-hosted-Qwen2.5-72B
   user_llm_args:
     temperature: 0.0
-    max_completion_tokens: 512
   turn_discount: 1.0
   invalid_format_penalty: 0.1
 

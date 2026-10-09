@@ -252,21 +252,26 @@ def load_offline_eval_metrics(run_root: Path) -> list[dict[str, Any]]:
         raise ValueError("Offline evaluation coverage mismatch")
     seen = set()
     grouped: dict[tuple[int, str], list[float]] = {}
+    excluded: dict[tuple[int, str], int] = {}
     for item in episodes:
         trial, domain = int(item["trial"]), item["domain"]
         identity = (domain, str(item["task_id"]), trial)
         if identity in seen:
             raise ValueError(f"Duplicate offline evaluation cell: {identity}")
         if (
-            item["status"] != "completed"
+            item["status"] not in ("completed", "infrastructure_error")
             or not 0 <= trial < repeats
             or domain not in domains
         ):
             raise ValueError(f"Invalid offline evaluation cell: {identity}")
+        seen.add(identity)
+        # Official τ² excludes infrastructure errors from scores but counts them.
+        if item["status"] == "infrastructure_error":
+            excluded[(trial, domain)] = excluded.get((trial, domain), 0) + 1
+            continue
         score = float(item["official_score"])
         if score not in (0.0, 1.0):
             raise ValueError(f"Non-binary offline evaluation score: {score}")
-        seen.add(identity)
         grouped.setdefault((trial, domain), []).append(score)
     rows = []
     for trial in range(repeats):
@@ -274,15 +279,20 @@ def load_offline_eval_metrics(run_root: Path) -> list[dict[str, Any]]:
             "eval/completed_step": trial + 1,
             "source/kind": "offline_eval",
         }
-        total = 0.0
+        total, evaluated = 0.0, 0
         for domain, count in task_counts.items():
             scores = grouped.get((trial, domain), [])
-            if len(scores) != count:
+            dropped = excluded.get((trial, domain), 0)
+            if len(scores) + dropped != count:
                 raise ValueError(f"Missing {domain} coverage in trial {trial}")
-            row[f"eval/{domain}/reward_mean"] = sum(scores) / count
-            row[f"eval/{domain}/episodes"] = count
+            if scores:
+                row[f"eval/{domain}/reward_mean"] = sum(scores) / len(scores)
+            row[f"eval/{domain}/episodes"] = len(scores)
+            row[f"eval/{domain}/infra_excluded_episodes"] = dropped
             total += sum(scores)
-        row["eval/reward_mean"] = total / sum(task_counts.values())
+            evaluated += len(scores)
+        if evaluated:
+            row["eval/reward_mean"] = total / evaluated
         rows.append(row)
     return rows
 

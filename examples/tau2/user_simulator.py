@@ -1,4 +1,4 @@
-"""Recover an empty simulator response without replaying policy or tool actions."""
+"""Record failed user-simulator calls before the episode attempt fails."""
 
 import json
 import os
@@ -16,11 +16,17 @@ from areal.utils import logging
 logger = logging.getLogger("Tau2Agent")
 
 
-class EmptyUserResponseError(RuntimeError):
-    """The simulator returned no text or tool calls after one retry."""
+class EmptyUserResponseError(ValueError):
+    """The simulator returned neither text nor tool calls."""
 
 
-class RetryingUserSimulator(UserSimulator):
+class RecordingUserSimulator(UserSimulator):
+    """Official user simulator that keeps evidence of failed calls.
+
+    Failures are not retried here. As in `tau2 run`, the exception ends the
+    attempt and the episode-level retry replays the whole episode.
+    """
+
     def __init__(self, *, debug_dir: Path, task_id: str, domain: str, **kwargs):
         super().__init__(**kwargs)
         self.debug_dir = debug_dir
@@ -30,62 +36,29 @@ class RetryingUserSimulator(UserSimulator):
     def _generate_next_message(
         self, message: ValidUserInputMessage, state: UserState
     ) -> UserMessage:
-        history_size = len(state.messages)
-        incident_id = uuid4().hex
-        for attempt in range(2):
-            # Official generation appends the incoming message before calling the
-            # API. Roll it back on failure so the retry has exactly the same input.
-            try:
-                response = super()._generate_next_message(message, state)
-            except json.JSONDecodeError as exc:
-                self._record(state, incident_id, attempt, error=exc)
-                del state.messages[history_size:]
-                if attempt:
-                    raise
-                logger.warning(
-                    "Malformed user simulator tool JSON for %s/%s, attempt %s/2; "
-                    "evidence %s/%s-%s.json",
-                    self.domain,
-                    self.task_id,
-                    attempt + 1,
-                    self.debug_dir,
-                    incident_id,
-                    attempt,
-                )
-                continue
-            except Exception as exc:
-                self._record(state, incident_id, attempt, error=exc)
-                del state.messages[history_size:]
-                raise
-            valid = response.has_content() or response.is_tool_call()
-            if not valid or attempt:
-                self._record(state, incident_id, attempt, response=response)
-            if valid:
-                return response
-            del state.messages[history_size:]
-            logger.warning(
-                "Empty user response for %s/%s, attempt %s/2; evidence %s/%s-%s.json",
-                self.domain,
-                self.task_id,
-                attempt + 1,
-                self.debug_dir,
-                incident_id,
-                attempt,
+        try:
+            response = super()._generate_next_message(message, state)
+        except Exception as exc:
+            self._record(state, error=exc)
+            raise
+        if not (response.has_content() or response.is_tool_call()):
+            path = self._record(state, response=response)
+            # Official `UserMessage.validate()` rejects the same message one step
+            # later; failing here keeps the raw provider response with the error.
+            raise EmptyUserResponseError(
+                f"Empty user response for {self.domain}/{self.task_id}; "
+                f"evidence: {path}"
             )
-        raise EmptyUserResponseError(
-            f"Empty user response after 2 attempts for {self.domain}/{self.task_id}; "
-            f"evidence: {self.debug_dir}/{incident_id}-*.json"
-        )
+        return response
 
     def _record(
         self,
         state: UserState,
-        incident_id: str,
-        attempt: int,
         *,
         response: UserMessage | None = None,
         error: Exception | None = None,
-    ) -> None:
+    ) -> Path:
+        path = self.debug_dir / f"{uuid4().hex}.json"
         try:
             # Keep full conversation and raw response, including reasoning and IDs.
             # Authentication is transport configuration, not part of the request body.
@@ -99,7 +72,6 @@ class RetryingUserSimulator(UserSimulator):
                 "pid": os.getpid(),
                 "domain": self.domain,
                 "task_id": self.task_id,
-                "attempt": attempt,
                 "request": {
                     "model": self.llm,
                     "messages": to_litellm_messages(
@@ -126,13 +98,10 @@ class RetryingUserSimulator(UserSimulator):
                 else None,
             }
             self.debug_dir.mkdir(parents=True, exist_ok=True)
-            path = self.debug_dir / f"{incident_id}-{attempt}.json"
             with path.open("x", encoding="utf-8") as stream:
                 json.dump(record, stream, ensure_ascii=False, indent=2, default=str)
         except Exception:
             logger.warning(
-                "Could not write user-simulator incident %s/%s",
-                self.debug_dir,
-                incident_id,
-                exc_info=True,
+                "Could not write user-simulator incident %s", path, exc_info=True
             )
+        return path

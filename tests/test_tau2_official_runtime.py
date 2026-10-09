@@ -316,19 +316,17 @@ async def test_context_exhaustion_is_policy_failure_not_simulator_failure(
     assert result.reward_info is None
 
 
-@pytest.mark.parametrize("recover", [True, False])
 @pytest.mark.parametrize("debug_write_fails", [True, False])
-def test_empty_user_response_retries_identical_request_once(
-    monkeypatch, tmp_path, recover, debug_write_fails
+def test_empty_user_response_fails_attempt_once_with_evidence(
+    monkeypatch, tmp_path, debug_write_fails
 ):
-    import copy
     import json
 
     from tau2.data_model.message import AssistantMessage
 
     from examples.tau2.user_simulator import (
         EmptyUserResponseError,
-        RetryingUserSimulator,
+        RecordingUserSimulator,
     )
 
     requests = []
@@ -337,17 +335,16 @@ def test_empty_user_response_retries_identical_request_once(
         debug_dir.write_text("not a directory")
 
     def completion(**kwargs):
-        requests.append(copy.deepcopy(kwargs["messages"]))
-        content = "Recovered reply" if recover and len(requests) == 2 else None
+        requests.append(kwargs["messages"])
         return ModelResponse(
-            id=f"provider-{len(requests)}",
+            id="provider-1",
             model="test",
             choices=[
                 {
                     "finish_reason": "stop",
                     "message": {
                         "role": "assistant",
-                        "content": content,
+                        "content": None,
                         "reasoning_content": "Full debugging content",
                     },
                 }
@@ -355,7 +352,7 @@ def test_empty_user_response_retries_identical_request_once(
         )
 
     monkeypatch.setattr(llm_utils, "completion", completion)
-    simulator = RetryingUserSimulator(
+    simulator = RecordingUserSimulator(
         debug_dir=debug_dir,
         task_id="task",
         domain="telecom",
@@ -364,54 +361,39 @@ def test_empty_user_response_retries_identical_request_once(
         llm="openai/test",
         llm_args={"api_key": "test-secret", "num_retries": 3},
     )
-    state = simulator.get_init_state()
     incoming = AssistantMessage(role="assistant", content="Please describe the issue")
-    if recover:
-        response, result_state = simulator.generate_next_message(incoming, state)
-        assert response.content == "Recovered reply"
-        assert result_state.messages == [incoming, response]
-    else:
-        with pytest.raises(EmptyUserResponseError, match="after 2 attempts"):
-            simulator.generate_next_message(incoming, state)
-        assert state.messages == []
-    assert len(requests) == 2
-    assert requests[0] == requests[1]
+    # Official τ² fails the attempt (UserMessage.validate raises ValueError); the
+    # episode-level retry replays it. Nothing is re-requested in place.
+    with pytest.raises(ValueError, match="Empty user response") as caught:
+        simulator.generate_next_message(incoming, simulator.get_init_state())
+    assert isinstance(caught.value, EmptyUserResponseError)
+    assert len(requests) == 1
     if debug_write_fails:
         assert debug_dir.is_file()
         return
-    records = [json.loads(p.read_text()) for p in sorted(debug_dir.glob("*.json"))]
-    assert len(records) == 2
-    assert [r["response"]["id"] for r in records] == ["provider-1", "provider-2"]
+    (record,) = [json.loads(p.read_text()) for p in debug_dir.glob("*.json")]
+    assert record["response"]["id"] == "provider-1"
     assert (
-        records[0]["response"]["choices"][0]["message"]["reasoning_content"]
+        record["response"]["choices"][0]["message"]["reasoning_content"]
         == "Full debugging content"
     )
-    assert records[0]["request"]["messages"] == requests[0]
-    assert "api_key" not in records[0]["request"]["args"]
+    assert record["request"]["messages"] == requests[0]
+    assert "api_key" not in record["request"]["args"]
 
 
-@pytest.mark.parametrize(
-    "second_arguments,recovers",
-    [
-        ('{"phone": "123"}', True),
-        ('{"phone":', False),
-    ],
-)
-def test_malformed_user_tool_json_retries_once_and_records_decode_error(
-    monkeypatch, tmp_path, second_arguments, recovers
+def test_malformed_user_tool_json_fails_attempt_and_records_decode_error(
+    monkeypatch, tmp_path
 ):
-    import copy
     import json
 
     from tau2.data_model.message import AssistantMessage
 
-    from examples.tau2.user_simulator import RetryingUserSimulator
+    from examples.tau2.user_simulator import RecordingUserSimulator
 
     requests = []
 
     def completion(**kwargs):
-        requests.append(copy.deepcopy(kwargs["messages"]))
-        arguments = '{"phone":' if len(requests) == 1 else second_arguments
+        requests.append(kwargs["messages"])
         return ModelResponse(
             model="test",
             choices=[
@@ -422,11 +404,11 @@ def test_malformed_user_tool_json_retries_once_and_records_decode_error(
                         "content": None,
                         "tool_calls": [
                             {
-                                "id": f"tool-{len(requests)}",
+                                "id": "tool-1",
                                 "type": "function",
                                 "function": {
                                     "name": "verify_phone",
-                                    "arguments": arguments,
+                                    "arguments": '{"phone":',
                                 },
                             }
                         ],
@@ -436,7 +418,7 @@ def test_malformed_user_tool_json_retries_once_and_records_decode_error(
         )
 
     monkeypatch.setattr(llm_utils, "completion", completion)
-    simulator = RetryingUserSimulator(
+    simulator = RecordingUserSimulator(
         debug_dir=tmp_path,
         task_id="task",
         domain="telecom",
@@ -444,42 +426,24 @@ def test_malformed_user_tool_json_retries_once_and_records_decode_error(
         tools=None,
         llm="openai/test",
     )
-    state = simulator.get_init_state()
-    incoming = AssistantMessage(role="assistant", content="Check your phone")
-
-    if recovers:
-        response, result_state = simulator.generate_next_message(incoming, state)
-        assert response.tool_calls[0].arguments == {"phone": "123"}
-        assert result_state.messages == [incoming, response]
-    else:
-        with pytest.raises(json.JSONDecodeError):
-            simulator.generate_next_message(incoming, state)
-        assert state.messages == []
-    assert len(requests) == 2
-    assert requests[0] == requests[1]
-    records = [json.loads(p.read_text()) for p in sorted(tmp_path.glob("*.json"))]
-    assert len(records) == 2
-    assert records[0]["error"]["type"] == "JSONDecodeError"
-    assert records[0]["error"]["doc"] == '{"phone":'
-    assert records[0]["error"]["pos"] == len('{"phone":')
-    if recovers:
-        assert records[1]["error"] is None
-        assert (
-            records[1]["response"]["choices"][0]["message"]["tool_calls"][0][
-                "function"
-            ]["arguments"]
-            == '{"phone": "123"}'
+    with pytest.raises(json.JSONDecodeError):
+        simulator.generate_next_message(
+            AssistantMessage(role="assistant", content="Check your phone"),
+            simulator.get_init_state(),
         )
-    else:
-        assert records[1]["error"]["type"] == "JSONDecodeError"
-        assert records[1]["error"]["doc"] == '{"phone":'
-        assert records[1]["error"]["pos"] == len('{"phone":')
+    assert len(requests) == 1
+    (record,) = [json.loads(p.read_text()) for p in tmp_path.glob("*.json")]
+    assert record["error"]["type"] == "JSONDecodeError"
+    assert record["error"]["doc"] == '{"phone":'
+    assert record["error"]["pos"] == len('{"phone":')
 
 
-def test_user_simulator_unrelated_exception_does_not_retry(monkeypatch, tmp_path):
+def test_user_simulator_transport_error_is_recorded_and_raised(monkeypatch, tmp_path):
+    import json
+
     from tau2.data_model.message import AssistantMessage
 
-    from examples.tau2.user_simulator import RetryingUserSimulator
+    from examples.tau2.user_simulator import RecordingUserSimulator
 
     calls = []
 
@@ -488,7 +452,7 @@ def test_user_simulator_unrelated_exception_does_not_retry(monkeypatch, tmp_path
         raise RuntimeError("transport failed")
 
     monkeypatch.setattr(llm_utils, "completion", completion)
-    simulator = RetryingUserSimulator(
+    simulator = RecordingUserSimulator(
         debug_dir=tmp_path,
         task_id="task",
         domain="telecom",
@@ -496,22 +460,20 @@ def test_user_simulator_unrelated_exception_does_not_retry(monkeypatch, tmp_path
         tools=None,
         llm="openai/test",
     )
-    state = simulator.get_init_state()
-
     with pytest.raises(RuntimeError, match="transport failed"):
         simulator.generate_next_message(
             AssistantMessage(role="assistant", content="Check your phone"),
-            state,
+            simulator.get_init_state(),
         )
-
     assert len(calls) == 1
-    assert state.messages == []
+    (record,) = [json.loads(p.read_text()) for p in tmp_path.glob("*.json")]
+    assert record["error"]["message"] == "transport failed"
 
 
-def test_user_tool_only_reply_is_valid_without_retry(monkeypatch, tmp_path):
+def test_user_tool_only_reply_is_valid_without_record(monkeypatch, tmp_path):
     from tau2.data_model.message import AssistantMessage
 
-    from examples.tau2.user_simulator import RetryingUserSimulator
+    from examples.tau2.user_simulator import RecordingUserSimulator
 
     calls = []
 
@@ -541,7 +503,7 @@ def test_user_tool_only_reply_is_valid_without_retry(monkeypatch, tmp_path):
         )
 
     monkeypatch.setattr(llm_utils, "completion", completion)
-    simulator = RetryingUserSimulator(
+    simulator = RecordingUserSimulator(
         debug_dir=tmp_path,
         task_id="task",
         domain="telecom",
@@ -651,16 +613,11 @@ async def test_episode_wall_timeout_is_retryable_infra_before_reward(monkeypatch
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "responses, expected_calls, expected_reward, error_type",
-    [
-        (["malformed", 1.0], 2, 1.0, None),
-        (["malformed", "malformed"], 2, None, json.JSONDecodeError),
-        ([0.0], 1, 0.0, None),
-        (["unrelated"], 1, None, RuntimeError),
-    ],
+    "outcome, error_type",
+    [("malformed", json.JSONDecodeError), (0.0, None), ("unrelated", RuntimeError)],
 )
-async def test_evaluator_json_retry_preserves_simulation_and_failure_class(
-    monkeypatch, tmp_path, responses, expected_calls, expected_reward, error_type
+async def test_evaluator_failure_fails_attempt_for_episode_retry(
+    monkeypatch, tmp_path, outcome, error_type
 ):
     from types import SimpleNamespace
     from unittest.mock import Mock
@@ -683,12 +640,10 @@ async def test_evaluator_json_retry_preserves_simulation_and_failure_class(
     monkeypatch.setattr(runner, "_get_agent_and_user", lambda **kwargs: (None, None))
     monkeypatch.setattr(runner, "_get_orchestrator", lambda **kwargs: orchestrator)
     monkeypatch.setattr(runner, "_bind_nl_assertion_evaluator", lambda: None)
-    outcomes = iter(responses)
     calls = []
 
     def evaluate(**kwargs):
         calls.append(kwargs)
-        outcome = next(outcomes)
         if outcome == "malformed":
             raise json.JSONDecodeError("Expecting value", "not JSON", 0)
         if outcome == "unrelated":
@@ -697,20 +652,18 @@ async def test_evaluator_json_retry_preserves_simulation_and_failure_class(
 
     monkeypatch.setattr(module, "evaluate_simulation", evaluate)
     if error_type:
+        # Official τ² scores inside the simulation run: a scoring failure fails
+        # the attempt and the whole episode is replayed, never re-scored in place.
         with pytest.raises(module.Tau2InfrastructureError) as caught:
             await runner.run(task)
         assert isinstance(caught.value.__cause__, error_type)
-        assert not Tau2AgentWorkflow.should_retry_episode(caught.value)
+        assert Tau2AgentWorkflow.should_retry_episode(caught.value)
     else:
         result = await runner.run(task)
-        assert result.reward == expected_reward
-    orchestrator.run.assert_called_once()
-    assert len(calls) == expected_calls
-    assert all(call["simulation"] is simulation for call in calls)
-    assert all(call["task"] is task for call in calls)
-    assert all(call == calls[0] for call in calls)
+        assert result.reward == outcome
+    assert len(calls) == 1
     paths = list((tmp_path / "tau2-evaluator-failures").glob("*.json"))
-    assert len(paths) == responses.count("malformed")
+    assert len(paths) == (outcome == "malformed")
     for path in paths:
         raw = path.read_text()
         record = json.loads(raw)
@@ -718,6 +671,122 @@ async def test_evaluator_json_retry_preserves_simulation_and_failure_class(
         assert record["error"]["pos"] == 0
         assert record["task_id"] == "68"
         assert "session-secret" not in raw and "user-secret" not in raw
+
+
+def _scripted_runner(monkeypatch, *, evaluation, termination_reason, elapsed):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    import examples.tau2.agent as module
+
+    runner = Tau2Runner(
+        econfig=Tau2EnvConfig(domain="telecom"),
+        gen_args={},
+        agent_base_url="http://policy.invalid/v1",
+        agent_api_key="session",
+        user_api_key="user",
+        timeout=1800.0,
+        evaluation=evaluation,
+    )
+    times = iter([100.0, 100.0 + elapsed])
+    monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: next(times)))
+    monkeypatch.setattr(runner, "_get_environment", lambda: object())
+    monkeypatch.setattr(runner, "_get_agent_and_user", lambda **kwargs: (None, None))
+    monkeypatch.setattr(runner, "_bind_nl_assertion_evaluator", lambda: None)
+    monkeypatch.setattr(
+        runner,
+        "_get_orchestrator",
+        lambda **kwargs: SimpleNamespace(
+            run=lambda: SimpleNamespace(
+                messages=[], termination_reason=termination_reason
+            )
+        ),
+    )
+    reward = 0.0 if termination_reason != "completed" else 1.0
+    evaluator = Mock(return_value=SimpleNamespace(reward=reward))
+    monkeypatch.setattr(module, "evaluate_simulation", evaluator)
+    return runner, evaluator
+
+
+@pytest.mark.asyncio
+async def test_evaluation_scores_official_timeout_as_counted_zero(monkeypatch):
+    from tau2.data_model.simulation import TerminationReason
+
+    runner, evaluator = _scripted_runner(
+        monkeypatch,
+        evaluation=True,
+        termination_reason=TerminationReason.TIMEOUT,
+        elapsed=1801.0,
+    )
+    task = _get_task(
+        "telecom", get_tau2_dataset("telecom", split="train")[0]["task_id"], "train"
+    )
+    result = await runner.run(task)
+    evaluator.assert_called_once()
+    assert result.reward == 0.0
+    assert result.stop_reason == "timeout"
+
+
+@pytest.mark.asyncio
+async def test_evaluation_keeps_finished_episode_past_wall_clock(monkeypatch):
+    runner, evaluator = _scripted_runner(
+        monkeypatch, evaluation=True, termination_reason="completed", elapsed=2400.0
+    )
+    task = _get_task(
+        "telecom", get_tau2_dataset("telecom", split="train")[0]["task_id"], "train"
+    )
+    result = await runner.run(task)
+    evaluator.assert_called_once()
+    assert result.reward == 1.0
+
+
+@pytest.mark.asyncio
+async def test_evaluation_context_exhaustion_fails_attempt_like_official(monkeypatch):
+    from litellm import BadRequestError
+
+    from examples.tau2.agent import Tau2InfrastructureError
+
+    def fake_completion(**kwargs):
+        if kwargs["model"] == "openai/dummy":
+            raise BadRequestError(
+                message="areal_context_limit: context_length_exceeded",
+                model=kwargs["model"],
+                llm_provider="openai",
+            )
+        return ModelResponse(
+            model="test",
+            choices=[
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Help me."},
+                    "finish_reason": "stop",
+                }
+            ],
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        )
+
+    monkeypatch.setattr(llm_utils, "completion", fake_completion)
+    runner = Tau2Runner(
+        econfig=Tau2EnvConfig(
+            domain="telecom",
+            user_llm_base_url="https://user.invalid/v1",
+            user_llm="openai/test-user",
+        ),
+        gen_args={"max_total_tokens": 32768, "max_completion_tokens": 4096},
+        agent_base_url="http://policy.invalid/v1",
+        agent_api_key="session",
+        user_api_key="user",
+        timeout=30.0,
+        evaluation=True,
+    )
+    task = _get_task(
+        "telecom", get_tau2_dataset("telecom", split="train")[0]["task_id"], "train"
+    )
+    # Official τ² has no context-window outcome: the attempt fails, is retried,
+    # and is finally excluded as an infrastructure error.
+    with pytest.raises(Tau2InfrastructureError) as caught:
+        await runner.run(task)
+    assert Tau2AgentWorkflow.should_retry_episode(caught.value)
 
 
 def test_user_llm_usage_sums_only_user_turns():
@@ -764,7 +833,6 @@ def _workflow_with_fake_runner(monkeypatch, tmp_path, run):
 
     monkeypatch.setattr(agent_mod, "Tau2Runner", FakeRunner)
     monkeypatch.setattr(agent_mod, "_get_task", lambda **kwargs: object())
-    monkeypatch.setenv("TAU2_TRAJECTORY_DIR", str(tmp_path))
     monkeypatch.delenv("TAU2_USAGE_LOG", raising=False)
     monkeypatch.setenv("TAU2_TEST_USER_KEY", "user-secret")
     return Tau2AgentWorkflow(
@@ -773,7 +841,8 @@ def _workflow_with_fake_runner(monkeypatch, tmp_path, run):
             user_llm="deepseek-flash",
             user_llm_base_url="http://user.invalid/v1",
             user_llm_api_key_env="TAU2_TEST_USER_KEY",
-        )
+        ),
+        trajectory_dir=str(tmp_path),
     )
 
 

@@ -18,8 +18,12 @@ dynamic_group_filter: false
 critic_dev_fraction: 0.2
 critic_tasks_per_domain: null
 critic_rollouts_per_task: 1
-infra_retries: 1
+# Episode attempts after the first, as `tau2 run --max-retries`.
+infra_retries: 3
 episode_timeout_seconds: 1200
+# Evaluation wall clock (official TIMEOUT: scored 0 and counted). Measured
+# temperature-0 eval episodes: p99 538 s, max 651 s.
+eval_episode_timeout_seconds: 1800
 tokenizer_path: ${actor.path}
 
 cluster:
@@ -219,7 +223,6 @@ econfig:
   user_llm_num_retries: 3
   user_llm_args:
     temperature: 0.0
-    max_completion_tokens: 512
   turn_discount: 1.0
   invalid_format_penalty: 0.0
 

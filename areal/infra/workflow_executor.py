@@ -579,8 +579,12 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
             self._input_cv.notify()
 
     def wait_results(
-        self, count: int, timeout: float | None = None, raise_timeout: bool = True
-    ) -> list[TResult | None]:
+        self,
+        count: int,
+        timeout: float | None = None,
+        raise_timeout: bool = True,
+        with_task_ids: bool = False,
+    ) -> list[TResult | None] | list[tuple[int, TResult | None]]:
         """Wait for the completion of `count` tasks.
 
         Parameters
@@ -591,10 +595,13 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
             Maximum time to wait in seconds.
         raise_timeout : bool
             Whether to raise TimeoutError on timeout.
+        with_task_ids : bool
+            Return ``(task_id, result)`` pairs so a rejected task (None) stays
+            attributable to its submission.
 
         Returns
         -------
-        list[TResult | None]
+        list[TResult | None] | list[tuple[int, TResult | None]]
             List of task results, None for rejected tasks.
 
         """
@@ -638,6 +645,8 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
                 self._active_task_ids.discard(r.task_id)
                 self._active_task_inputs.pop(r.task_id, None)
 
+        if with_task_ids:
+            return [(r.task_id, r.data) for r in selected]
         return [r.data for r in selected]
 
     def wait_for_task(

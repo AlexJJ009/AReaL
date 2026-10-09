@@ -197,6 +197,7 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
         # into the successful episode's concat export.
         retries = getattr(self.agent, "infra_retries", 0)
         should_retry = getattr(self.agent, "should_retry_episode", None)
+        retry_delay = getattr(self.agent, "retry_delay", None)
         for attempt in range(retries + 1):
             try:
                 return await self._arun_episode(engine, data)
@@ -209,7 +210,9 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
                     retries,
                 )
                 stats_tracker.get(workflow_context.stat_scope()).scalar(infra_retries=1)
-                await asyncio.sleep(min(2**attempt, 8))
+                await asyncio.sleep(
+                    min(2**attempt, 8) if retry_delay is None else retry_delay
+                )
         raise AssertionError("Unreachable retry state")
 
     async def _arun_episode(
