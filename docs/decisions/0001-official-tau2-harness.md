@@ -2,7 +2,8 @@
 
 Date: 2026-10-09
 
-Status: Accepted
+Status: Accepted; failure classification superseded by
+[ADR 0009](0009-official-tau2-runner-semantics.md)
 
 Applies to `examples/tau2/` (`agent.py`, `contracts.py`, `train.py`, `utils.py`),
 `scripts/tau2/`, and the AReaL OpenAI-compatible proxy under
@@ -15,7 +16,7 @@ simulated user and a task scorer. Training reward, in-training validation and of
 evaluation must all measure the same thing, and results must be comparable to the public
 benchmark. Which environment and scorer do we train against, how does the policy reach
 the local inference servers, and which episode outcomes count as model failures rather
-than infrastructure failures?
+than infrastructure failures? (The last question is now answered by ADR 0009.)
 
 ## Considered Options
 
@@ -59,7 +60,9 @@ Contract:
   or group membership. If the adopted branch cannot be identified, the episode fails as
   a bounded infrastructure error rather than being chosen by timestamp.
 
-Failure classification:
+Failure classification (superseded by
+[ADR 0009](0009-official-tau2-runner-semantics.md), kept as the original rationale; the
+retry, exclusion and abort rules below no longer apply):
 
 | Event                                                                     | Treatment                                                                                                         |
 | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
@@ -92,6 +95,6 @@ aborts fixed-dataset training rather than silently shrinking coverage.
   thread, so cancellation waits for the episode to finish before the proxy session
   closes.
 - Bad, because results depend on a commercial user simulator whose alias does not pin a
-  backend version. Its configured `max_completion_tokens: 512` is a request value, not a
-  verified provider limit. Changing the simulator model is a protocol change and needs a
-  new baseline.
+  backend version. (A configured `max_completion_tokens: 512` was later removed to match
+  the official user arguments, ADR 0009.) Changing the simulator model is a protocol
+  change and needs a new baseline.

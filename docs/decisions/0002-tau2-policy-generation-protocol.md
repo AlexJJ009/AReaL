@@ -41,9 +41,12 @@ Fixed protocol:
 
 Per-request generation budget is `M = min(4096, 32768 - 1 - L)`, where `L` is the token
 count of the actually rendered template. When `M <= 0` the proxy rejects the request
-with a typed error, and the episode ends as `context_limit` with reward 0 and no retry
-([ADR 0001](0001-official-tau2-harness.md)). Hitting 4096 tokens in one reply does not
-end the episode. Only complete, valid tool calls are executed.
+with a typed error. In training the episode ends as `context_limit` with reward 0 and no
+retry ([ADR 0001](0001-official-tau2-harness.md)). Evaluation follows the official
+runner instead: the error fails the attempt, is retried, and an episode that still
+overflows is excluded ([ADR 0009](0009-official-tau2-runner-semantics.md)). Hitting 4096
+tokens in one reply does not end the episode. Only complete, valid tool calls are
+executed.
 
 Enforcement is at the final consumer, not the config: the template flag
 (`chat_template_kwargs` / `extra_body.chat_template_kwargs`) must pass through the local
@@ -65,7 +68,7 @@ to non-thinking with Qwen.
 - Good, because policy, critic and evaluator agree on one template, and token/logprob
   alignment does not depend on parsing reasoning blocks.
 - Good, because context exhaustion has one definition shared by the proxy, the workflow
-  and the reward.
+  and the reward; only its outcome differs between training and evaluation (ADR 0009).
 - Bad, because any thinking-mode comparison needs a separate protocol and new baselines;
   results across modes must not be mixed.
 - Bad, because 32K is a length limit, not a capacity proof. Memory headroom for long

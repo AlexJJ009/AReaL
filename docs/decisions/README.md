@@ -31,3 +31,4 @@ For a genuine reversal, keep the old rationale and link the successor with
 - [0006 Keep a critic-free asynchronous GRPO recipe for τ²-Bench](0006-tau2-async-grpo-baseline.md)
 - [0007 Carry explicit episode termination and bootstrap flags into GAE](0007-explicit-episode-termination.md)
 - [0008 Run Qwen3.5 FSDP2/SGLang training from a locked uv environment on A100](0008-qwen35-runtime-environment.md)
+- [0009 Schedule τ² episodes with the official runner's retry, exclusion and metric rules](0009-official-tau2-runner-semantics.md)

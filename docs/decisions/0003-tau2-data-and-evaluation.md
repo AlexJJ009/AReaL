@@ -85,9 +85,12 @@ Retail) after checking the task IDs against the official `base` list, and report
 Reporting: the primary metric is the mean success over all trials, overall and per
 domain. pass^k or pass@k may be added only under their own names. Initial and final
 models are compared paired by task, with uncertainty aggregated by task: 60 tasks × 4
-repeats are not 240 independent tasks. Missing or infra-failed episodes are reported and
-never silently removed from the denominator. This protocol is not a full reproduction of
-the official leaderboard.
+repeats are not 240 independent tasks. Episodes that end as `infrastructure_error` after
+the official retries are excluded from the denominator as the official runner does, and
+their count and error types are always reported
+([ADR 0009](0009-official-tau2-runner-semantics.md)). Official `avg_reward` and `pass^k`
+are reported alongside the mean success. This protocol is not a full reproduction of the
+official leaderboard.
 
 ### Consequences
 

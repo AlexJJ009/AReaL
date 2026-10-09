@@ -48,8 +48,12 @@ them.
 `experiment_mode=tune` selects83train/21dev, stratified by task and domain with seed42.
 `experiment_mode=formal` trains on 104 official train and evaluates 60 official test
 tasks (20 airline, 40 retail), four repeats each, with fixed settings; test results
-never select a checkpoint. The dedicated evaluator reports per-domain coverage and
-rewards, and rejects missing/infra-failed episodes instead of reporting a partial mean.
+never select a checkpoint. Both the dedicated evaluator and in-training validation run
+through `examples/tau2/official_runner.py`, which follows the official `tau2 run`: an
+episode that still fails after the official retries is `infrastructure_error`, excluded
+from the metrics, and counted (`infra_excluded_episodes`); the run still completes.
+Summaries report the official `avg_reward` and `pass^k` next to `pass1_mean`, plus
+`policy_free_episodes` (scored episodes the user ended before any policy call).
 
 Policy training uses temperature 1; new checkpoint evaluations use temperature 0. The
 standalone `scripts/tau2/evaluate.py` entrypoint defaults to `--temperature 0` even when
@@ -68,6 +72,14 @@ Positional Hydra overrides after the flags are applied to `--config`, for exampl
 records the user model, endpoint and arguments in `manifest.json`, and per-episode
 user-simulator prompt/completion tokens in `user-usage.jsonl`; `summary.json` reports
 their totals.
+
+`--tasks retail:51,airline:3` restricts a run to named tasks of the selected task set,
+which is useful for smoke tests. Evaluation episodes use a cooperative wall clock of
+`eval_episode_timeout_seconds` (1800 s); an episode that reaches it ends as official
+`TIMEOUT` with score 0. Every episode attempt, including failed and policy-free ones,
+writes one JSON record under `<output>/trajectories/<source_id>/`. Training rollouts
+write theirs under `<log_path>/tau2-trajectories/rollout/`, and in-training validation
+under `<log_path>/tau2-trajectories/eval-<ns>/`.
 
 Critic formal training uses the 104 official airline/retail train tasks and fixed
 official test60 trajectories. Tuning uses83train/21dev (24/59 train and6/15dev). Each of
@@ -137,12 +149,13 @@ tau2-compatible LiteLLM/Uvicorn overrides. It uses the trusted-host
 `AREAL_ALLOW_DEFAULT_ADMIN_KEY=1`; the internal proxy key remains separate from
 `DEEPSEEK_API_KEY`, loaded only from a mode0600 env file.
 
-Transient provider failures get at most one fresh-session episode retry by default
-(`infra_retries`). Request-level provider retries remain separate. Scored task failures
-are not retried. Deterministic code/config failures do not become reward0. An
-unrecovered failed group aborts fixed-dataset training rather than silently shrinking
-coverage. Each retry resets both the environment and the proxy session, so abandoned
-interactions cannot enter successful exports.
+Any exception replays the episode from a fresh environment and proxy session, at most
+three more times, 1 s apart (`infra_retries: 3`, the official `tau2 run` policy).
+Request-level provider retries remain separate. Scored task failures are not retried. In
+training, an episode whose retries are exhausted is rejected, and an incomplete GRPO
+group still aborts fixed-dataset training; in evaluation it is excluded and counted.
+Abandoned attempts never enter successful exports. See
+[ADR 0009](../../docs/decisions/0009-official-tau2-runner-semantics.md).
 
 ## Design decisions
 
@@ -275,22 +288,22 @@ python3 examples/tau2/train.py \
 
 ### Tau2 Related Configuration Options
 
-| Option                           | Default            | Description                                                                     |
-| -------------------------------- | ------------------ | ------------------------------------------------------------------------------- |
-| `econfig.domain`                 | `airline`          | Tau2 domain: `airline`, `retail`, `telecom`, or the shared launcher's `mixed`   |
-| `econfig.max_steps`              | `100`              | Official orchestrator step limit per episode; the τ² recipes set `200`          |
-| `econfig.add_thinking_tool`      | `false`            | Whether to use thinking as a tool for the agent                                 |
-| `econfig.enable_thinking`        | `false`            | Policy chat-template thinking; `true` is rejected                               |
-| `econfig.context_window_tokens`  | `32768`            | Rendered prompt plus completion budget; other values are rejected               |
-| `econfig.max_completion_tokens`  | `4096`             | Tokens per assistant response, at most 4096                                     |
-| `econfig.solo_mode`              | `false`            | If true, agent handles both agent and user roles (no user simulator needed)     |
-| `econfig.user_llm_base_url`      | `null`             | Base URL of the user simulator LLM server                                       |
-| `econfig.user_llm`               | `null`             | Model name for user simulator (e.g., `openai/self-hosted-Qwen2.5-72B`)          |
-| `econfig.user_llm_api_key_env`   | `DEEPSEEK_API_KEY` | Environment variable holding the user simulator key                             |
-| `econfig.user_llm_args`          | `null`             | Arguments for user LLM (e.g., `{temperature: 0.0, max_completion_tokens: 512}`) |
-| `econfig.user_llm_num_retries`   | `3`                | Maximum retries for one user-simulator request                                  |
-| `econfig.turn_discount`          | `1.0`              | Discount factor for turn-based learning                                         |
-| `econfig.invalid_format_penalty` | `0.1`              | Penalty for invalid format in completions                                       |
+| Option                           | Default            | Description                                                                   |
+| -------------------------------- | ------------------ | ----------------------------------------------------------------------------- |
+| `econfig.domain`                 | `airline`          | Tau2 domain: `airline`, `retail`, `telecom`, or the shared launcher's `mixed` |
+| `econfig.max_steps`              | `100`              | Official orchestrator step limit per episode; the τ² recipes set `200`        |
+| `econfig.add_thinking_tool`      | `false`            | Whether to use thinking as a tool for the agent                               |
+| `econfig.enable_thinking`        | `false`            | Policy chat-template thinking; `true` is rejected                             |
+| `econfig.context_window_tokens`  | `32768`            | Rendered prompt plus completion budget; other values are rejected             |
+| `econfig.max_completion_tokens`  | `4096`             | Tokens per assistant response, at most 4096                                   |
+| `econfig.solo_mode`              | `false`            | If true, agent handles both agent and user roles (no user simulator needed)   |
+| `econfig.user_llm_base_url`      | `null`             | Base URL of the user simulator LLM server                                     |
+| `econfig.user_llm`               | `null`             | Model name for user simulator (e.g., `openai/self-hosted-Qwen2.5-72B`)        |
+| `econfig.user_llm_api_key_env`   | `DEEPSEEK_API_KEY` | Environment variable holding the user simulator key                           |
+| `econfig.user_llm_args`          | `null`             | Arguments for user LLM (e.g., `{temperature: 0.0}`, the official setting)     |
+| `econfig.user_llm_num_retries`   | `3`                | Maximum retries for one user-simulator request                                |
+| `econfig.turn_discount`          | `1.0`              | Discount factor for turn-based learning                                       |
+| `econfig.invalid_format_penalty` | `0.1`              | Penalty for invalid format in completions                                     |
 
 ## Results
 

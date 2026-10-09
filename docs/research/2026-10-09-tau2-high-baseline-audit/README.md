@@ -143,8 +143,8 @@ episode 正常记分。
 | `areal/experimental/openai/proxy/workflow.py` | 正常模式下导出为空时返回 None（拒绝该轨迹），与 online 模式一致                                                                                                                                                                                              |
 | `scripts/tau2/evaluate.py`                    | 写 `trajectories/<source_id>/<attempt>.json`。被拒绝的结果没有 task_id，用 episode 自己的记录（completed 且 `policy_turns == 0`）把它绑定回对应 episode，按官方分数记为 completed；其余没有 task_id 的失败仍然中止。summary 新增 `eval/policy_free_episodes` |
 
-训练行为：零 policy 回合的 episode 被拒绝（以前是重试一次后再拒绝），GRPO 组按 `drop_incomplete_group`
-处理。训练默认不写轨迹文件。
+训练行为：零 policy 回合的 episode 被拒绝（以前是重试一次后再拒绝），GRPO 组按 `drop_incomplete_group` 处理。（更正：AReaL
+的 `dump_to_file` 本来就会写 policy token 视角的轨迹；缺的是官方消息视角的逐次尝试记录，见 ADR 0009。）
 
 ### 7.3 与官方 `tau2 run` 仍不一致的行为
 
@@ -167,4 +167,6 @@ episode 正常记分。
 另有几项一致或只影响展示：max_steps 200、max_errors 10、不开 communication 校验、 LLMAgent、无 think
 工具、airline/retail 无用户工具、cost/日志相关 monkey patch。
 
-是否把 1–6 改成官方行为，还没有决定。这些改动会改变评测口径，需要先确认。
+2026-10-09 决定：1、2、4（仅评测）、5（仅评测，墙钟 1800 s）、6、8（去掉 512 上限）、10 按官方对齐；3 不改；7 待定；9 保留。见
+[ADR 0009](../../decisions/0009-official-tau2-runner-semantics.md) 和
+[PRD](../../prd/2026-10-09-tau2-official-runner.md)。
