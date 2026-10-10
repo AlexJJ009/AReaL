@@ -13,6 +13,7 @@ episode, so offline and in-training evaluation share one definition:
   episode becomes an ``INFRASTRUCTURE_ERROR`` placeholder; the run continues.
 - ``tau2/metrics/agent_metrics.py``: infrastructure errors are excluded before
   ``avg_reward`` and ``pass^k`` are computed, and their count is reported.
+  ``pass@k`` and ``mean@k`` are reported alongside under the same exclusion.
 
 AReaL only delivers results that carry policy tokens. An episode the user ended
 before any policy call, or one whose retries were exhausted, comes back as a
@@ -265,20 +266,44 @@ def collect_episodes(
     return records
 
 
-def _pass_hat_ks(records: list[dict[str, Any]], repeats: int) -> dict[int, float]:
+def _successes_by_task(records: list[dict[str, Any]]) -> list[list[bool]]:
     by_task: dict[tuple[str, str], list[bool]] = defaultdict(list)
     for record in records:
         by_task[(record["domain"], str(record["task_id"]))].append(
             is_successful(float(record["official_score"]))
         )
-    if not by_task:
+    return list(by_task.values())
+
+
+def _task_average(
+    records: list[dict[str, Any]],
+    repeats: int,
+    per_task: Callable[[int, int, int], float],
+) -> dict[int, float]:
+    tasks = _successes_by_task(records)
+    if not tasks:
         return {}
     # Official clips k to the fewest evaluated trials of any task.
-    max_k = min(repeats, min(len(v) for v in by_task.values()))
+    max_k = min(repeats, min(len(v) for v in tasks))
     return {
-        k: sum(pass_hat_k(len(v), sum(v), k) for v in by_task.values()) / len(by_task)
+        k: sum(per_task(len(v), sum(v), k) for v in tasks) / len(tasks)
         for k in range(1, max_k + 1)
     }
+
+
+def pass_at_k(num_trials: int, success_count: int, k: int) -> float:
+    """Unbiased probability that at least one of k trials succeeds (Chen et al. 2021)."""
+
+    if num_trials < k:
+        raise ValueError(f"Number of trials {num_trials} is less than k {k}.")
+    return 1.0 - math.comb(num_trials - success_count, k) / math.comb(num_trials, k)
+
+
+def _mean_at_k(records: list[dict[str, Any]]) -> float:
+    """Per-task success rate averaged over tasks."""
+
+    tasks = _successes_by_task(records)
+    return sum(sum(v) / len(v) for v in tasks) / len(tasks) if tasks else 0.0
 
 
 def official_metrics(records: list[dict[str, Any]], *, repeats: int) -> dict[str, Any]:
@@ -298,7 +323,9 @@ def official_metrics(records: list[dict[str, Any]], *, repeats: int) -> dict[str
             "infra_excluded_by_type": dict(reasons),
             "policy_free_episodes": sum(r.get("policy_turns") == 0 for r in evaluated),
             "avg_reward": sum(scores) / len(scores) if scores else 0.0,
-            "pass_hat_k": _pass_hat_ks(evaluated, repeats),
+            "pass_hat_k": _task_average(evaluated, repeats, pass_hat_k),
+            "pass_at_k": _task_average(evaluated, repeats, pass_at_k),
+            "mean_at_k": _mean_at_k(evaluated),
         }
 
     domains = sorted({r["domain"] for r in records})

@@ -289,10 +289,16 @@ def aggregate(
         "eval/avg_reward": overall["avg_reward"],
         "eval/pass1_mean": overall["avg_reward"],
     }
+    metrics[f"eval/mean@{repeats}"] = overall["mean_at_k"]
     for k, value in overall["pass_hat_k"].items():
         metrics[f"eval/pass^{k}"] = value
+    for k, value in overall["pass_at_k"].items():
+        metrics[f"eval/pass@{k}"] = value
     for domain, result in official["by_domain"].items():
         metrics[f"eval/domain/{domain}/avg_reward"] = result["avg_reward"]
+        metrics[f"eval/domain/{domain}/mean@{repeats}"] = result["mean_at_k"]
+        for k, value in result["pass_at_k"].items():
+            metrics[f"eval/domain/{domain}/pass@{k}"] = value
         metrics[f"eval/domain/{domain}/infra_excluded_episodes"] = result[
             "infra_excluded_episodes"
         ]

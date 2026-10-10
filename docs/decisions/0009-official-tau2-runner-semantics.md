@@ -59,7 +59,10 @@ Official semantics adopted:
   `TIMEOUT` and `MAX_STEPS` score 0 and stay in the denominator.
 - **Metrics.** `avg_reward` and `pass^k = C(c,k)/C(n,k)` averaged over tasks, with `k`
   clipped to the fewest evaluated trials of any task, overall and per domain, using the
-  official `pass_hat_k`. The existing `pass1_mean` and per-domain/split views stay.
+  official `pass_hat_k`. The existing `pass1_mean` and per-domain/split views stay. Not
+  official but reported under their own names, on the same evaluated episodes and `k`
+  range: `pass@k = 1 - C(n-c,k)/C(n,k)` (at least one of `k` trials succeeds) and
+  `mean@n` (per-task success rate averaged over tasks).
 
 AReaL integration:
 

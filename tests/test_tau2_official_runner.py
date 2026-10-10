@@ -269,3 +269,32 @@ def test_official_metrics_excludes_infra_errors_and_matches_pass_hat_k():
     for k in (1, 2):
         expected = (pass_hat_k(3, 2, k) + pass_hat_k(3, 1, k) + pass_hat_k(2, 2, k)) / 3
         assert metrics["pass_hat_k"][k] == pytest.approx(expected)
+
+
+def test_official_metrics_reports_pass_at_k_and_mean_at_k_over_tasks():
+    from itertools import combinations
+
+    def record(task_id, score):
+        return {
+            "domain": "retail",
+            "task_id": task_id,
+            "status": "completed",
+            "official_score": score,
+        }
+
+    trials = {"a": [1.0, 0.0, 0.0, 0.0], "b": [0.0] * 4, "c": [1.0, 1.0, 0.0]}
+    records = [record(t, s) for t, scores in trials.items() for s in scores]
+
+    metrics = official_runner.official_metrics(records, repeats=4)["overall"]
+
+    # Clipped to the fewest trials of any task, like pass^k.
+    assert sorted(metrics["pass_at_k"]) == [1, 2, 3]
+    for k in (1, 2, 3):
+        expected = sum(
+            sum(any(c) for c in combinations(scores, k))
+            / len(list(combinations(scores, k)))
+            for scores in trials.values()
+        ) / len(trials)
+        assert metrics["pass_at_k"][k] == pytest.approx(expected)
+    # Per-task mean, then mean over tasks (not the pooled episode mean 3/11).
+    assert metrics["mean_at_k"] == pytest.approx((1 / 4 + 0 + 2 / 3) / 3)

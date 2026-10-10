@@ -103,6 +103,8 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
                 "infra_excluded_episodes": result["infra_excluded_episodes"],
                 "policy_free_episodes": result["policy_free_episodes"],
                 "pass_hat_k": result["pass_hat_k"],
+                "pass_at_k": result["pass_at_k"],
+                "mean_at_k": result["mean_at_k"],
             }
             for domain, result in official["by_domain"].items()
         }
@@ -115,14 +117,20 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
                 "policy_free_episodes",
             ):
                 metrics[f"eval/{domain}/{key}"] = result[key]
+            metrics[f"eval/{domain}/mean@{repeats}"] = result["mean_at_k"]
             for k, value in result["pass_hat_k"].items():
                 metrics[f"eval/{domain}/pass^{k}"] = value
+            for k, value in result["pass_at_k"].items():
+                metrics[f"eval/{domain}/pass@{k}"] = value
         overall = official["overall"]
         metrics["eval/episodes"] = overall["evaluated_episodes"]
         metrics["eval/reward_mean"] = overall["avg_reward"]
         metrics["eval/infra_excluded_episodes"] = overall["infra_excluded_episodes"]
+        metrics[f"eval/mean@{repeats}"] = overall["mean_at_k"]
         for k, value in overall["pass_hat_k"].items():
             metrics[f"eval/pass^{k}"] = value
+        for k, value in overall["pass_at_k"].items():
+            metrics[f"eval/pass@{k}"] = value
         return {
             "split": "test" if self.config.experiment_mode == "formal" else "dev",
             "domains": domains,
