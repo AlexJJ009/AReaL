@@ -4,14 +4,22 @@
 `mixed-v1`/`mixed-v4-disk`（Qwen3.5-4B，non-thinking，DeepSeek Flash 用户模拟器与 NL judge，评测
 temperature=1、每题 8 次）。全部结论来自已有记录的重算，没有新增采样、训练或付费模型调用。
 
+第 1–6 节是对 2026-09-27 训练记录的核查；第 7–8 节是同日评测调度对齐官方与新口径 step 0 评测；第 9 节是与 Recuris、 官方榜单的对比和
+Doubao 用户失败精读（2026-10-10）。τ² 的调研、对比、找 gap 都记在本文，不另开文档。
+
 原始数据根目录：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-training-20260927-nonthinking`。
 核查脚本在本目录 `scripts/`，大体积中间结果保留在
 `/data_storage/yl_test/lgx/data-1/code/_worktrees/AReaL/codex-sao-math/docs/_local/scratch/claude-verify-20261009/`（不入库）。
+第 7.1 节的 Doubao 首轮探测、第 9.5 节的高分核查证据归档在
+`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/audits/tau2-scratch-archive-20261010/`。
 
 ## 1. 结论
 
 **初始分数高（Retail/Airline 约 80%，Telecom 100%）的主因是模型本身能完成多数任务，加上 benchmark
 自身的评分盲区；不是数据或评测代码被改过，也不是用户模拟器代劳。**
+
+\*\*2026-10-10 更正：\*\*第 2 节"用户模拟器过度配合：否"只说明用户没有代劳；用户模拟器的选择本身决定 Retail 分数。
+同一份代码下，DeepSeek 用户 Retail 0.851、Doubao 用户 0.651，差距主要来自 Doubao 在确认的同一句话里结束对话（第 9 节）。
 
 \*\*训练看不出效果，原因是评测噪声大于训练带来的变化、有效学习信号少、权重几乎没有朝一致方向移动。\*\*现有证据只能说"无法判断训练是否有效"，不能说"训练变差"。
 
@@ -35,14 +43,14 @@ gold 固定为 "no longer needed"，用户多数时候选 "ordered by mistake"�
 
 ### 与 Recuris 论文（Qwen3.5-4B：Retail 68.0 / Airline 75.3）的差距
 
+已在第 9 节查清：两边都用 Doubao 用户时，差距在抽样误差内；Recuris 的 harness 对这一行没有影响。下面是 2026-10-09
+的原始判断，保留作记录。
+
 - \*\*不是题集差异。\*\*未训练模型在 train split（epoch 1 覆盖全部任务，权重相对变化约 1e-4）上为 Retail 84.8%、Airline
   78.3%；与 test 合并估算全量 114/50 题约 82%/79%。
 - \*\*论文 Table 1 的用户模拟器不是 4B 自己。\*\*Recuris 源码 `src/recuris/adapters/tau2/treatment.py`
   的 transfer 配置固定 Doubao Seed 2.0 Pro 作为用户模拟器和 NL
-  judge（`reasoning_effort=medium`，temperature=0），被测 agent temperature 强制为 0。论文正文"same
-  model also plays the simulated user"指 meta-agent 演化用的 frozen 配置。
-- \*\*未排除的候选：\*\*DeepSeek 与 Doubao 作为用户的行为差异；Recuris 自己的 tau2 fork harness。agent
-  temperature 差异（我们 1、论文 0）方向相反，不能解释我们更高。需要对照实验才能区分。
+  judge（`reasoning_effort=medium`，temperature=0），被测 agent temperature 强制为 0。
 
 ## 3. 训练为什么看不出效果
 
@@ -192,8 +200,128 @@ Telecom），policy temperature 0，每题 4 次，用户模拟器 temperature 0
 - 旧代码下同配置的 DeepSeek 评测是 0.794，新代码 0.838。区别是评测不再截断 4096 token 的回复（旧代码有 32 个 episode
   被截断）和重试规则；本次无排除。两者和用户模拟器本身的随机性各占多少，没有逐题核对。
 - Doubao 评测里 3 个 episode 是用户第一句就 stop，按官方打分，没有中止评测。
-- 第 6 节第 2 条的 Doubao 对照已完成（2.0 Pro 已下线，用 2.1 Turbo）。和 Recuris 的剩余差距还在核查 Recuris 源码。
+- 第 6 节第 2 条的 Doubao 对照已完成（2.0 Pro 已下线，用 2.1 Turbo），分析见第 9 节。
 
 产物：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-eval-20261009/step0-base-t0-deepseek-official/`
 和
 `.../step0-base-t0-doubao21turbo-official/`（`summary.json`、`episodes.jsonl`、`trajectories/`）。
+
+## 9. 用户模拟器、Recuris 与官方榜单（2026-10-10）
+
+### 9.1 Doubao 用户为什么拉低 Retail
+
+同一题、同一 trial 配对比较（第 8 节两组）：Airline 0.810 → 0.780，差 0.03 ± 0.03，不显著；Retail 0.851 →
+0.649，差 0.20 ± 0.03（约 7σ），62 题变差、11 题变好。Retail 失败里 DB 不对的从 43 条增到 106 条，只挂 NL 断言的从 4 条增到
+9 条， 失败的 `stop_reason` 都是 `user_stop`。NL judge
+和用户绑定同一模型（`examples/tau2/agent.py:293-301`），最多解释约 1pp。
+
+精读 Doubao Retail 失败。候选条件：最后一条用户消息带 `###STOP###` 且含确认词，上一条 agent 消息在请求确认，至少一个 gold
+写操作没执行。共 90 条（DeepSeek 同条件 20 条，全部失败），人工逐条读 42 条，其余 48 条用脚本核对 agent 的确认 消息是否已带齐 gold
+写操作的全部参数，并抽查 27 条一致：
+
+| 类别                                                                             | 条数 | DeepSeek 同 trial 通过 |
+| -------------------------------------------------------------------------------- | ---- | ---------------------- |
+| 用户提前结束：agent 已按 policy 给出完整、正确的确认，用户说 yes 的同一句就 STOP | 79   | 66                     |
+| agent 在 STOP 前已出错（错的退款方式、换成同一件商品、选错卡）                   | 7    | 4                      |
+| 用户自己偏离任务说明（选了 gold 以外的颜色/型号）                                | 4    | 1                      |
+| 用户合理结束 / agent 确认方式不当                                                | 0    | –                      |
+
+用户提前结束能解释 Retail 下降中的 14.5–17.4pp（66/456 到 79/455；补上写操作后仍可能在别的检查上失败，所以 17.4 是上界）。
+例：`retail:6:trial1`，agent 列出 item、新 item、支付方式并请用户回复 yes，用户回 "Yes, I confirm I want to
+proceed with this exchange. ###STOP###"；`retail:109:trial1` 用户确认第 1 步就结束，另两个写操作没开始。
+
+这是 Doubao 违反官方用户指令，不是 agent 的错：文本版
+`data/tau2/user_simulator/simulation_guidelines.md:13-14` 要求 "continue the conversation
+until the task is complete"，目标满足才发 `###STOP###`；agent 先确认再写是 retail `policy.md:16`
+的要求。语音版 guideline 多一句 "Agreeing to an action is not the same as the action being
+completed" （`simulation_guidelines_voice.md:42`），文本版没有，措辞有歧义。DeepSeek 在同一 prompt 下也犯 20
+次，Doubao 约是它的 4.5 倍。
+
+对训练的影响：训练 reward 来自同一个用户模拟器。换 Doubao 训练时，这类 episode 会把正确的确认行为记成 0 分。
+
+### 9.2 与 Recuris 的差距
+
+Recuris Table 1 里 Qwen3.5-4B 的 68.0 / 75.3 是不加 harness 的基线（stock
+`llm_agent`，`README.md:71-73`）；+Recuris 是 68.3 / 79.0。他们的 tau2 是上游 `8ebb749` 加
+`third_party/tau2/recuris.patch`：`llm_agent.py`（含 prompt）、 `user_simulator.py`、NL/action
+evaluator、retail/airline environment 和我们 pinned 的 b7ea907 逐字节相同，用户 guideline 和数据 `diff`
+为空；口径同为 base 全量、4 trials、max_steps 200、max_errors 10、失败 episode 排除。
+
+| 我们的用户       | 领域    | 我们 | 按题 bootstrap 95% | Recuris | 差    |
+| ---------------- | ------- | ---- | ------------------ | ------- | ----- |
+| Doubao 2.1 Turbo | Retail  | 65.1 | \[59.2, 70.8\]     | 68.0    | −2.9  |
+| Doubao 2.1 Turbo | Airline | 78.3 | \[68.8, 87.0\]     | 75.3    | +3.0  |
+| DeepSeek-Flash   | Retail  | 85.1 | \[80.5, 89.3\]     | 68.0    | +17.1 |
+| DeepSeek-Flash   | Airline | 81.0 | \[72.0, 89.5\]     | 75.3    | +5.7  |
+
+结论：两边都用 Doubao 时差距在误差内，看不出谁高；我们"偏高"只发生在 DeepSeek 用户的 Retail，原因是 9.1 的用户行为差异。
+剩余不确定：Doubao 2.0 Pro（Recuris）与 2.1 Turbo（我们）的差别无法复现；Recuris 没公开 4B 的部署参数（推理框架、tool
+parser、thinking）。
+
+### 9.3 Recuris 的 Mode A 与 terminal gate
+
+- \*\*是什么。\*\*Mode A 指"用户的确认里带着 `###STOP###`，之后没有 agent 回合"，也就是 9.1 的模式（RT2
+  `orchestrator.py:303`）。代码只在这一处定义它。
+- **怎么处理。**`TAU2_GATE_TERM=1` 时，在 `USER_STOP` 之后、`_finalize()`
+  之前检查：全程没执行过写工具，且任意一条用户消息命中 确认词正则（yes / sure / go ahead / confirm / ok / perfect
+  等）。命中就往轨迹末尾追加一条 `role="user"` 的
+  `[SYSTEM CHECK - not from the customer] ... execute the confirmed change now` 消息，让
+  agent 再跑最多 4 轮并真实执行工具。 用户的 STOP 不删不改，`termination_reason` 仍是
+  `USER_STOP`；评分重放整条轨迹，所以补执行的写操作会计入 DB 分。 变体 `_V5` 处理部分执行，`_A2` 看 agent 是否在请求确认，`_WM` 看
+  Recuris agent 的待办账本。开关默认全关。
+- \*\*解决了没有。\*\*仓库里没有可复核的效果数据：唯一的数字是代码注释里的自述（在 977 条 retail 仿真上调参，对通过的仿真触发 2%、失败的
+  47%），没有对应的结果文件或日志。从正则看有明显的误报（开场 "Yes, I need help"、告别 "Perfect, thanks"、 否定句 "that's
+  not correct" 都会命中，可能把应当不写的任务强行写坏）和漏报（确认措辞不在词表里；已有任意写操作时默认路径
+  直接跳过）。它改变了评分对象（多了一条伪用户消息和用户看不到的 agent 回合），结果和官方 `tau2 run` 不可比。
+- \*\*发表的 68.0 / 75.3 开了没有。\*\*base config 和 README 命令三个开关都是开的，但 `TAU2_GATE_TERM_WM=1` 时
+  gate 需要 agent 实现 `wm_pending_lines`，`llm_agent` 没有，直接返回。所以这一行名义上开、实际没生效；+Recuris
+  那一行大概率生效。发表运行的 参数文件不在仓库里，这是按配置推断。
+
+我们不移植这个 gate：它不是官方行为。要在官方口径下避免 Mode A，只能在用户侧（换用户模拟器）或 policy 侧解决。
+
+### 9.4 官方榜单
+
+榜单数据在 pinned clone 的 `web/leaderboard/public/submissions/`（线上页面从 S3 拉同样的 JSON；本机连不上
+taubench.com，线上内容没有直接核对）。当前 standard 行由 Sierra 自跑：tau2 1.0.1（即 b7ea907）、用户 gpt-5.2
+（reasoning low）、NL judge 默认 gpt-4.1、base split、至少 4 trials、max_steps 200；pass^1 与我们的
+mean@4 同口径。
+
+| 模型（standard 行）      | Airline pass^1 | Retail pass^1 |
+| ------------------------ | -------------- | ------------- |
+| GPT-5.2 (high)           | 83.0           | 81.6          |
+| Claude Opus 4.5          | 84.0           | 79.6          |
+| Gemini 3 Flash           | 82.5           | 76.8          |
+| GLM-5 think              | 82.5           | 73.7          |
+| Gemini 3 Pro             | 80.5           | 75.9          |
+| Qwen3.5-397B-A17B think  | 81.5           | 84.4          |
+| Claude Sonnet 4.5        | 72.0           | 72.4          |
+| GPT-5.2 (reasoning none) | 52.5           | 75.0          |
+
+- "榜单上 Retail 普遍高于 Airline"只对 Legacy 行成立（16/16，中位数高 16.8pp）。这些是 tau2 0.1.x 或原版 τ-bench，
+  v1.0.0 修了 airline 27 题、retail 26 题（`CHANGELOG.md:175-237`），前端标明不可直接比较。当前 standard 行只有
+  3/8 是 Retail 更高，中位数 Retail 反而低 2.9pp。
+- 所以 Airline > Retail 本身不算倒挂。我们的问题是 Doubao 用户让 Retail 掉了 20pp；DeepSeek 用户下的排序（Retail 更高）
+  和 GPT-5.2 (none)、Qwen3.5-397B 一致。
+- 榜上没有 ≤8B 的模型。4B non-thinking 在 Airline 上 0.81，接近 Opus 4.5 的 84、远高于 GPT-5.2 (none) 的
+  52.5，说明我们的 用户模拟器可能比 gpt-5.2 更好说话。要和榜单对齐，需要用 gpt-5.2（reasoning low）做一次用户。
+
+### 9.5 仍有效的早期核查
+
+- 本地 Recuris checkout 的 Retail/Airline tasks、db、split、policy 与我们哈希一致。
+- 960 条初始 validation 严格离线重放：Airline 全部一致；Retail 5 条差异都在需要 NL 的 task 68，没有本地聚合把失败改成成功。
+- 评分覆盖不足的候选（未逐条验证）：Retail 206 条 reward=1 的记录先读订单、后认证；Airline 38 投诉的是延误航班，agent 查的是另一张
+  reservation 仍得 1；Airline 7 的 COMM 金额有歧义。
+- 每个训练 run 只有 4 条预算截断，截断不是失败主因；SAO 长度自适应 GAE 让终局信号衰减约 0.513，不会指数消失。
+- 训练过 train 部分后，base 集分数不是完全 held-out 的泛化结果。MUA-RL、RWML、AReaL-SEA
+  等同类工作的题集和用户模拟器都不同，分数不能直接比。
+- 逐 step 的训练中 validation 表（mean@4 / mean@8）以飞书文档为准。
+
+### 9.6 下一步
+
+1. 用 gpt-5.2（reasoning low）做用户跑一次 base 集，和榜单定标（需要 OpenAI 渠道和费用，需批准）。
+1. 选训练用的用户模拟器前先定：Doubao 的提前结束会把正确行为记 0 分；DeepSeek 也有，频率约 1/4.5。
+1. 把 NL judge 和用户模拟器分开配置（`econfig` 新增 judge 字段，属于配置结构改动，需批准），judge 固定为官方 gpt-4.1 或同一模型。
+
+复现脚本：`scripts/official-runner/fault_user_proxy.py`（PRD 第 6 节的故障注入
+smoke）、`scripts/official-runner/metrics_table.py` （从 `episodes.jsonl` 重算第 8 节的 mean@4 /
+pass@k / pass^k，在仓库根目录运行）。
