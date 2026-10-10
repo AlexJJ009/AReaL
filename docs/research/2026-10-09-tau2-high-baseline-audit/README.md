@@ -674,3 +674,50 @@ DAPO。下表的结论来自代码，不是文档：
 1. 训练使用 fixed 变体（用户决定）。两个变体的评测都要报。
 1. 在两个变体上各跑一次 step 0 评测，结果见 12.6。
 1. 按第 11 节启动 critic、SAO 和 GRPO，需要另行批准。
+
+### 12.6 两个变体的 step 0 评测（2026-10-10）
+
+配置与第 8 节相同：未训练的 Qwen3.5-4B，base 集 164 题，每题 4 次，policy 和 DeepSeek-Flash 用户都是 temperature
+0。代码是 `1d14d8dc`，从一个单独固定在这个提交的 worktree 运行。两个变体先后在同一台 8 卡机上跑完，各用约 26 分钟和 31 分钟。
+
+| 变体     | 领域 / 划分   | 题数 | 排除 | mean@4 = pass^1 | pass^2 | pass^4 |
+| -------- | ------------- | ---- | ---- | --------------- | ------ | ------ |
+| official | 合计          | 164  | 0    | 0.808           | 0.705  | 0.561  |
+| official | Airline       | 50   | 0    | 0.780           | 0.710  | 0.620  |
+| official | Airline train | 30   | 0    | 0.775           | 0.717  | 0.667  |
+| official | Airline test  | 20   | 0    | 0.787           | 0.700  | 0.550  |
+| official | Retail        | 114  | 0    | 0.820           | 0.703  | 0.535  |
+| official | Retail train  | 74   | 0    | 0.848           | 0.739  | 0.568  |
+| official | Retail test   | 40   | 0    | 0.769           | 0.637  | 0.475  |
+| fixed    | 合计          | 164  | 1    | 0.690           | 0.571  | 0.460  |
+| fixed    | Airline       | 50   | 1    | 0.428           | 0.297  | 0.224  |
+| fixed    | Airline train | 30   | 1    | 0.364           | 0.228  | 0.138  |
+| fixed    | Airline test  | 20   | 0    | 0.525           | 0.400  | 0.350  |
+| fixed    | Retail        | 114  | 0    | 0.805           | 0.692  | 0.561  |
+| fixed    | Retail train  | 74   | 0    | 0.845           | 0.750  | 0.635  |
+| fixed    | Retail test   | 40   | 0    | 0.731           | 0.583  | 0.425  |
+
+fixed 排除了 1 条 episode，`airline:14:trial1`：4 次尝试都超过了 32K 上下文。它所在题的 pass^4 只按 3 次有效 trial
+无法计算，所以 Airline 的 pass^4 只在 49 题上算。
+
+**fixed 的下降几乎全在 Airline，主要来自转人工规则**：
+
+- Airline 从 0.780 降到 0.428。fixed 运行中，转人工规则之前的分数是 0.744，规则把 199 条 episode 里 63 条原本成功的记为
+  0，扣了 31.7pp。剩下约 3.6pp 是 #411 新增的 NL 断言计分，这个量与下面的运行间噪声同级，不能单独确认。
+- Retail 几乎不变（0.820 → 0.805）。转人工规则扣了 17 条成功（3.7pp），规则之前的分数是 0.842，高于 official。
+- 这和 10.3 的估计（Airline 约 30pp 来自转人工）一致。也就是说，修复后这个 4B 模型的 Airline 真实水平约为 0.43，Airline
+  train 只有 0.36。
+
+**训练信号的变化**：Airline train 的 30 题从 0.775 降到 0.364，GRPO 组内会出现更多有对比的组，训练有更多可学的东西。Retail
+train 基本不变。
+
+**同一配置两次运行的差异**：
+
+- official 的 0.808 比 10-09 同配置的 0.838 低 3.0pp。按题配对 bootstrap 的 95% 区间是 \[−5.9,
+  −0.3\]pp（Airline \[−8.0, +1.5\]，Retail \[−6.4, +0.4\]）。
+- 两次之间评测路径的代码没有改动：只增加了只对 fixed 生效的转人工规则、只对训练生效的超时处理，以及变体校验。
+- 164 题中有 64 题的 4 次平均分变了。temperature 0 仍然不是确定的：SGLang 的批处理和 DeepSeek API 都会引入差异。
+- 所以同一 checkpoint 重测本身就有约 3pp 的波动，与 3.1 节中两次 step 0 相差 4.58pp 是同一量级。比较训练前后，至少要看 test
+  上的配对差和区间，不能只看点估计。
+
+产物：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-eval-20261010/step0-base-t0-deepseek-{official,fixed}/`。对比脚本：`scripts/official-runner/variant_compare.py`。
