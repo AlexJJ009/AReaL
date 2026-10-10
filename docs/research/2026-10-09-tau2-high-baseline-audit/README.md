@@ -322,7 +322,9 @@ mean@4 同口径。
 - 960 条初始 validation 严格离线重放：Airline 全部一致；Retail 5 条差异都在需要 NL 的 task 68，没有本地聚合把失败改成成功。
 - 评分覆盖不足的候选（未逐条验证）：Retail 206 条 reward=1 的记录先读订单、后认证；Airline 38 投诉的是延误航班，agent 查的是另一张
   reservation 仍得 1；Airline 7 的 COMM 金额有歧义。
-- 每个训练 run 只有 4 条预算截断，截断不是失败主因；SAO 长度自适应 GAE 让终局信号衰减约 0.513，不会指数消失。
+- 每个训练 run 只有 4 条 episode 触到上下文或步数上限，这不是失败主因。注意这不是单次回复 4096 上限的截断：上一轮 GRPO 有 109/3088 条
+  episode（Airline 12%）至少一次回复被 4096 截断，SAO 是 117/3296（Airline 17%）。抽查 119
+  条被截的回复，都是被截断的长推理，不是重复循环。SAO 长度自适应 GAE 让终局信号衰减约 0.513，不会指数消失。
 - 训练过 train 部分后，base 集分数不是完全 held-out 的泛化结果。MUA-RL、RWML、AReaL-SEA
   等同类工作的题集和用户模拟器都不同，分数不能直接比。
 - 逐 step 的训练中 validation 表（mean@4 / mean@8）以飞书文档为准。
@@ -445,6 +447,52 @@ NL 断言是 "Agent should refuse to proceed with the cancellation"。在这类"
 | 评测时附报一个去掉转人工的视图 | 转人工假阳性                    | 航空约 30                         | 在官方指标之外，报"不含转人工成功的 pass^1"，用于判断训练是否只是学会了转人工                   | 不改官方指标                  |
 | benchmark 本身                 | gold 不可行、歧义、环境 bug     | 1.5–3.5                           | 不修，作为固定的上限损失                                                                        | —                             |
 | infra                          | Ark 欠费；32K 边缘超限          | 排除 2 条                         | Ark 充值并换 key；32K 不改                                                                      | —                             |
+
+### 10.5 官方和社区是否已经修过（2026-10-10 调研）
+
+**官方没有修。**
+
+- 我们 pin 的 `b7ea907` 与 2026-10-10 的 main 相比，`src` 和 `data` 的 diff 为空。这一条是调研 agent clone
+  后 diff 得到的，我没有独立复核。
+- Airline 和 Retail 的 `tasks.json` 只在 v1.0.0 改过一次，即官方的
+  [τ³ task fixes](https://taubench.com/blog/tau3-task-fixes.html)（Airline 27 题、Retail 26
+  题，来自 Amazon 的 τ-Bench Verified），这批修复已经包含在 pin 里。
+- Airline 的 `reward_basis` 从来没有包含 NL_ASSERTION。维护者在
+  [#224](https://github.com/sierra-research/tau2-bench/issues/224)
+  表示会处理，[RFC #129](https://github.com/sierra-research/tau2-bench/issues/129) 计划让
+  no-action agent 得 0 分，两者都没有实现。
+
+**社区修复**：以下 PR 全部 open，未合并。
+
+| 来源                                                                               | 修什么                                                                                       | 覆盖 10.2 / 10.3 的哪项  | 核实情况                                                                        |
+| ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------- |
+| [PR #411](https://github.com/sierra-research/tau2-bench/pull/411)                  | Airline 23 道不写 DB 的拒绝题改为 `[DB, NL_ASSERTION]`，按实际 criteria 修剪 Retail 的 basis | 转人工假阳性，间接覆盖   | 改动已读；断言里没写"不得转人工"，judge 能否拦住没人测过                        |
+| [PR #322](https://github.com/sierra-research/tau2-bench/pull/322)                  | `modify_pending_order_items` 按每个 item 自己的 variant 写价格                               | retail:100 环境 bug      | 本地验证：打补丁后两种顺序 hash 相同、价格正确                                  |
+| [PR #571](https://github.com/sierra-research/tau2-bench/pull/571)                  | retail:105 换成礼品卡付得起的商品；删去 retail:64 中执行不了的一步                           | retail:105、retail:64    | 本地验证：原 gold 执行抛错，新 gold 执行成功                                    |
+| [PR #580](https://github.com/sierra-research/tau2-bench/pull/580)                  | gold 的写操作执行抛错时，不再给 DB=1                                                         | 防止同类 gold 不可行的题 | 改动已读                                                                        |
+| [KnowWhenToHandOff](https://huggingface.co/JaspinXu/KnowWhenToHandOff-Qwen3-4B-R2) | 训练 reward 对不必要的转人工 −0.5、漏转 −1.0，基于 tau2 train split                          | 转人工（只改训练）       | 只读了 model card：Qwen3-4B 过度转人工从 46% 降到 10%，成功率持平；代码仓库 404 |
+| [ABC](https://arxiv.org/abs/2507.02825) patch                                      | 原版 tau-bench：不写 DB 的题要求调用指定的读工具                                             | do-nothing agent         | 没有移植到 tau2；拦不住"先读再转人工"                                           |
+
+Amazon 的 [tau2-bench-verified](https://github.com/amazon-agi/tau2-bench-verified) 比我们的
+pin 旧，内容已经被官方吸收。AGI-Eval 的
+[tau2-bench-revised](https://github.com/AGI-Eval-Official/tau2-bench-revised) 只改了用户
+prompt。两者都没有修转人工问题。
+
+**没有任何来源修过的**：
+
+- 评测端针对转人工的直接规则；
+- airline:7 的金额歧义（只有 issue
+  [#495](https://github.com/sierra-research/tau2-bench/issues/495)）；
+- retail:38 的取消原因、retail:60 的支付方式、retail:110 的空操作断言；
+- Airline `payment_history` 的列表顺序
+  hash（[#514](https://github.com/sierra-research/tau2-bench/issues/514)）。
+
+另外 NL judge 本身有已报告的缺陷，例如
+[#554](https://github.com/sierra-research/tau2-bench/issues/554) 中空回复会被判通过。把
+NL_ASSERTION 放进训练 reward，这些缺陷会直接变成 reward 噪声。
+
+**转人工规则的边界很清楚**：gold 动作含 `transfer_to_human_agents` 的只有 Airline 1 题（13）和 Retail 4
+题（10、12、26、50）。Airline 有 23 题、Retail 有 7 题没有 gold 写操作。
 
 分类脚本和逐条结果：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/audits/tau2-failure-taxonomy-20261010/`。其中
 `auto.json` 的 `final` 字段是逐条分类，`table.py` 的 `MAN` 字典记录精读时的人工改判。
