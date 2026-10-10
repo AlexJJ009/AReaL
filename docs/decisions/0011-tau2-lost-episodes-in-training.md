@@ -36,7 +36,7 @@ without silently changing which tasks an epoch covers?
   close to NeMo-RL, SkyRL and upstream AReaL `min_usable_group_size`.
 
 The 2026-10-10 survey in
-[audit §12.4](../research/2026-10-09-tau2-high-baseline-audit/README.md) weighs these:
+[audit §12.3](../research/2026-10-09-tau2-high-baseline-audit/README.md) weighs these:
 
 - With two survivors and a binary reward, the advantage is either 0 or ±1.
 - Losing six of eight members signals a broken task, and a floor of 2 hides that.

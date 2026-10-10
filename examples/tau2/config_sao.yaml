@@ -1,8 +1,9 @@
 # Full τ² SAO policy recipe.
 #
-# Domain episode budgets are per epoch. The default recipe schedules
-# 240 airline + 592 retail = 832 episodes per epoch, then runs two epochs for
-# 1664 total episodes and 26 optimizer updates at batch size 64.
+# Domain episode budgets are per epoch and match GRPO's 8 episodes per train
+# task on the fixed variant: 30 airline and 69 retail tasks schedule
+# 240 airline + 552 retail = 792 episodes per epoch. Two epochs give 1584
+# total episodes and 26 optimizer updates at batch size 64.
 defaults:
   - config_grpo
   - _self_
@@ -12,10 +13,10 @@ trial_name: ${oc.env:TAU2_TRIAL_NAME}
 enable_offload: true
 algorithm: sao
 train_batch_episodes: 64
-effective_episodes: 1664
+effective_episodes: 1584
 domain_effective_episodes:
   airline: 240
-  retail: 592
+  retail: 552
 
 rollout:
   max_concurrent_rollouts: 64

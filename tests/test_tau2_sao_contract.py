@@ -510,10 +510,10 @@ def test_qualification_configs_resolve_for_all_entrypoints(monkeypatch, tmp_path
                 assert config.train_batch_episodes == 64
                 assert config.train_dataset.batch_size == 64
                 assert config.total_train_epochs == 2
-                assert config.effective_episodes == 1664
+                assert config.effective_episodes == 1584
                 assert config.domain_effective_episodes == {
                     "airline": 240,
-                    "retail": 592,
+                    "retail": 552,
                 }
                 assert config.saver.freq_steps == 5
                 assert config.recover.freq_steps == 5
@@ -530,8 +530,8 @@ def test_qualification_configs_resolve_for_all_entrypoints(monkeypatch, tmp_path
         Tau2PPOConfig,
     )
     config.total_train_steps = 26
-    assert resolve_effective_episodes(config, train_items=832) == 1664
-    assert config.effective_episodes == 1664
+    assert resolve_effective_episodes(config, train_items=792) == 1584
+    assert config.effective_episodes == 1584
 
     config, _ = load_expr_config(
         [
@@ -542,19 +542,19 @@ def test_qualification_configs_resolve_for_all_entrypoints(monkeypatch, tmp_path
         ],
         Tau2PPOConfig,
     )
-    assert resolve_effective_episodes(config, train_items=832) == 64
+    assert resolve_effective_episodes(config, train_items=792) == 64
 
     config, _ = load_expr_config(
         [
             "--config",
             "examples/tau2/config_sao.yaml",
-            "effective_episodes=1664",
+            "effective_episodes=1584",
             "total_train_steps=1",
         ],
         Tau2PPOConfig,
     )
     with pytest.raises(ValueError, match="actual scheduled coverage"):
-        resolve_effective_episodes(config, train_items=832)
+        resolve_effective_episodes(config, train_items=792)
 
     other_domains = {
         "airline": ("retail", "telecom"),
@@ -584,7 +584,7 @@ def test_qualification_configs_resolve_for_all_entrypoints(monkeypatch, tmp_path
     # The SAO recipe no longer budgets Telecom episodes.
     for domain, per_epoch in (
         ("airline", 240),
-        ("retail", 592),
+        ("retail", 552),
     ):
         pruned = tuple(other for other in ("airline", "retail") if other != domain)
         config, _ = load_expr_config(

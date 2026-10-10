@@ -19,34 +19,35 @@ required.
 GRPO uses 4 training GPUs, 3 rollout GPUs, and 1 dedicated checkpoint-evaluation GPU. A
 full training batch is 8 prompts x 8 trajectories = 64 episodes. The last epoch batch
 may be smaller but always retains complete groups of eight. The default is two passes
-over the 104 official airline and retail train tasks (26 updates). Telecom is excluded
-from the default mix: the initial policy already solves every Telecom episode, so it
-adds no GRPO group contrast. Explicit `domains=[...]` overrides still accept it. It uses
-non-thinking, 32768 total context, at most4096 tokens per response, policy temperature1,
-staleness2, recomputed logprobs, decoupled loss, group reward normalization and the
-existing token ratio mask above5. It does not load a critic. Saving, recovery
-checkpoints and dedicated evaluation run every 5 optimizer steps plus the final step
-(`saver`, `recover` and `evaluator` `freq_steps: 5`). The math GRPO recipe used 20
-steps; the τ² train set is small enough (26 updates over two epochs) that 20 would leave
-a single intermediate checkpoint. With `eval_before_train=true`, the initial evaluation
-uses the starting model and consumes the initial evaluator trigger before training;
-step1 does not request an unsaved checkpoint.
+over the 99 airline and retail train tasks of the fixed variant (26 updates; see below).
+Telecom is excluded from the default mix: the initial policy already solves every
+Telecom episode, so it adds no GRPO group contrast. Explicit `domains=[...]` overrides
+still accept it. It uses non-thinking, 32768 total context, at most4096 tokens per
+response, policy temperature1, staleness2, recomputed logprobs, decoupled loss, group
+reward normalization and the existing token ratio mask above5. It does not load a
+critic. Saving, recovery checkpoints and dedicated evaluation run every 5 optimizer
+steps plus the final step (`saver`, `recover` and `evaluator` `freq_steps: 5`). The math
+GRPO recipe used 20 steps; the τ² train set is small enough (26 updates over two epochs)
+that 20 would leave a single intermediate checkpoint. With `eval_before_train=true`, the
+initial evaluation uses the starting model and consumes the initial evaluator trigger
+before training; step1 does not request an unsaved checkpoint.
 
 SAO uses the same 4/3/1 GPU split, one trajectory per prompt, batch64, staleness2,
 TMS-enabled actor/critic colocation, a restored scalar critic from `TAU2_CRITIC_PATH`,
 and frozen critic attention. The mixed formal schedule is explicit in the config: 240
-airline and 592 retail episodes per epoch. Two epochs give 1664 total episodes and 26
-updates. The critic must be trained on the same airline/retail task mix. Single-domain
-SAO entrypoints prune only the unselected domain budget; the SAO recipe has no Telecom
-budget; `train.py` derives `effective_episodes` from the resolved schedule after
-overrides, task limits, epochs and partial `total_train_steps`. SAO saves,
-recovery-checkpoints, and dedicated evaluation run every5 optimizer steps plus the final
-forced checkpoint/evaluation. The SAO policy recipe defaults W&B online; the inherited
-GRPO and critic recipes remain offline by default unless `TAU2_WANDB_MODE` overrides
-them.
+airline and 552 retail episodes per epoch, 8 per train task of the fixed variant (30
+airline, 69 retail). Two epochs give 1584 total episodes and 26 updates. The critic must
+be trained on the same airline/retail task mix. Single-domain SAO entrypoints prune only
+the unselected domain budget; the SAO recipe has no Telecom budget; `train.py` derives
+`effective_episodes` from the resolved schedule after overrides, task limits, epochs and
+partial `total_train_steps`. SAO saves, recovery-checkpoints, and dedicated evaluation
+run every5 optimizer steps plus the final forced checkpoint/evaluation. The SAO policy
+recipe defaults W&B online; the inherited GRPO and critic recipes remain offline by
+default unless `TAU2_WANDB_MODE` overrides them.
 
-`experiment_mode=tune` selects83train/21dev, stratified by task and domain with seed42.
-`experiment_mode=formal` trains on 104 official train and evaluates 60 official test
+Training uses the `fixed` benchmark variant (below). `experiment_mode=tune` selects 79
+train/20 dev from its train pool, stratified by task and domain with seed 42.
+`experiment_mode=formal` trains on its 99 train tasks and evaluates 60 official test
 tasks (20 airline, 40 retail), four repeats each, with fixed settings; test results
 never select a checkpoint. Both the dedicated evaluator and in-training validation run
 through `examples/tau2/official_runner.py`, which follows the official `tau2 run`: an
@@ -84,14 +85,14 @@ writes one JSON record under `<output>/trajectories/<source_id>/`. Training roll
 write theirs under `<log_path>/tau2-trajectories/rollout/`, and in-training validation
 under `<log_path>/tau2-trajectories/eval-<ns>/`.
 
-Critic formal training uses the 104 official airline/retail train tasks and fixed
-official test60 trajectories. Tuning uses83train/21dev (24/59 train and6/15dev). Each of
-two epochs samples a fresh episode for each training task, in the same task order and
-batch membership. Each batch waits for its complete ordered results, then updates the
-critic once. Batch16 retains the tail: formal has208real training episodes, 14updates
-and an8-task tail; tune has166episodes,12updates and a3-task tail. The actor remains
-fixed. Physical tail replication preserves equal weighting and is not counted as
-additional sampling.
+Critic formal training uses the 99 fixed-variant airline/retail train tasks and fixed
+official test60 trajectories. Tuning uses 79 train/20 dev (24/55 train and 6/14 dev).
+Each of two epochs samples a fresh episode for each training task, in the same task
+order and batch membership. Each batch waits for its complete ordered results, then
+updates the critic once. Batch16 retains the tail: formal has 198 real training
+episodes, 14 updates and a 3-task tail; tune has 158 episodes, 10 updates and a 15-task
+tail. The actor remains fixed. Physical tail replication preserves equal weighting and
+is not counted as additional sampling.
 
 Validation trajectories are collected once and reused at step0, every5steps and final;
 checkpoints are saved every5steps and final. Formal test metrics never select a
@@ -155,10 +156,23 @@ tau2-compatible LiteLLM/Uvicorn overrides. It uses the trusted-host
 Any exception replays the episode from a fresh environment and proxy session, at most
 three more times, 1 s apart (`infra_retries: 3`, the official `tau2 run` policy).
 Request-level provider retries remain separate. Scored task failures are not retried. In
-training, an episode whose retries are exhausted is rejected, and an incomplete GRPO
-group still aborts fixed-dataset training; in evaluation it is excluded and counted.
-Abandoned attempts never enter successful exports. See
-[ADR 0009](../../docs/decisions/0009-official-tau2-runner-semantics.md).
+training, an episode whose retries are exhausted is dropped from its group. A group
+keeps training on at least `min_usable_group_size` survivors (default half the group);
+otherwise its task replays once at the end of the epoch, and more than
+`max_skipped_tasks_per_epoch` tasks that fail twice abort training. In evaluation the
+episode is excluded and counted. Abandoned attempts never enter successful exports. See
+[ADR 0009](../../docs/decisions/0009-official-tau2-runner-semantics.md) and
+[ADR 0011](../../docs/decisions/0011-tau2-lost-episodes-in-training.md).
+
+`econfig.benchmark_variant` selects the task data and scoring
+([ADR 0010](../../docs/decisions/0010-tau2-official-and-fixed-benchmark-variants.md)).
+`official` is tau2-bench `b7ea907` unchanged. `fixed` applies upstream PRs #411, #571
+and #322, our Retail task patches, and a transfer rule, all listed in
+`benchmark_fixes.json`; it also leaves the five Retail train tasks that duplicate a test
+task out of training. Build its data directory with `scripts/tau2/build_fixed_data.py`
+and point `TAU2_DATA_DIR` at it; startup refuses a data directory whose `tasks.json`
+digests do not match the variant. Training runs pass `econfig.benchmark_variant=fixed`;
+the configs default to `official`.
 
 ## Design decisions
 
