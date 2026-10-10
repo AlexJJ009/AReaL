@@ -264,16 +264,15 @@ def test_official_metrics_excludes_infra_errors_and_matches_pass_hat_k():
     assert metrics["infra_excluded_episodes"] == 1
     assert metrics["infra_excluded_by_type"] == {"ValueError": 1}
     assert metrics["avg_reward"] == pytest.approx(5 / 8)
-    # Task c has two evaluated trials, so official clips k to 2.
+    # Only k in (1, 2, 4) is reported, and never above repeats.
     assert sorted(metrics["pass_hat_k"]) == [1, 2]
+    assert metrics["pass_hat_k_tasks"] == {1: 3, 2: 3}
     for k in (1, 2):
         expected = (pass_hat_k(3, 2, k) + pass_hat_k(3, 1, k) + pass_hat_k(2, 2, k)) / 3
         assert metrics["pass_hat_k"][k] == pytest.approx(expected)
 
 
-def test_official_metrics_reports_pass_at_k_and_mean_at_k_over_tasks():
-    from itertools import combinations
-
+def test_official_metrics_reports_mean_and_pass_hat_1_2_4_over_eligible_tasks():
     def record(task_id, score):
         return {
             "domain": "retail",
@@ -287,14 +286,15 @@ def test_official_metrics_reports_pass_at_k_and_mean_at_k_over_tasks():
 
     metrics = official_runner.official_metrics(records, repeats=4)["overall"]
 
-    # Clipped to the fewest trials of any task, like pass^k.
-    assert sorted(metrics["pass_at_k"]) == [1, 2, 3]
-    for k in (1, 2, 3):
-        expected = sum(
-            sum(any(c) for c in combinations(scores, k))
-            / len(list(combinations(scores, k)))
-            for scores in trials.values()
-        ) / len(trials)
-        assert metrics["pass_at_k"][k] == pytest.approx(expected)
+    assert "pass_at_k" not in metrics
+    assert sorted(metrics["pass_hat_k"]) == [1, 2, 4]
+    # Task c lost a trial, so pass^4 averages over the two 4-trial tasks only.
+    assert metrics["tasks"] == 3
+    assert metrics["pass_hat_k_tasks"] == {1: 3, 2: 3, 4: 2}
+    assert metrics["pass_hat_k"][4] == pytest.approx(
+        (pass_hat_k(4, 1, 4) + pass_hat_k(4, 0, 4)) / 2
+    )
+    expected = (pass_hat_k(4, 1, 2) + pass_hat_k(4, 0, 2) + pass_hat_k(3, 2, 2)) / 3
+    assert metrics["pass_hat_k"][2] == pytest.approx(expected)
     # Per-task mean, then mean over tasks (not the pooled episode mean 3/11).
     assert metrics["mean_at_k"] == pytest.approx((1 / 4 + 0 + 2 / 3) / 3)

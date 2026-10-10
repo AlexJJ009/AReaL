@@ -13,7 +13,10 @@ episode, so offline and in-training evaluation share one definition:
   episode becomes an ``INFRASTRUCTURE_ERROR`` placeholder; the run continues.
 - ``tau2/metrics/agent_metrics.py``: infrastructure errors are excluded before
   ``avg_reward`` and ``pass^k`` are computed, and their count is reported.
-  ``pass@k`` and ``mean@k`` are reported alongside under the same exclusion.
+  Reported are ``mean@n`` and ``pass^k`` for ``REPORTED_PASS_HAT_KS`` under the
+  same exclusion. Official clips ``k`` to the fewest trials of any task; here
+  each ``k`` averages over the tasks with at least ``k`` evaluated trials, which
+  is identical when nothing is excluded, and the count is reported otherwise.
 
 AReaL only delivers results that carry policy tokens. An episode the user ended
 before any policy call, or one whose retries were exhausted, comes back as a
@@ -42,6 +45,7 @@ from areal.infra.rpc.rtensor import RTensor
 WORKFLOW = "examples.tau2.agent.Tau2AgentWorkflow"
 COMPLETED = "completed"
 INFRASTRUCTURE_ERROR = TerminationReason.INFRASTRUCTURE_ERROR.value
+REPORTED_PASS_HAT_KS = (1, 2, 4)
 
 
 def expand_trials(tasks: list[dict[str, Any]], repeats: int) -> list[dict[str, Any]]:
@@ -275,28 +279,21 @@ def _successes_by_task(records: list[dict[str, Any]]) -> list[list[bool]]:
     return list(by_task.values())
 
 
-def _task_average(
-    records: list[dict[str, Any]],
-    repeats: int,
-    per_task: Callable[[int, int, int], float],
-) -> dict[int, float]:
+def _pass_hat_ks(
+    records: list[dict[str, Any]], repeats: int
+) -> tuple[dict[int, float], dict[int, int]]:
+    """Official ``pass^k`` per reported k, and how many tasks each k covers."""
+
     tasks = _successes_by_task(records)
-    if not tasks:
-        return {}
-    # Official clips k to the fewest evaluated trials of any task.
-    max_k = min(repeats, min(len(v) for v in tasks))
-    return {
-        k: sum(per_task(len(v), sum(v), k) for v in tasks) / len(tasks)
-        for k in range(1, max_k + 1)
-    }
-
-
-def pass_at_k(num_trials: int, success_count: int, k: int) -> float:
-    """Unbiased probability that at least one of k trials succeeds (Chen et al. 2021)."""
-
-    if num_trials < k:
-        raise ValueError(f"Number of trials {num_trials} is less than k {k}.")
-    return 1.0 - math.comb(num_trials - success_count, k) / math.comb(num_trials, k)
+    values: dict[int, float] = {}
+    covered: dict[int, int] = {}
+    for k in REPORTED_PASS_HAT_KS:
+        eligible = [v for v in tasks if len(v) >= k]
+        if k > repeats or not eligible:
+            continue
+        values[k] = sum(pass_hat_k(len(v), sum(v), k) for v in eligible) / len(eligible)
+        covered[k] = len(eligible)
+    return values, covered
 
 
 def _mean_at_k(records: list[dict[str, Any]]) -> float:
@@ -316,6 +313,7 @@ def official_metrics(records: list[dict[str, Any]], *, repeats: int) -> dict[str
         reasons: dict[str, int] = defaultdict(int)
         for record in excluded:
             reasons[str(record.get("error_type"))] += 1
+        pass_hat, pass_hat_tasks = _pass_hat_ks(evaluated, repeats)
         return {
             "episodes": len(subset),
             "evaluated_episodes": len(evaluated),
@@ -323,8 +321,9 @@ def official_metrics(records: list[dict[str, Any]], *, repeats: int) -> dict[str
             "infra_excluded_by_type": dict(reasons),
             "policy_free_episodes": sum(r.get("policy_turns") == 0 for r in evaluated),
             "avg_reward": sum(scores) / len(scores) if scores else 0.0,
-            "pass_hat_k": _task_average(evaluated, repeats, pass_hat_k),
-            "pass_at_k": _task_average(evaluated, repeats, pass_at_k),
+            "tasks": len(_successes_by_task(evaluated)),
+            "pass_hat_k": pass_hat,
+            "pass_hat_k_tasks": pass_hat_tasks,
             "mean_at_k": _mean_at_k(evaluated),
         }
 

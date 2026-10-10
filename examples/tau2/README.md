@@ -52,10 +52,11 @@ never select a checkpoint. Both the dedicated evaluator and in-training validati
 through `examples/tau2/official_runner.py`, which follows the official `tau2 run`: an
 episode that still fails after the official retries is `infrastructure_error`, excluded
 from the metrics, and counted (`infra_excluded_episodes`); the run still completes.
-Summaries report the official `avg_reward` and `pass^k` (all `k` trials succeed) next to
-`pass1_mean`, `pass@k` (at least one of `k` trials succeeds) and `mean@<repeats>`
-(per-task success rate averaged over tasks), plus `policy_free_episodes` (scored
-episodes the user ended before any policy call).
+Summaries report `mean@<repeats>` (per-task success rate averaged over tasks) and the
+official `pass^k` (all `k` trials succeed) for `k` in 1, 2 and 4, next to `avg_reward`,
+`pass1_mean` and `policy_free_episodes` (scored episodes the user ended before any
+policy call). Each `pass^k` averages over tasks with at least `k` evaluated trials;
+`pass^k_tasks` appears when exclusions leave fewer tasks than the run planned.
 
 Policy training uses temperature 1; new checkpoint evaluations use temperature 0. The
 standalone `scripts/tau2/evaluate.py` entrypoint defaults to `--temperature 0` even when

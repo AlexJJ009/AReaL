@@ -57,12 +57,14 @@ Official semantics adopted:
 - **Scoring.** `AGENT_STOP` and `USER_STOP` are scored by the official evaluator. A user
   stop before any policy call is a scored episode, reported as a policy-free episode.
   `TIMEOUT` and `MAX_STEPS` score 0 and stay in the denominator.
-- **Metrics.** `avg_reward` and `pass^k = C(c,k)/C(n,k)` averaged over tasks, with `k`
-  clipped to the fewest evaluated trials of any task, overall and per domain, using the
-  official `pass_hat_k`. The existing `pass1_mean` and per-domain/split views stay. Not
-  official but reported under their own names, on the same evaluated episodes and `k`
-  range: `pass@k = 1 - C(n-c,k)/C(n,k)` (at least one of `k` trials succeeds) and
-  `mean@n` (per-task success rate averaged over tasks).
+- **Metrics.** Every evaluation, offline and in training, reports `mean@n` (per-task
+  success rate averaged over tasks) and `pass^k = C(c,k)/C(n,k)` for `k` in 1, 2 and 4,
+  overall and per domain, using the official `pass_hat_k`, plus `avg_reward`,
+  `pass1_mean` and the per-domain/split views. `pass@k` is not reported (user decision,
+  2026-10-10). One deviation: official clips `k` to the fewest evaluated trials of any
+  task, so a single excluded episode removes `pass^4`; here each `k` averages over the
+  tasks with at least `k` evaluated trials and reports that task count when it is short.
+  With no exclusions both rules give the same number.
 
 AReaL integration:
 
