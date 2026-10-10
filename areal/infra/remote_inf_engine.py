@@ -75,14 +75,21 @@ class GroupedRolloutWorkflow(RolloutWorkflow):
         logger: Logger,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        min_usable_group_size: int = 1,
     ):
         if group_size < 1:
             raise ValueError(f"group_size must be >= 1, got {group_size}")
+        if not 1 <= min_usable_group_size <= group_size:
+            raise ValueError(
+                f"min_usable_group_size must be in [1, {group_size}], "
+                f"got {min_usable_group_size}"
+            )
         self.workflow = workflow
         self.group_size = group_size
         self.logger = logger
         self.reward_normalization = reward_normalization
         self.drop_incomplete_group = drop_incomplete_group
+        self.min_usable_group_size = min_usable_group_size
 
     async def arun_episode(
         self, engine: InferenceEngine, data: dict[str, Any]
@@ -120,6 +127,15 @@ class GroupedRolloutWorkflow(RolloutWorkflow):
 
         # All results None -> return None
         if not valid_results:
+            return None
+        # Too few survivors make the group baseline noise; reject so the
+        # caller can replay the input instead of training on it.
+        if len(valid_results) < self.min_usable_group_size:
+            self.logger.warning(
+                f"GroupedRolloutWorkflow: only {len(valid_results)}/{len(results)} "
+                f"trajectories usable, below min_usable_group_size="
+                f"{self.min_usable_group_size}; rejecting the group."
+            )
             return None
 
         # Some results None -> drop entire group if requested. Reward
@@ -702,6 +718,7 @@ class RemoteInfEngine(InferenceEngine):
         proxy_addr: str | None = None,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        min_usable_group_size: int = 1,
     ) -> RolloutWorkflow:
         resolved: RolloutWorkflow
 
@@ -723,6 +740,7 @@ class RemoteInfEngine(InferenceEngine):
                     self.logger,
                     reward_normalization=reward_normalization,
                     drop_incomplete_group=drop_incomplete_group,
+                    min_usable_group_size=min_usable_group_size,
                 )
             return resolved
 
@@ -820,6 +838,7 @@ class RemoteInfEngine(InferenceEngine):
                 self.logger,
                 reward_normalization=reward_normalization,
                 drop_incomplete_group=drop_incomplete_group,
+                min_usable_group_size=min_usable_group_size,
             )
 
         return resolved
@@ -1209,6 +1228,7 @@ class RemoteInfEngine(InferenceEngine):
         proxy_addr: str | None = None,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        min_usable_group_size: int = 1,
     ) -> int:
         """Submit a request to the inference engine and return immediately.
 
@@ -1251,6 +1271,7 @@ class RemoteInfEngine(InferenceEngine):
             proxy_addr=proxy_addr,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
+            min_usable_group_size=min_usable_group_size,
         )
         resolved_should_accept_fn = self._resolve_should_accept_fn(should_accept_fn)
 

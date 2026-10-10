@@ -506,6 +506,9 @@ class Tau2AgentWorkflow:
         self.infra_retries = infra_retries
         # Fixed pause between episode attempts, as in `tau2 run --retry-delay`.
         self.retry_delay = OFFICIAL_RETRY_DELAY
+        # An episode that still fails after the official retries is lost from its
+        # group (official exclusion), not a failure of the other members.
+        self.reject_exhausted_episode = True
         self.evaluation = evaluation
         self.trajectory_dir = trajectory_dir
         from areal.utils.runtime_audit import write_runtime_audit

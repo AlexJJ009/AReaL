@@ -28,6 +28,11 @@ class FiniteEpochBatcher:
         return batch
 
 
+def group_episode_count(group: dict) -> int:
+    """Trajectories in one rollout group; a group may have lost members."""
+    return int(group["attention_mask"].shape[0])
+
+
 def repeat_groups_for_dispatch(
     groups: list[dict], dp_size: int
 ) -> tuple[list[dict], int]:

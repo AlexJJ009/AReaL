@@ -1008,3 +1008,64 @@ def test_critic_dp4_dispatch_uniformly_replicates_tail_without_dropping_tasks(
     assert [row["task_id"] for row in physical[:n_rows]] == [
         str(index) for index in range(n_rows)
     ]
+
+
+@pytest.mark.parametrize(
+    "failures, budget, outcome",
+    [
+        ({"b": 1}, 0, ["a", "b"]),
+        ({"b": 2}, 1, ["a"]),
+        ({"b": 2}, 0, "abort"),
+    ],
+)
+def test_strict_train_batch_replays_a_rejected_episode_once(failures, budget, outcome):
+    class FakeDataLoader:
+        def __iter__(self):
+            return iter(
+                [
+                    [
+                        {"domain": "airline", "task_id": "a"},
+                        {"domain": "airline", "task_id": "b"},
+                    ]
+                ]
+            )
+
+    class FakeRollout:
+        def __init__(self):
+            self.pending = []
+            self.attempts = {}
+
+        def submit(self, *, data, **kwargs):  # noqa: ARG002
+            self.pending.append(data["task_id"])
+
+        def wait(self, count):
+            rows, self.pending = self.pending[:count], self.pending[count:]
+            results = []
+            for task in rows:
+                self.attempts[task] = self.attempts.get(task, 0) + 1
+                failed = self.attempts[task] <= failures.get(task, 0)
+                results.append(None if failed else {"task_id": task})
+            return results
+
+    trainer = object.__new__(train_critic.Tau2CriticOnlineTrainer)
+    trainer.rollout = FakeRollout()
+    trainer.actor = SimpleNamespace(parallel_strategy=SimpleNamespace(dp_size=1))
+    trainer.config = SimpleNamespace(
+        gconfig=SimpleNamespace(n_samples=1),
+        train_dataset=SimpleNamespace(batch_size=2),
+        max_skipped_tasks_per_epoch=budget,
+    )
+    trainer._tau2_train_epoch = 0
+    trainer._tau2_train_iterator = None
+    trainer._tau2_next_train_step = 0
+    trainer._tau2_skipped = {}
+
+    if outcome == "abort":
+        with pytest.raises(RuntimeError, match="max_skipped_tasks_per_epoch=0"):
+            trainer._strict_prepare_training_batch(FakeDataLoader(), workflow="wf")
+        return
+    groups = trainer._strict_prepare_training_batch(FakeDataLoader(), workflow="wf")
+
+    assert [g["task_id"] for g in groups] == outcome
+    assert trainer.rollout.attempts["b"] == 2
+    assert len(trainer._tau2_skipped.get(0, [])) == 2 - len(outcome)

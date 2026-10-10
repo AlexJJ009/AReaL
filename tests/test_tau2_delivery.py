@@ -202,6 +202,55 @@ async def test_proxy_workflow_retries_transient_episode_from_fresh_wrapper(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reject_exhausted", [False, True])
+async def test_proxy_workflow_exhausted_retries_lose_only_this_member(
+    retry_workflow: OpenAIProxyWorkflow, monkeypatch, reject_exhausted
+):
+    calls = []
+
+    async def _arun_episode(self, engine, data):
+        calls.append(data)
+        raise _TransientEpisodeError("provider down")
+
+    retry_workflow._arun_episode = MethodType(_arun_episode, retry_workflow)
+    monkeypatch.setattr(
+        retry_workflow.agent,
+        "reject_exhausted_episode",
+        reject_exhausted,
+        raising=False,
+    )
+
+    if reject_exhausted:
+        assert await retry_workflow.arun_episode("engine", {"task_id": "x"}) is None
+    else:
+        with pytest.raises(_TransientEpisodeError):
+            await retry_workflow.arun_episode("engine", {"task_id": "x"})
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_proxy_workflow_never_drops_a_deterministic_error(
+    retry_workflow: OpenAIProxyWorkflow, monkeypatch
+):
+    calls = []
+
+    # The deterministic error lands on the last attempt, after a transient one.
+    async def _arun_episode(self, engine, data):
+        calls.append(data)
+        if len(calls) == 1:
+            raise _TransientEpisodeError("provider down")
+        raise _DeterministicEpisodeError("bug")
+
+    retry_workflow._arun_episode = MethodType(_arun_episode, retry_workflow)
+    monkeypatch.setattr(
+        retry_workflow.agent, "reject_exhausted_episode", True, raising=False
+    )
+
+    with pytest.raises(_DeterministicEpisodeError):
+        await retry_workflow.arun_episode("engine", {"task_id": "x"})
+
+
+@pytest.mark.asyncio
 async def test_proxy_export_validation_is_optional_for_default_agents():
     workflow = OpenAIProxyWorkflow(mode="inline", agent=_DefaultAgent())
 
@@ -699,7 +748,7 @@ async def test_proxy_replays_tau2_episode_three_more_times_with_official_delay(
         raise ValueError("UserMessage must have either content or tool_calls")
 
     workflow._arun_episode = MethodType(_arun_episode, workflow)
-    with pytest.raises(ValueError):
-        await workflow.arun_episode("engine", {"task_id": "x"})
+    # Exhausted retries lose this episode from its group (ADR 0011).
+    assert await workflow.arun_episode("engine", {"task_id": "x"}) is None
     assert len(calls) == 4
     assert sleeps == [1.0, 1.0, 1.0]

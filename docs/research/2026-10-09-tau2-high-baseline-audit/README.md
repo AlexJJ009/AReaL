@@ -616,7 +616,9 @@ NL_ASSERTION 放进训练 reward，这些缺陷会直接变成 reward 噪声。
   至少有一次回复被截断（9.5），这一代价已知并接受。
 - **训练墙钟超时**：已改为保留 episode，标记为 truncated，reward 0，不再重跑（ADR 0009 修订）。原来的重跑做法只保留按时跑完的
   episode，会系统性地去掉慢的长轨迹。
-- **组内成员丢失**：没有改代码，方案见 12.4，待批准。
+- **组内成员丢失**：12.4
+  的方案已批准并实现（[ADR 0011](../../decisions/0011-tau2-lost-episodes-in-training.md)），细节见 12.4
+  末尾。
 
 ### 12.4 组内成员丢失：同类框架的做法
 
@@ -654,11 +656,21 @@ DAPO。下表的结论来自代码，不是文档：
 本地 fork 与 upstream 的差别：本地的 `_normalize_group_rewards` 只要组里有一个 None 就丢整组，再加上
 `fail_on_rejection=True`，结果就是训练中止。upstream 已经改为在存活成员上归一化。
 
-这个改动涉及 `areal/infra/workflow_executor.py` 和 `remote_inf_engine.py` 的批次逻辑，按项目规则改之前要先批准。
+**实现**（已获批准，2026-10-10）：
+
+- 训练中，episode 重试用尽后从组里丢掉，不再让整组失败（`reject_exhausted_episode`）。
+- 不足 4 个成员的组被拒绝（`min_usable_group_size`）。
+- 被拒的题在本 epoch 末尾重跑一次；重跑再被拒就记为 skipped。每个 epoch 超过 2 次
+  skipped，训练中止（`max_skipped_tasks_per_epoch`）。
+- critic 每题只有一条 episode，所以在同一步内重跑一次，预算相同。
+- recover 时，等待重跑的题会写进恢复缓冲区。
+- 训练指标新增 `tau2_batch/epoch_deferred_tasks` 和 `tau2_batch/epoch_skipped_tasks`。
+
+还没实现的是第 5 条：按题统计失败率，以及失败与轮数的相关性。
 
 ### 12.5 下一步
 
-1. 批准 12.4 的方案后再实现，否则 GRPO 训练一旦遇到被拒的成员就会中止。
-1. 在 official 和 fixed 两个变体上各跑一次 step 0 评测：base 集，DeepSeek 用户，temperature 0，每题 4 次。
-1. 定下训练用哪个变体，建议用 fixed，否则训练 reward 会奖励转人工。两个变体的评测都要报。
-1. 再按第 11 节启动 critic、SAO 和 GRPO。
+1. 12.4 已实现。
+1. 训练使用 fixed 变体（用户决定）。两个变体的评测都要报。
+1. 在两个变体上各跑一次 step 0 评测，结果见 12.6。
+1. 按第 11 节启动 critic、SAO 和 GRPO，需要另行批准。

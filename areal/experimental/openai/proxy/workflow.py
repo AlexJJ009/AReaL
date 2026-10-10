@@ -198,11 +198,26 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
         retries = getattr(self.agent, "infra_retries", 0)
         should_retry = getattr(self.agent, "should_retry_episode", None)
         retry_delay = getattr(self.agent, "retry_delay", None)
+        # An agent may ask for an episode that exhausted its retries to be lost
+        # (None) instead of failing its whole group.
+        reject_exhausted = getattr(self.agent, "reject_exhausted_episode", False)
         for attempt in range(retries + 1):
             try:
                 return await self._arun_episode(engine, data)
             except Exception as exc:
-                if attempt == retries or should_retry is None or not should_retry(exc):
+                retryable = should_retry is not None and should_retry(exc)
+                if attempt == retries and retryable and reject_exhausted:
+                    logger.warning(
+                        "Episode failed after %d retries; dropping it from its group: %s",
+                        retries,
+                        exc,
+                        exc_info=True,
+                    )
+                    stats_tracker.get(workflow_context.stat_scope()).scalar(
+                        infra_exhausted=1
+                    )
+                    return None
+                if attempt == retries or not retryable:
                     raise
                 logger.warning(
                     "Retrying episode from a fresh session after transient failure (%d/%d)",

@@ -790,15 +790,23 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
                 if wait_count <= 0:
                     continue
             try:
-                arrived = self.wait_results(count=wait_count, timeout=1)
+                arrived = self.wait_results(
+                    count=wait_count, timeout=1, with_task_ids=True
+                )
             except TimeoutError:
                 arrived = []
 
-            for res in arrived:
+            # A generator that can replay rejected inputs keeps finite-epoch
+            # consumption exact: the input runs again at the end of the epoch.
+            resolve = getattr(input_generator, "resolve_result", None)
+            for task_id, res in arrived:
                 is_accepted = res is not None
+                outcome = None if resolve is None else resolve(task_id, is_accepted)
+                if outcome == "deferred":
+                    input_exhausted = False
 
                 if not is_accepted:
-                    if fail_on_rejection:
+                    if fail_on_rejection and outcome is None:
                         raise RuntimeError(
                             "A rollout failed or was rejected; exact dataset consumption "
                             "does not permit replacing or dropping this problem."
@@ -838,6 +846,9 @@ class TaskIdGenerator:
         return task_id
 
 
+logger = logging.getLogger("WorkflowExecutor")
+
+
 class _RecoveryInputGenerator:
     """Yield task inputs while retaining the current item until submission."""
 
@@ -847,6 +858,7 @@ class _RecoveryInputGenerator:
         finite_epoch: bool,
         recovery_buffer: deque[dict[str, Any]],
         task_factory: Callable[[dict[str, Any]], TInput],
+        max_skipped_inputs: int | None = None,
     ):
         self._dataloader = dataloader
         self._finite_epoch = finite_epoch
@@ -854,6 +866,17 @@ class _RecoveryInputGenerator:
         self._task_factory = task_factory
         self._data_iter = None
         self._current: TInput | None = None
+        # Replay of rejected inputs: None keeps rejection fatal to the caller.
+        # Otherwise a rejected input runs once more after the epoch's other
+        # inputs; if that replay is rejected too it is skipped, and more than
+        # ``max_skipped_inputs`` skips in one epoch is an error.
+        self._max_skipped_inputs = max_skipped_inputs
+        self._submitted: dict[int, dict[str, Any]] = {}
+        self._replay_task_ids: set[int] = set()
+        self._next_is_replay = False
+        self.deferred: deque[dict[str, Any]] = deque()
+        self.deferred_count = 0
+        self.skipped: list[dict[str, Any]] = []
 
     def __iter__(self):
         return self
@@ -870,7 +893,14 @@ class _RecoveryInputGenerator:
                 else iter(cycle_dataloader(self._dataloader))
             )
         while not self._recovery_buffer:
-            batch = next(self._data_iter)
+            try:
+                batch = next(self._data_iter)
+            except StopIteration:
+                if not self.deferred:
+                    raise
+                self._recovery_buffer.append(self.deferred.popleft())
+                self._next_is_replay = True
+                break
             self._recovery_buffer.extend(batch)
         self._current = self._task_factory(self._recovery_buffer[0])
         return self._current
@@ -880,8 +910,38 @@ class _RecoveryInputGenerator:
             raise RuntimeError(
                 "Acknowledged an input different from the yielded input."
             )
-        self._recovery_buffer.popleft()
+        item = self._recovery_buffer.popleft()
+        if self._max_skipped_inputs is not None:
+            self._submitted[task_input.task_id] = item
+            if self._next_is_replay:
+                self._replay_task_ids.add(task_input.task_id)
+        self._next_is_replay = False
         self._current = None
+
+    def resolve_result(self, task_id: int, accepted: bool) -> str | None:
+        """Record a result; return "deferred" or "skipped" for a rejected input."""
+        if self._max_skipped_inputs is None:
+            return None
+        item = self._submitted.pop(task_id, None)
+        replay = task_id in self._replay_task_ids
+        self._replay_task_ids.discard(task_id)
+        if accepted:
+            return None
+        if item is None:
+            raise RuntimeError(f"Rejected task {task_id} has no recorded input.")
+        if not replay:
+            self.deferred.append(item)
+            self.deferred_count += 1
+            logger.warning("Rollout rejected; replaying it at the end of the epoch.")
+            return "deferred"
+        self.skipped.append(item)
+        if len(self.skipped) > self._max_skipped_inputs:
+            raise RuntimeError(
+                f"{len(self.skipped)} inputs were rejected twice this epoch, more "
+                f"than max_skipped_inputs={self._max_skipped_inputs}: {self.skipped}"
+            )
+        logger.warning("Replayed rollout rejected again; skipping it: %s", item)
+        return "skipped"
 
 
 class WorkflowExecutor:

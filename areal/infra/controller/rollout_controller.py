@@ -67,6 +67,7 @@ class _RemoteRolloutTaskInput:
     proxy_addr: str | None = None
     reward_normalization: bool = False
     drop_incomplete_group: bool = False
+    min_usable_group_size: int = 1
 
 
 @dataclass
@@ -897,6 +898,7 @@ class RolloutController:
                     proxy_addr=proxy_addr,
                     reward_normalization=pending_task.reward_normalization,
                     drop_incomplete_group=pending_task.drop_incomplete_group,
+                    min_usable_group_size=pending_task.min_usable_group_size,
                 )
 
                 assert task_id == engine_task_id, (task_id, engine_task_id)
@@ -1043,6 +1045,8 @@ class RolloutController:
         drop_incomplete_group: bool = False,
         finite_epoch: bool = False,
         fail_on_rejection: bool = False,
+        min_usable_group_size: int = 1,
+        max_skipped_inputs: int | None = None,
     ) -> list[dict[str, Any]]:
         """Prepare a batch with controlled staleness.
 
@@ -1070,6 +1074,7 @@ class RolloutController:
                     group_size=group_size,
                     reward_normalization=reward_normalization,
                     drop_incomplete_group=drop_incomplete_group,
+                    min_usable_group_size=min_usable_group_size,
                 )
 
             self.data_generator = _RecoveryInputGenerator(
@@ -1077,6 +1082,7 @@ class RolloutController:
                 finite_epoch,
                 self._input_recovery_buffer,
                 make_task_input,
+                max_skipped_inputs=max_skipped_inputs,
             )
 
         # Delegate to dispatcher
@@ -1097,6 +1103,10 @@ class RolloutController:
         """Return raw outstanding rollout inputs and the partial batch buffer."""
         state = self.dispatcher.get_input_recovery_state()
         state["buffer"] = list(self._input_recovery_buffer)
+        # Rejected inputs waiting for their end-of-epoch replay are not lost on
+        # recover; they replay once more without the replay mark.
+        generator = getattr(self, "data_generator", None)
+        state["buffer"].extend(getattr(generator, "deferred", ()))
         return state
 
     def load_input_recovery_state(self, state: dict[str, Any] | None) -> None:

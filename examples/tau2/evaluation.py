@@ -13,7 +13,11 @@ from examples.tau2.official_runner import (
 )
 
 from areal.trainer.async_eval import AsyncEvalPPOTrainer
-from areal.trainer.rollout_batch import FiniteEpochBatcher, repeat_groups_for_dispatch
+from areal.trainer.rollout_batch import (
+    FiniteEpochBatcher,
+    group_episode_count,
+    repeat_groups_for_dispatch,
+)
 from areal.utils.stats_logger import StatsLogger
 
 
@@ -50,16 +54,25 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
         )
 
     def _prepare_training_batch(self, prepare, *args, **kwargs):
-        kwargs.update(finite_epoch=True, fail_on_rejection=True)
+        kwargs.update(
+            finite_epoch=True,
+            fail_on_rejection=True,
+            min_usable_group_size=self.config.resolve_min_usable_group_size(),
+            max_skipped_inputs=self.config.max_skipped_tasks_per_epoch,
+        )
         groups = prepare(*args, **kwargs)
         physical, replicas = repeat_groups_for_dispatch(
             groups, self.actor.parallel_strategy.dp_size
         )
+        generator = getattr(self.rollout, "data_generator", None)
         self._batch_counts = {
             "tau2_batch/real_prompts": len(groups),
-            "tau2_batch/real_episodes": len(groups) * self.config.gconfig.n_samples,
+            # Groups may have lost members after retries (ADR 0011).
+            "tau2_batch/real_episodes": sum(map(group_episode_count, groups)),
             "tau2_batch/physical_prompt_groups": len(physical),
             "tau2_batch/dispatch_replication_factor": replicas,
+            "tau2_batch/epoch_deferred_tasks": getattr(generator, "deferred_count", 0),
+            "tau2_batch/epoch_skipped_tasks": len(getattr(generator, "skipped", ())),
         }
         return physical
 

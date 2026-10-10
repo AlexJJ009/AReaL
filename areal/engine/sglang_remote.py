@@ -580,6 +580,7 @@ class RemoteSGLangEngine(InferenceEngine):
         proxy_addr: str | None = None,
         reward_normalization: bool = False,
         drop_incomplete_group: bool = False,
+        min_usable_group_size: int = 1,
     ) -> int:
         """Submit a request to the inference engine."""
         return self._engine.submit(
@@ -594,6 +595,7 @@ class RemoteSGLangEngine(InferenceEngine):
             proxy_addr=proxy_addr,
             reward_normalization=reward_normalization,
             drop_incomplete_group=drop_incomplete_group,
+            min_usable_group_size=min_usable_group_size,
         )
 
     def wait(

@@ -1,5 +1,6 @@
 """Utilities for Tau2 benchmark training with AReaL."""
 
+import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -140,6 +141,13 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
     critic_rollouts_per_task: int = 1
     # Episode attempts after the first, as `tau2 run --max-retries` (default 3).
     infra_retries: int = 3
+    # A group that lost members after retries trains on the survivors when at
+    # least this many remain (None: half the group, rounded up); a smaller group
+    # is replayed once at the end of the epoch.
+    min_usable_group_size: int | None = None
+    # Inputs whose end-of-epoch replay is rejected again are skipped; more than
+    # this many in one epoch aborts training.
+    max_skipped_tasks_per_epoch: int = 2
     task_limit: int | None = None
 
     def __post_init__(self) -> None:
@@ -154,6 +162,17 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
             raise ValueError("experiment_mode must be qualification, tune or formal")
         if self.infra_retries < 0 or self.critic_rollouts_per_task < 1:
             raise ValueError("infra_retries must be non-negative and rollouts positive")
+        if self.max_skipped_tasks_per_epoch < 0:
+            raise ValueError("max_skipped_tasks_per_epoch must be non-negative")
+        if self.min_usable_group_size is not None and not (
+            1 <= self.min_usable_group_size <= self.gconfig.n_samples
+        ):
+            raise ValueError("min_usable_group_size must be in [1, gconfig.n_samples]")
+
+    def resolve_min_usable_group_size(self) -> int:
+        if self.min_usable_group_size is not None:
+            return self.min_usable_group_size
+        return math.ceil(self.gconfig.n_samples / 2)
 
 
 # Configure loguru logger for tau2-bench package

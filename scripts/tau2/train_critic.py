@@ -43,7 +43,12 @@ from scripts.qualification.critic_pretrain import (
 from areal import PPOTrainer
 from areal.api.cli_args import load_expr_config
 from areal.infra.rpc.rtensor import RTensor
+from areal.utils import logging
 from areal.utils.recover import RecoverInfo
+
+logger = logging.getLogger("RLTrainer")
+# Task ids for in-step replays; disjoint from logical-step task ids.
+_REPLAY_TASK_ID_OFFSET = 1 << 40
 
 
 def _source_file_hashes() -> dict[str, str]:
@@ -1076,6 +1081,7 @@ class Tau2CriticOnlineTrainer(PPOTrainer):
             self.recover_info.last_step_info.epoch if self.recover_info else 0
         )
         self._tau2_train_iterator = None
+        self._tau2_skipped: dict[int, list[dict[str, Any]]] = {}
         self._tau2_next_train_step = (
             self.recover_info.last_step_info.next().global_step
             if self.recover_info
@@ -1127,29 +1133,39 @@ class Tau2CriticOnlineTrainer(PPOTrainer):
         rows = self._next_strict_rows(dataloader)
         logical_step = self._tau2_next_train_step
         task_base = logical_step * self.config.train_dataset.batch_size
-        for offset, row in enumerate(rows):
-            self.rollout.submit(
-                data=row,
-                workflow=workflow,
-                workflow_kwargs=workflow_kwargs or {},
-                should_accept_fn=should_accept_fn,
-                task_id=task_base + offset,
-                group_size=group_size,
-                reward_normalization=reward_normalization,
-                drop_incomplete_group=drop_incomplete_group,
-            )
-        groups = [
-            result
-            for result in self.rollout.wait(count=len(rows))
-            if result is not None
-        ]
-        if len(groups) != len(rows):
-            raise RuntimeError(
-                "Tau2 critic train rollout received incomplete current batch: "
-                f"{len(groups)} results for {len(rows)} inputs"
-            )
-        for row, rollout_row in zip(rows, groups, strict=True):
-            _attach_task_identity(rollout_row, row)
+
+        def run(task_rows: dict[int, dict[str, Any]]) -> dict[int, Any]:
+            for task_id, row in task_rows.items():
+                self.rollout.submit(
+                    data=row,
+                    workflow=workflow,
+                    workflow_kwargs=workflow_kwargs or {},
+                    should_accept_fn=should_accept_fn,
+                    task_id=task_id,
+                    group_size=group_size,
+                    reward_normalization=reward_normalization,
+                    drop_incomplete_group=drop_incomplete_group,
+                )
+            # Results arrive in submission order; _attach_task_identity checks it.
+            arrived = self.rollout.wait(count=len(task_rows))
+            return dict(zip(task_rows, arrived, strict=True))
+
+        # A rejected episode (retries exhausted, ADR 0011) is replayed once in
+        # this step; rejected again, it is skipped within the epoch budget.
+        task_rows = {task_base + offset: row for offset, row in enumerate(rows)}
+        results = run(task_rows)
+        rejected = [task_id for task_id in task_rows if results[task_id] is None]
+        if rejected:
+            replays = run({_REPLAY_TASK_ID_OFFSET + i: task_rows[i] for i in rejected})
+            for task_id in rejected:
+                results[task_id] = replays[_REPLAY_TASK_ID_OFFSET + task_id]
+        groups = []
+        for task_id, row in task_rows.items():
+            if results[task_id] is None:
+                self._record_skipped_task(row)
+                continue
+            _attach_task_identity(results[task_id], row)
+            groups.append(results[task_id])
         physical, replicas = repeat_groups_for_dispatch(
             groups, self.actor.parallel_strategy.dp_size
         )
@@ -1164,8 +1180,22 @@ class Tau2CriticOnlineTrainer(PPOTrainer):
         self._tau2_next_train_step += 1
         return physical
 
+    def _record_skipped_task(self, row: dict[str, Any]) -> None:
+        skipped = self._tau2_skipped.setdefault(self._tau2_train_epoch, [])
+        skipped.append(row)
+        if len(skipped) > self.config.max_skipped_tasks_per_epoch:
+            raise RuntimeError(
+                f"{len(skipped)} critic episodes were rejected twice in epoch "
+                f"{self._tau2_train_epoch}, more than max_skipped_tasks_per_epoch="
+                f"{self.config.max_skipped_tasks_per_epoch}: {skipped}"
+            )
+        logger.warning("Critic episode rejected twice; skipping it: %s", row)
+
     def _additional_stats(self) -> dict[str, float]:
         return {
+            "tau2_batch/epoch_skipped_tasks": len(
+                self._tau2_skipped.get(self._tau2_train_epoch, ())
+            ),
             **getattr(self, "_batch_counts", {}),
             "ppo/critic_only": 1,
             "ppo/policy_version": 0,

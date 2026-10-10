@@ -150,3 +150,35 @@ def test_dist_rollout_coordinator_forwards_reward_group_flags(monkeypatch):
     assert rollout_engine.prepare_kwargs["drop_incomplete_group"] is True
     assert rollout_engine.rollout_kwargs["reward_normalization"] is True
     assert rollout_engine.rollout_kwargs["drop_incomplete_group"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("survivors, kept", [(4, True), (3, False)])
+async def test_grouped_rollout_workflow_rejects_groups_below_min_usable_size(
+    survivors, kept
+):
+    results = [{f"m{i}": _interaction(float(i % 2))} for i in range(survivors)]
+    results += [None] * (8 - survivors)
+    logger = _Logger()
+    workflow = GroupedRolloutWorkflow(
+        _ListWorkflow(results),
+        group_size=8,
+        logger=logger,
+        min_usable_group_size=4,
+    )
+
+    result = await workflow.arun_episode(engine=None, data={})
+
+    if kept:
+        assert sorted(result) == [f"m{i}" for i in range(survivors)]
+        assert not any("min_usable_group_size" in m for m in logger.messages)
+    else:
+        assert result is None
+        assert "min_usable_group_size=4" in logger.messages[-1]
+
+
+def test_grouped_rollout_workflow_validates_min_usable_size():
+    with pytest.raises(ValueError, match="min_usable_group_size"):
+        GroupedRolloutWorkflow(
+            _ListWorkflow([]), group_size=8, logger=_Logger(), min_usable_group_size=9
+        )
