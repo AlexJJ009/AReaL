@@ -23,6 +23,9 @@ Doubao 用户失败精读（2026-10-10）。τ² 的调研、对比、找 gap �
 
 \*\*训练看不出效果，原因是评测噪声大于训练带来的变化、有效学习信号少、权重几乎没有朝一致方向移动。\*\*现有证据只能说"无法判断训练是否有效"，不能说"训练变差"。
 
+\*\*2026-10-10 补充：航空的高分里约 30pp 是转人工得来的。\*\*航空任务按 DB + COMMUNICATE 打分，在"应该拒绝"的任务上，agent
+转人工也能拿满分（第 10.3 节）。这是官方评分的漏洞，同样的 DB reward 用于训练时会奖励转人工。
+
 ## 2. 初始分数为什么高
 
 | 怀疑方向             | 结论             | 依据                                                                                                                                                                                                                                 |
@@ -126,74 +129,82 @@ gold 固定为 "no longer needed"，用户多数时候选 "ordered by mistake"�
 1. 重训 airline+retail critic，再跑 SAO；GRPO 可直接跑。
 1. 若仍需提升学习量，考虑调大 actor lr 或增加步数（本次未改）。
 
-## 7. Doubao 2.1 Turbo 评测中止与官方行为对齐（同日补充）
+## 7. 当前实现与官方 `tau2 run` 的差异（2026-10-10 复核）
 
-### 7.1 中止原因
+### 7.1 起因
 
-`step0-base-t0-doubao21turbo` 跑到 74/656 个 episode 时中止。其中 6 个 episode 都是 Doubao
-第一句用户回复就触发了 `UserSimulator.is_stop()`，官方 orchestrator 以 `user_stop` 结束，policy
-一次都没被调用。结论来自排除法：tau2 在第一句用户回复后 到调用 agent 之前，只有 stop token 这一条路会正常打分结束；异常、超时、空回复都会 变成
-infra error，不会打印 FINISHED。用量行（每个只有 1 次 user 调用，prompt tokens 与第一轮完全一致）也与此相符。
-
-用同一配置探测 236 次（其中 192 次并发），没有一次复现出 stop token。所以根因 （Doubao 为什么偶尔在第一轮就输出 stop
-token）仍未确认；当时的回复原文没有保存。
-
-下游链路：proxy session 里没有 interaction，`set_reward` 返回 400，concat 导出 0 条轨迹，触发
-`Tau2ExportCardinalityError` 并被当作暂时性故障重试。retail/69 t0 连续两次都这样，整轮评测中止。官方 tau2 会把这个
-episode 正常记分。
-
-### 7.2 修改
-
-| 位置                                          | 修改                                                                                                                                                                                                                                                         |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `examples/tau2/agent.py`                      | 设置 `TAU2_TRAJECTORY_DIR` 时，每次 episode 尝试都写一份 JSON（成功、零 policy 回合、异常或取消都写），包含完整官方消息、`stop_reason`、`policy_turns`、`reward_info`、错误信息；失败时保留 orchestrator 已产生的部分轨迹                                    |
-| `examples/tau2/agent.py`                      | concat 导出 0 条轨迹不再报 cardinality 错误，因此不再被重试                                                                                                                                                                                                  |
-| `areal/experimental/openai/proxy/workflow.py` | 正常模式下导出为空时返回 None（拒绝该轨迹），与 online 模式一致                                                                                                                                                                                              |
-| `scripts/tau2/evaluate.py`                    | 写 `trajectories/<source_id>/<attempt>.json`。被拒绝的结果没有 task_id，用 episode 自己的记录（completed 且 `policy_turns == 0`）把它绑定回对应 episode，按官方分数记为 completed；其余没有 task_id 的失败仍然中止。summary 新增 `eval/policy_free_episodes` |
-
-训练行为：零 policy 回合的 episode 被拒绝（以前是重试一次后再拒绝），GRPO 组按 `drop_incomplete_group` 处理。（更正：AReaL
-的 `dump_to_file` 本来就会写 policy token 视角的轨迹；缺的是官方消息视角的逐次尝试记录，见 ADR 0009。）
-
-### 7.3 与官方 `tau2 run` 仍不一致的行为
-
-逐项对照官方源码（pinned b7ea907）。前三项已在源码中复核：`runner/progress.py`、
-`metrics/agent_metrics.py`、`runner/batch.py`。
-
-| #   | 行为                               | 官方                                                                      | 我们                                                                                                 | 影响                                         |
-| --- | ---------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| 1   | episode 失败重试                   | 任何异常都整段重跑，最多再试 3 次                                         | 只重试 timeout、连接、限流、5xx、导出形状这几类错误，只重试 1 次；其他错误让评测中止                 | 官方能恢复的失败，我们会中止整轮             |
-| 2   | 最终失败的 episode                 | 记为 `INFRASTRUCTURE_ERROR`，从 avg_reward 和 pass^k 中排除，评测继续     | 整轮中止，summary 标为 partial                                                                       | 计数口径不同                                 |
-| 3   | 随机种子                           | `random.seed(300)` 为每个 trial 生成 seed，传给 agent 和 user 的 LLM 请求 | orchestrator 不传 seed，`eval_gconfig.seed` 必须为空                                                 | 可复现性；provider 是否支持 seed 未核实      |
-| 4   | policy 上下文溢出                  | 无专门处理，按异常重试，最终排除（推断）                                  | `context_limit`，记 0 分并计入                                                                       | 我们的分数偏保守                             |
-| 5   | 墙钟超时                           | 默认不设                                                                  | 1200 s，超时或总耗时 ≥ 1200 s 的已完成 episode 都当 infra error 重试                                 | 慢但有效的 episode 被丢弃重采                |
-| 6   | 用户空回复、用户工具 JSON 格式错误 | 抛异常后整段重跑                                                          | 原地重试一次请求，再失败就中止                                                                       | 计数口径不同                                 |
-| 7   | NL judge                           | `gpt-4.1-2025-04-14`，temperature 0                                       | 用户模拟器同款模型和参数                                                                             | 只影响 reward_basis 含 NL_ASSERTION 的任务   |
-| 8   | 用户 LLM 参数                      | 只有 temperature 0                                                        | 训练配置还有 `max_completion_tokens: 512`、`top_p` 1.0、120 s 超时；step 0 评测启动时已去掉 512 上限 | 512 上限可能截断用户回复                     |
-| 9   | policy LLM 参数                    | temperature 0，num_retries 3                                              | 另有 max_completion_tokens 4096、上下文 32K、num_retries 0                                           | 回复可能被截断；单次传输错误会升级为整段重跑 |
-| 10  | 汇总                               | avg_reward 加 pass^1..k                                                   | 只报 pass1_mean                                                                                      | 只是报告形式不同                             |
-
-另有几项一致或只影响展示：max_steps 200、max_errors 10、不开 communication 校验、 LLMAgent、无 think
-工具、airline/retail 无用户工具、cost/日志相关 monkey patch。
-
-2026-10-09 决定：1、2、4（仅评测）、5（仅评测，墙钟 1800 s）、6、8（去掉 512 上限）、10 按官方对齐；3 不改；7 待定；9 评测去掉 4096
-回复上限、训练保留。见 [ADR 0009](../../decisions/0009-official-tau2-runner-semantics.md) 和
+2026-10-09 的 `step0-base-t0-doubao21turbo` 跑到 74/656 个 episode 时中止。原因是 Doubao 用户第一句就
+stop，policy 一次都没被调用，旧代码把这种 episode 当导出错误处理，连续重试失败后中止整轮。官方 tau2 会正常给这个 episode
+打分。修复后整个调度层改为照搬官方 runner，见
+[ADR 0009](../../decisions/0009-official-tau2-runner-semantics.md) 和
 [PRD](../../prd/2026-10-09-tau2-official-runner.md)。
+
+### 7.2 当前对照（HEAD `c70a9800`，官方 pinned `b7ea907`）
+
+逐项对照官方源码。官方路径相对 `site-packages/tau2`。
+
+**已一致**：
+
+- **重试**：任何异常都整段重跑，最多再试 3 次，间隔 1 s（`runner/progress.py`）。
+- **infra 排除**：重试用尽记 `INFRASTRUCTURE_ERROR`，不进指标，并报数量和原因。
+- **打分**：只有 AGENT_STOP / USER_STOP 用官方 evaluator 打分，其余终止原因记 0；用户首句就 stop 也正常打分。
+- **max_steps / max_errors**：200 / 10。
+- **orchestrator 行为**：首条 agent 消息、非 solo、不做通信校验，都与官方相同。
+- **用户模拟器**：直接调用官方实现，空回复时整段重跑，不在原地重试。
+- **评测回复长度**：policy 单次回复不设上限，只受剩余上下文限制。
+
+仍不同的项：
+
+| #   | 维度                 | 官方                                                | 我们（评测）                                                        | 我们（训练）                       | 状态               | 影响                                                                       |
+| --- | -------------------- | --------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------- | ------------------ | -------------------------------------------------------------------------- |
+| 1   | 用户模拟器模型       | gpt-4.1，temperature 0；榜单推荐 gpt-5.2            | DeepSeek-Flash（默认）或 Doubao，temperature 0，top_p 1，超时 120 s | 同评测                             | 未对齐             | 最大的一项：只换用户，Retail 差约 20pp（9.1）；与榜单数字不可直接比        |
+| 2   | NL judge             | gpt-4.1，temperature 0                              | 与用户模拟器同一模型和参数                                          | 同评测                             | 未对齐（暂不拆）   | 只影响含 NL_ASSERTION 的任务，约 1pp（9.1）                                |
+| 3   | seed                 | `random.seed(300)` 为每个 trial 生成 seed           | 不传                                                                | 不传                               | 未对齐（决定不改） | 只影响可复现性；provider 是否支持 seed 未核实                              |
+| 4   | policy `num_retries` | 3                                                   | 0，重试放在 episode 层                                              | 同评测                             | 未对齐（决定不改） | 一次传输错误会让整段 episode 重跑                                          |
+| 5   | 上下文               | 不设窗口                                            | 32K；溢出抛异常，重试后排除                                         | 溢出记 `context_limit`，0 分并计入 | 有意不同           | 只有极长 episode 会被排除；两组 step 0 评测都没有发生                      |
+| 6   | 墙钟超时             | 默认不设                                            | 1800 s，超时按官方 TIMEOUT 记 0 分                                  | 1200 s，超时当 infra 重试          | 有意不同           | 实测最长 651 s，评测基本不触发                                             |
+| 7   | policy 生成设置      | temperature 0                                       | temperature 0，thinking 关闭，concat 模板加 qwen3_coder 解析        | temperature 1，单次回复 4096 上限  | 有意不同           | concat 拼接与服务端完整渲染的 token 差异未量化                             |
+| 8   | 领域                 | 榜单覆盖全部领域                                    | 只跑 Airline + Retail                                               | 同评测                             | 有意不同           | 不能和榜单总分比，只能按领域比                                             |
+| 9   | `pass^k` 的 k        | k 裁到每题最少有效 trial 数，排除 1 条就没有 pass^4 | 只报 k=1/2/4，每个 k 在有效 trial 数 ≥ k 的题上平均，并报题数       | 同评测                             | 有意不同           | 无排除时两种算法结果相同；有排除时多报出一个 pass^4                        |
+| 10  | 失败 episode 处理    | —                                                   | 同官方                                                              | 被拒结果会让整组 GRPO 中止         | 训练有意不同       | 训练一旦有排除或用户首句就 stop，整轮训练中止（DeepSeek 用户下还没发生过） |
+| 11  | 用户工具             | `get_user_tools(include=task.user_tools)`           | `get_user_tools()`，不按任务过滤                                    | 同评测                             | 未对齐（新发现）   | Airline/Retail 没有用户工具，无影响；重新加 Telecom 前要改                 |
+| 12  | `evaluate.py` 题集   | 榜单用 base 全量，≥4 trials                         | `--task-set` 默认 test，需显式传 `base`                             | 训练中评测用 test（formal）或 dev  | 默认值不同         | 忘传 `--task-set base` 的结果和榜单不可比                                  |
+
+10-09 旧对照表中已经解决的项：重试、最终失败排除、评测时的上下文溢出与墙钟、原地重试、用户 512 上限 （`afb42082`），评测去掉 4096
+回复上限（`31634dee`），汇总改为官方 pass^k（`afb42082`、`c70a9800`）。
+
+**未核实**：
+
+- 官方遇到上下文溢出时的行为是从代码推断的。
+- 文本模式下官方的 `persona_config` 是否为 None。
+- concat 模板与服务端完整渲染的 token 差异。
+
+### 7.3 指标口径（2026-10-10 起）
+
+所有评测都报同一组指标：离线 `evaluate.py`、训练中的 validation 和 critic 之后的 policy 训练。指标是
+mean@4、pass^1、pass^2、pass^4，按合计和领域分开报，不再报 pass@k。
+
+- **mean@4**：每题 4 次的成功率先在题内平均，再在题间平均。没有排除时等于 pass^1 和 `avg_reward`。
+- **pass^k**：官方 $\\binom{c}{k}/\\binom{n}{k}$，即同一题 k 次全部成功的概率，再在题间平均。
+
+训练中评测的 `eval_gconfig.n_samples` 是 4，所以 pass^4 有定义。实现见 `examples/tau2/official_runner.py`
+的 `REPORTED_PASS_HAT_KS`。
 
 ## 8. 官方 runner 口径下的 step 0 评测（同日补充）
 
 两组都用 commit `31634dee`：未训练的 Qwen3.5-4B（non-thinking），base 集（Airline 50 + Retail 114 题，不含
 Telecom），policy temperature 0，每题 4 次，用户模拟器 temperature 0、无回复上限，32K context，评测不设单次回复上限。
 
-| 用户模拟器       | 领域    | episode（排除） | mean@4 | pass@2 | pass@4  | pass^2 | pass^4  |
-| ---------------- | ------- | --------------- | ------ | ------ | ------- | ------ | ------- |
-| DeepSeek-Flash   | 合计    | 656（0）        | 0.838  | 0.925  | 0.970   | 0.752  | 0.646   |
-| DeepSeek-Flash   | Airline | 200（0）        | 0.810  | 0.887  | 0.940   | 0.733  | 0.660   |
-| DeepSeek-Flash   | Retail  | 456（0）        | 0.851  | 0.942  | 0.982   | 0.760  | 0.640   |
-| Doubao 2.1 Turbo | 合计    | 656（2）        | 0.691  | 0.834  | 0.920\* | 0.548  | 0.426\* |
-| Doubao 2.1 Turbo | Airline | 200（1）        | 0.783  | 0.863  | 0.898\* | 0.703  | 0.633\* |
-| Doubao 2.1 Turbo | Retail  | 456（1）        | 0.651  | 0.822  | 0.929\* | 0.480  | 0.336\* |
+| 用户模拟器       | 领域    | episode（排除） | mean@4 = pass^1 | pass^2 | pass^4  |
+| ---------------- | ------- | --------------- | --------------- | ------ | ------- |
+| DeepSeek-Flash   | 合计    | 656（0）        | 0.838           | 0.752  | 0.646   |
+| DeepSeek-Flash   | Airline | 200（0）        | 0.810           | 0.733  | 0.660   |
+| DeepSeek-Flash   | Retail  | 456（0）        | 0.851           | 0.760  | 0.640   |
+| Doubao 2.1 Turbo | 合计    | 656（2）        | 0.691           | 0.548  | 0.426\* |
+| Doubao 2.1 Turbo | Airline | 200（1）        | 0.783           | 0.703  | 0.633\* |
+| Doubao 2.1 Turbo | Retail  | 456（1）        | 0.651           | 0.480  | 0.336\* |
 
-\* Doubao 有 2 个 episode 在重试时遇到 Ark 账户欠费，被排除；pass@4 / pass^4 只在其余 162 题上算。
+\* Doubao 有 2 个 episode 在重试时遇到 Ark 账户欠费，被排除；pass^4 只在其余 162 题上算（Airline 49、Retail 113）。
 
 - 只换用户模拟器，Retail 从 0.851 降到 0.651，Airline 只差 0.03。Doubao 用户下的 Retail（0.651）已经接近 Recuris
   报告的 68.0；Airline（0.783）仍高于 75.3。
@@ -324,4 +335,191 @@ mean@4 同口径。
 
 复现脚本：`scripts/official-runner/fault_user_proxy.py`（PRD 第 6 节的故障注入
 smoke）、`scripts/official-runner/metrics_table.py` （从 `episodes.jsonl` 重算第 8 节的 mean@4 /
-pass@k / pass^k，在仓库根目录运行）。
+pass^1/2/4，在仓库根目录运行）。
+
+## 10. 两组 step 0 评测的失败分类（2026-10-10）
+
+对象是第 8 节的两组评测，共 308 条失败：DeepSeek 106 条，Doubao 202 条。处理方式：
+
+- 全部失败先按规则自动分类；
+- 人工精读约 90 条（DeepSeek 约 40、Doubao 约 50）；
+- 只因 NL 断言失败的 episode 逐条核对；
+- 另读了约 20 条成功样本。
+
+NL judge 与用户模拟器是同一个模型、同一套配置（7.2 第 2 项），所以下表放在同一大类里，但分开计数。
+
+### 10.1 infra
+
+数字精确，来自逐次尝试记录和 run.log。
+
+| run × 领域    | 完成/计划 | 失败 | 排除 | 失败的尝试（按原因）                            | 重试后救回（其中成功） |
+| ------------- | --------- | ---- | ---- | ----------------------------------------------- | ---------------------- |
+| DeepSeek 航空 | 200/200   | 38   | 0    | 上下文超限 13                                   | 11（9）                |
+| DeepSeek 零售 | 456/456   | 68   | 0    | 上下文超限 6，连接 1                            | 7（6）                 |
+| Doubao 航空   | 199/200   | 43   | 1    | 上下文超限 12，Ark 欠费 2，连接 1               | 9（8）                 |
+| Doubao 零售   | 455/456   | 159  | 1    | 上下文超限 11，用户空回复 2，Ark 欠费 2，连接 1 | 10（6）                |
+
+- 两条被排除的 episode 是 `airline:10:trial0` 和 `retail:99:trial2`：都先上下文超限两次，再遇上 Ark 欠费两次。
+- 上下文超限共 42 次，prompt 在 32,791–33,178 token，都比 32,768 多一点，全部被重试吸收。
+- TIMEOUT 和 MAX_STEPS 都是 0。所有完成的 episode 都以 `user_stop` 结束，包括 `###TRANSFER###` 和
+  `###OUT-OF-SCOPE###`。
+- 完成集里的失败没有一条是 infra 造成的。
+- 重试会偏向短轨迹：救回的 episode 里 DeepSeek 18 条成功 15 条，Doubao 19 条成功 14 条。估计 pass^1 因此偏高不到 1pp。
+
+### 10.2 主分类
+
+"精确"是逐条确认的；"估计"是规则分类，再用精读样本校正。
+
+| 类别       | 子类型                           | DeepSeek | Doubao | 口径 | 例子                                                                                                 | 改进途径                          |
+| ---------- | -------------------------------- | -------- | ------ | ---- | ---------------------------------------------------------------------------------------------------- | --------------------------------- |
+| benchmark  | gold 不可行                      | 4        | 4      | 精确 | retail:105：礼品卡 $17 付不了 $21.10，agent 正确拒绝，NL 断言却要求完成换货                          | 无，记为上限损失                  |
+| benchmark  | gold 写死取消原因                | 3        | 1      | 精确 | retail:38：用户说 "ordered by mistake"，gold 是 "no longer needed"                                   | 同上                              |
+| benchmark  | gold 动作顺序错                  | 2        | 3      | 精确 | retail:64                                                                                            | 同上                              |
+| benchmark  | 任务有歧义                       | 3        | 4      | 精确 | airline:7：问的是 "other upcoming flights"，gold 把要取消的两单也算进金额（$1628 vs $708），8 条全挂 | 同上                              |
+| benchmark  | 未指定支付方式                   | 5        | 3      | 估计 | retail:60：任务没写支付方式，用户自己选了礼品卡，gold 是 paypal                                      | 同上；归 benchmark 还是用户有争议 |
+| benchmark  | 环境实现 bug                     | 2        | 0      | 精确 | retail:100：`modify_pending_order_items` 把最后一个 variant 的价格写给所有 item，DB hash 对顺序敏感  | 同上                              |
+| benchmark  | NL 断言要求空操作                | 0        | 2      | 精确 | retail:110：默认地址已经是新地址，断言仍要求 "modify user address"                                   | 同上                              |
+| 用户模拟器 | 确认后立刻 STOP                  | 21       | 88     | 估计 | retail:17："Yes, I confirm… ###STOP###"，agent 还没执行写操作                                        | 换用户模型，或在 prompt 层修      |
+| 用户模拟器 | 首轮即 OUT-OF-SCOPE              | 0        | 3      | 精确 | retail:109：第一条用户消息就是 `###OUT-OF-SCOPE###`                                                  | 换用户模型                        |
+| 用户模拟器 | 中途 OUT-OF-SCOPE                | 0        | 5      | 估计 | airline:29                                                                                           | 换用户模型                        |
+| 用户模拟器 | 编造或偏离指令                   | 3        | 4      | 估计 | retail:79（Doubao）编造"另一只瓶子是黑色"；retail:5（DeepSeek）known_info 里有姓名却拒绝提供         | 换用户模型                        |
+| NL judge   | 判错                             | 0        | 0      | 精确 | DeepSeek 的 4 条 NL-only 失败都是 retail:105；Doubao 的 9 条 judge 都按字面判对                      | 当前不是瓶颈                      |
+| 模型       | 参数、物品或支付方式错           | 25       | 46     | 估计 | airline:18：5 张票的退款全打到一张卡，应原路退回；retail:49 选错 variant                             | 训练                              |
+| 模型       | 违反政策的写操作，或该转人工没转 | 13       | 15     | 估计 | airline:47：不符合条件的 basic economy 照样取消                                                      | 训练                              |
+| 模型       | 不该转人工却转了                 | 21       | 17     | 估计 | airline:44：本该升舱，却转了人工                                                                     | 训练，但见 10.3                   |
+| 模型       | 漏步骤、漏传达、错误拒绝、幻觉   | 4        | 7      | 估计 | retail:110：错称 pending 订单不能修改；retail:39 编造地址                                            | 训练                              |
+| infra      | —                                | 0        | 0      | 精确 | 见 10.1                                                                                              | 充值 Ark；32K 是有意设定          |
+
+按类别折算的 pass^1 损失（pp；合计 = 100 − pass^1）：
+
+| run × 领域    | benchmark | 用户模拟器 | 模型 | 合计 |
+| ------------- | --------- | ---------- | ---- | ---- |
+| DeepSeek 航空 | 1.5       | 0.5        | 17.0 | 19.0 |
+| DeepSeek 零售 | 3.5       | 5.0        | 6.4  | 14.9 |
+| Doubao 航空   | 2.0       | 2.0        | 17.6 | 21.6 |
+| Doubao 零售   | 2.9       | 21.1       | 11.0 | 34.9 |
+
+- 两种用户下模型自己的失败差不多：航空约 17pp，零售 6–11pp。
+- 两组评测的差距几乎全部来自 Doubao 确认后立刻 STOP，与 9.1 的精读结论（90 条中 79 条）一致。
+- "确认后立刻 STOP"的判定条件是：agent 最后一次确认里列出了 gold 的全部 id。抽检 8 条有 1 条误判，所以 21 和 88 可能各偏高
+  5–10%。即使用户不提前结束，agent 后面的步骤也未必都对，所以这部分 pp 是可追回的上限。
+- 每条失败只标一个原因，取最先导致失败的那个。例如 retail:98 同时有支付方式错和提前 STOP。
+- Doubao 有 14 条 episode 的用户中途改说中文，其中 5 条失败，已计入上面各类。
+
+### 10.3 假阳性：转人工骗过 DB 评分
+
+这是这次发现的最大问题，比任何一类失败都大。
+
+**机制**：航空任务的 `reward_basis` 是 DB + COMMUNICATE，NL 断言不计分。以 airline:0 为例，它没有 gold 写操作，唯一的
+NL 断言是 "Agent should refuse to proceed with the cancellation"。在这类"应该拒绝"的任务上，agent
+只要转人工，DB 不变，就判成功。
+
+**规模**：
+
+- DeepSeek 航空无写操作任务上的成功有 86 条，其中 63 条转了人工，约占航空 pass^1 的 31.5pp。
+- Doubao 航空是 55 条，约 27.6pp。
+- 零售两组各 5 条。
+
+**样本**：抽读 10 条（airline 0、5、6、26、27、34、41、45、48 和 retail 65），agent
+都是在回避，没有按政策拒绝。airline:45 的用户明确说了不要转人工。直接计数：DeepSeek 航空 162 条成功里有 75 条调用过
+`transfer_to_human_agents`，Doubao 是 156 条里 63 条。
+
+**影响**：
+
+- 这是官方评分规则本身的漏洞，榜单上的数字同样受影响，所以不算我们与官方的差异。
+- 但它直接影响训练：训练 reward 用的是同一套 DB 评分，会强化"不确定就转人工"。10.2 里的"不该转人工却转了"就是同一个倾向的另一面。
+- 从航空 0.81 里扣掉这部分，实际按政策解决的比例约 0.5。这也解释了为什么 4B 模型的航空分数接近 Opus 4.5（9.4）。
+
+**其他检查**：
+
+- 已知的"回一句 Done. 就得分"盲点，在这两组评测里没有出现：无写操作任务上的成功都有工具调用，用户轮数都大于 2。
+- 没看到 NL judge 放水：成功样本里带数字的 NL 断言，数字都能在 agent 回复里找到。
+
+### 10.4 可提升的方向
+
+| 方向                           | 涉及的失败                      | 量级（pp，DeepSeek / Doubao）     | 做法                                                                                            | 是否改变与官方的可比性        |
+| ------------------------------ | ------------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------- |
+| 训练用的用户模拟器             | 确认后 STOP、OUT-OF-SCOPE、编造 | 零售 5 / 21                       | 训练用 DeepSeek（已定），不用 Doubao                                                            | 不改评测                      |
+| 训练 reward 罚转人工           | 转人工假阳性，以及不该转却转    | 航空约 30 的假阳性 + 约 10 的失败 | 航空任务把 NL 断言纳入训练 reward，或对无 gold 转人工的转人工罚分。属于 reward 设计改动，需批准 | 只改训练 reward，评测仍用官方 |
+| 训练（模型能力）               | 参数、物品、支付、政策违规      | 航空约 17，零售 6–11              | GRPO / SAO（第 11 节）                                                                          | —                             |
+| 评测时附报一个去掉转人工的视图 | 转人工假阳性                    | 航空约 30                         | 在官方指标之外，报"不含转人工成功的 pass^1"，用于判断训练是否只是学会了转人工                   | 不改官方指标                  |
+| benchmark 本身                 | gold 不可行、歧义、环境 bug     | 1.5–3.5                           | 不修，作为固定的上限损失                                                                        | —                             |
+| infra                          | Ark 欠费；32K 边缘超限          | 排除 2 条                         | Ark 充值并换 key；32K 不改                                                                      | —                             |
+
+分类脚本和逐条结果：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/audits/tau2-failure-taxonomy-20261010/`。其中
+`auto.json` 的 `final` 字段是逐条分类，`table.py` 的 `MAN` 字典记录精读时的人工改判。
+
+## 11. 下一轮训练计划（2026-10-10，待批准启动）
+
+### 11.1 题目划分
+
+不用 Telecom，其余划分与之前相同（[ADR 0003](../../decisions/0003-tau2-data-and-evaluation.md)）。
+
+| 模式           | 训练集                                         | 训练中评测                                        |
+| -------------- | ---------------------------------------------- | ------------------------------------------------- |
+| formal（本轮） | 官方 train 104 题：Airline 30、Retail 74       | 官方 test 60 题：Airline 20、Retail 40            |
+| tune           | 从官方 train 切出 83 题：Airline 24、Retail 59 | dev 21 题：Airline 6、Retail 15，也来自官方 train |
+
+- tune 的 dev 切法：每个领域先排序，再用 `Random("42:<domain>")` 打乱，取 `round(n × 0.2)` 题。代码会检查 dev
+  与训练集不重叠。
+- 每个领域的题数和 sha256 必须与 `examples/tau2/contracts.py` 的 `OFFICIAL_SPLIT_SNAPSHOTS`
+  一致，否则拒绝启动。
+- **之前的划分**：最初是 Airline + Retail + Telecom 三域。上一次 formal critic 用了 178 题，共 24 步。Telecom
+  在训练前就是 320/320 全对，166 个 GRPO 组里 160 个全对，没有组内对比，却占了约 42% 的 rollout，所以 ADR 0003 把 policy
+  训练改成两域。这次 critic 也去掉 Telecom。
+- 训练只在 train 上做，test 只记录、不用来选 checkpoint。base 集（164 题）里包含 train，所以训练后的 base 分数不是
+  held-out 结果，test 60 题才是。
+
+### 11.2 运行顺序与配置
+
+都用 DeepSeek-Flash 做用户模拟器和 NL judge：temperature 0，无回复上限，key 从 `TAU2_DEEPSEEK_ENV_FILE`
+读取。
+
+| 步骤            | 配置                                            | 步数                                                                    | 存档与评测                                  | 评测内容                                                |
+| --------------- | ----------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------- |
+| 1. critic       | `scripts/tau2/train_critic.sh`，formal          | 2 epoch：$\\lceil 104/16 \\rceil \\times 2 = 14$ 步，208 条训练 episode | 第 5、10、14 步存档；第 0、5、10、14 步验证 | critic 在 60 条固定 test 轨迹上的 MSE、EV（按领域分开） |
+| 2. SAO          | `run.sh policy mixed sao`，加载第 1 步的 critic | 2 epoch，26 步                                                          | 每 5 步存档并评测，训练前先评一次           | test 60 题 × 4 次，temperature 0：mean@4、pass^1/2/4    |
+| 3. GRPO（对照） | `run.sh policy mixed grpo`                      | 2 epoch：$\\lceil 104/8 \\rceil \\times 2 = 26$ 步，每题 8 条           | 同上                                        | 同上                                                    |
+
+- 已用 `--check-config` 核对过三份配置，都退出 0，没有调用 API 或 GPU：
+  - critic：train 104、validation 60、步数 14；
+  - GRPO / SAO：领域只有 Airline + Retail，步数都是 26，每 5 步存档和评测；
+  - 用户只设 temperature 0。
+- **critic 的 epoch**（ADR 0005）：actor 固定（lr 0），每个 epoch 给每道训练题现采一条 temperature 1 的
+  episode，只更新 critic。每个 epoch 的最后一个 batch 只有 8 题（`drop_last: false`）。
+- **critic 的验证**：开头用训练的 `gconfig`（temperature 1，每题 1 次）采一次 60 条固定轨迹，之后每次验证都复用。验证测的是
+  critic，不是 policy，所以没有 mean@4 / pass^k。这一点写死在 `train_critic.py`，要改成 temperature 0 × 4
+  必须改代码。
+- **资源**：8 张 A100-80GB，当前全部空闲。
+  - critic：rollout 4 卡，actor 和 critic 共用另外 4 卡，阶段之间 offload。
+  - GRPO / SAO：rollout 3 卡，独立评测 1 卡，actor 4 卡。
+- **critic 耗时与用量（估计）**：上一次 critic 跑 24 步用了 1h44m，按比例本次约 1–1.5 h。DeepSeek 用户侧约 2.2M
+  prompt token、0.55M completion token，按 temperature 1 和重试留 1.3 倍余量，约 3M / 0.7M。这个用量里是否包含
+  NL judge 调用，没有核实。
+- 每次运行都要用新的 `TAU2_RUN_ROOT`。`recover.mode=auto` 会续跑同一目录，而旧 `critic-formal-v1` 是含 Telecom
+  的运行，固定验证集的 digest 对不上。
+
+### 11.3 这轮能验证什么
+
+- **critic 能否在两域上学到价值**：60 条 test 轨迹上 MSE 下降、EV 上升，按领域分开看。
+- **SAO / GRPO 是否提高 test 成功率**：每 5 步一次 mean@4 和 pass^1/2/4。step 0 的 temperature 0
+  评测由训练启动时自动产出，作为同口径基线。
+- **SAO 与 GRPO 的对比**：两者 rollout 预算相同，题集相同，评测相同。
+- **稳定性（pass^4 − pass^1 的差）**：训练是否让模型在同一题上更一致。
+- **链路**：去掉用户回复上限后，在线采样、训练、存档和 recover 都能跑完。
+
+### 11.4 这轮验证不了什么
+
+- **和 Recuris 或榜单的绝对分数对比**：用户模拟器不同（7.2 第 1 项），且没有 Telecom。
+- **成功是真解决还是转人工**：官方指标分不出来（10.3）。训练 reward 不改的话，航空的提升可能来自更多转人工。要分辨，需要第 10.4
+  节的附加视图，这个视图还没实现。
+- **小于噪声的提升**：test 只有 60 题。此前同一初始模型的两次 step 0 在 Retail+Airline 上差 4.58pp，仅采样噪声的 95%
+  半宽合并约 ±4.1pp、Airline ±6.4pp（3.1）。164 题 base 集上的 bootstrap 区间宽 12–18pp（9.2），60
+  题只会更宽。几个点的变化不能当成训练有效。
+- **对 Doubao 或 gpt-5.2 用户的泛化**：训练和评测都用 DeepSeek 用户，换用户后的效果需要另跑评测。
+- **critic 对 SAO 的具体贡献**：critic 的 MSE / EV 只说明它拟合了 temperature 1 下的回报；它对 SAO 有没有帮助，只能从
+  SAO 与 GRPO 的对比间接看出，而这个对比还混着两种算法的其他差异。
+- **训练中途的中止风险**：GRPO 组里一旦有 episode 被排除，或用户首句就 stop，训练会中止（7.2 第 10 项）。DeepSeek
+  用户下还没发生过，但不能排除。
+
+启动需要批准。启动前先把当前改动 commit，因为相关文件的哈希会写进 critic 固定验证集的 manifest。
