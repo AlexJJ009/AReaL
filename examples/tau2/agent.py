@@ -587,12 +587,17 @@ class Tau2AgentWorkflow:
         gen_args = self.gen_args.copy()
         if "gconfig" in data:
             gen_args.update(data["gconfig"])
-        requested_completion = int(
-            gen_args.get("max_completion_tokens", econfig.max_completion_tokens)
-        )
-        gen_args["max_completion_tokens"] = min(
-            requested_completion, econfig.max_completion_tokens
-        )
+        if self.evaluation:
+            # Official τ² sets no per-reply cap; only the remaining context
+            # bounds a reply. The 4096 cap is a training rollout budget.
+            gen_args["max_completion_tokens"] = econfig.context_window_tokens
+        else:
+            requested_completion = int(
+                gen_args.get("max_completion_tokens", econfig.max_completion_tokens)
+            )
+            gen_args["max_completion_tokens"] = min(
+                requested_completion, econfig.max_completion_tokens
+            )
         gen_args["max_total_tokens"] = econfig.context_window_tokens
 
         # Get task information

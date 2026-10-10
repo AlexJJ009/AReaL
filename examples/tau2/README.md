@@ -288,22 +288,22 @@ python3 examples/tau2/train.py \
 
 ### Tau2 Related Configuration Options
 
-| Option                           | Default            | Description                                                                   |
-| -------------------------------- | ------------------ | ----------------------------------------------------------------------------- |
-| `econfig.domain`                 | `airline`          | Tau2 domain: `airline`, `retail`, `telecom`, or the shared launcher's `mixed` |
-| `econfig.max_steps`              | `100`              | Official orchestrator step limit per episode; the τ² recipes set `200`        |
-| `econfig.add_thinking_tool`      | `false`            | Whether to use thinking as a tool for the agent                               |
-| `econfig.enable_thinking`        | `false`            | Policy chat-template thinking; `true` is rejected                             |
-| `econfig.context_window_tokens`  | `32768`            | Rendered prompt plus completion budget; other values are rejected             |
-| `econfig.max_completion_tokens`  | `4096`             | Tokens per assistant response, at most 4096                                   |
-| `econfig.solo_mode`              | `false`            | If true, agent handles both agent and user roles (no user simulator needed)   |
-| `econfig.user_llm_base_url`      | `null`             | Base URL of the user simulator LLM server                                     |
-| `econfig.user_llm`               | `null`             | Model name for user simulator (e.g., `openai/self-hosted-Qwen2.5-72B`)        |
-| `econfig.user_llm_api_key_env`   | `DEEPSEEK_API_KEY` | Environment variable holding the user simulator key                           |
-| `econfig.user_llm_args`          | `null`             | Arguments for user LLM (e.g., `{temperature: 0.0}`, the official setting)     |
-| `econfig.user_llm_num_retries`   | `3`                | Maximum retries for one user-simulator request                                |
-| `econfig.turn_discount`          | `1.0`              | Discount factor for turn-based learning                                       |
-| `econfig.invalid_format_penalty` | `0.1`              | Penalty for invalid format in completions                                     |
+| Option                           | Default            | Description                                                                                        |
+| -------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------- |
+| `econfig.domain`                 | `airline`          | Tau2 domain: `airline`, `retail`, `telecom`, or the shared launcher's `mixed`                      |
+| `econfig.max_steps`              | `100`              | Official orchestrator step limit per episode; the τ² recipes set `200`                             |
+| `econfig.add_thinking_tool`      | `false`            | Whether to use thinking as a tool for the agent                                                    |
+| `econfig.enable_thinking`        | `false`            | Policy chat-template thinking; `true` is rejected                                                  |
+| `econfig.context_window_tokens`  | `32768`            | Rendered prompt plus completion budget; other values are rejected                                  |
+| `econfig.max_completion_tokens`  | `4096`             | Tokens per assistant response in training, at most 4096; evaluation is bounded by the context only |
+| `econfig.solo_mode`              | `false`            | If true, agent handles both agent and user roles (no user simulator needed)                        |
+| `econfig.user_llm_base_url`      | `null`             | Base URL of the user simulator LLM server                                                          |
+| `econfig.user_llm`               | `null`             | Model name for user simulator (e.g., `openai/self-hosted-Qwen2.5-72B`)                             |
+| `econfig.user_llm_api_key_env`   | `DEEPSEEK_API_KEY` | Environment variable holding the user simulator key                                                |
+| `econfig.user_llm_args`          | `null`             | Arguments for user LLM (e.g., `{temperature: 0.0}`, the official setting)                          |
+| `econfig.user_llm_num_retries`   | `3`                | Maximum retries for one user-simulator request                                                     |
+| `econfig.turn_discount`          | `1.0`              | Discount factor for turn-based learning                                                            |
+| `econfig.invalid_format_penalty` | `0.1`              | Penalty for invalid format in completions                                                          |
 
 ## Results
 

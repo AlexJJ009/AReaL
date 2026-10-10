@@ -441,7 +441,8 @@ def run(argv: list[str]) -> dict[str, Any]:
         "request_seed": config.eval_gconfig.seed,
         "temperature": config.eval_gconfig.temperature,
         "top_p": config.eval_gconfig.top_p,
-        "max_new_tokens": config.eval_gconfig.max_new_tokens,
+        # Evaluation has no per-reply cap, as official τ²; the context bounds replies.
+        "max_new_tokens": None,
         "max_total_tokens": config.econfig.context_window_tokens,
         "enable_thinking": config.econfig.enable_thinking,
         "add_thinking_tool": config.econfig.add_thinking_tool,

@@ -890,6 +890,38 @@ def test_workflow_records_policy_free_episode_trajectory(monkeypatch, tmp_path):
     assert isinstance(DEFAULT_FIRST_AGENT_MESSAGE, AssistantMessage)
 
 
+@pytest.mark.parametrize("evaluation, expected", [(False, 4096), (True, 32768)])
+def test_workflow_caps_policy_replies_only_in_training(
+    monkeypatch, tmp_path, evaluation, expected
+):
+    import examples.tau2.agent as agent_mod
+
+    seen = {}
+
+    class CapturingRunner:
+        def __init__(self, **kwargs):
+            seen.update(kwargs["gen_args"])
+            raise RuntimeError("stop after capturing gen_args")
+
+    workflow = _workflow_with_fake_runner(monkeypatch, tmp_path, None)
+    monkeypatch.setattr(agent_mod, "Tau2Runner", CapturingRunner)
+    workflow.evaluation = evaluation
+    workflow.gen_args = {"max_completion_tokens": 4096}
+
+    with pytest.raises(RuntimeError, match="capturing"):
+        asyncio.run(
+            workflow.run(
+                {"task_id": "69", "split": "test"},
+                base_url="http://policy.invalid/v1",
+                api_key="session-secret",
+            )
+        )
+
+    # Official τ² sets no reply cap: evaluation is bounded by the 32K context only.
+    assert seen["max_completion_tokens"] == expected
+    assert seen["max_total_tokens"] == 32768
+
+
 def test_workflow_records_failed_attempt_with_partial_trajectory(monkeypatch, tmp_path):
     from tau2.data_model.message import AssistantMessage, UserMessage
 

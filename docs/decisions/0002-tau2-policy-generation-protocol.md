@@ -36,17 +36,19 @@ Fixed protocol:
 | Policy and critic backbone | `Qwen/Qwen3.5-4B@851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a`, tokenizer from the same snapshot                                                                  |
 | Reasoning mode             | `enable_thinking=false` for training rollouts, critic data, in-training validation and offline evaluation; `add_thinking_tool=false` (rejected by `train.py`) |
 | Total context              | 32768 tokens for the final rendered prompt including tool schemas; one slot reserved for SGLang's strict bound, applied once                                  |
-| Per reply                  | at most 4096 tokens and never more than the remaining context                                                                                                 |
+| Per reply                  | training: at most 4096 tokens and never more than the remaining context; evaluation: the remaining context only (ADR 0009)                                    |
 | Training sampling          | temperature 1, top_p 1, top_k disabled by sentinel, frequency_penalty 0, non-greedy; global seed 42, request seed `null`                                      |
 
-Per-request generation budget is `M = min(4096, 32768 - 1 - L)`, where `L` is the token
-count of the actually rendered template. When `M <= 0` the proxy rejects the request
-with a typed error. In training the episode ends as `context_limit` with reward 0 and no
-retry ([ADR 0001](0001-official-tau2-harness.md)). Evaluation follows the official
-runner instead: the error fails the attempt, is retried, and an episode that still
-overflows is excluded ([ADR 0009](0009-official-tau2-runner-semantics.md)). Hitting 4096
-tokens in one reply does not end the episode. Only complete, valid tool calls are
-executed.
+Per-request generation budget is `M = min(4096, 32768 - 1 - L)` in training and
+`M = 32768 - 1 - L` in evaluation, where `L` is the token count of the actually rendered
+template. The 4096 cap bounds training rollout length; official τ² sets no reply cap, so
+evaluation drops it (2026-10-09, user decision). When `M <= 0` the proxy rejects the
+request with a typed error. In training the episode ends as `context_limit` with reward
+0 and no retry ([ADR 0001](0001-official-tau2-harness.md)). Evaluation follows the
+official runner instead: the error fails the attempt, is retried, and an episode that
+still overflows is excluded ([ADR 0009](0009-official-tau2-runner-semantics.md)).
+Hitting the cap in one reply does not end the episode. Only complete, valid tool calls
+are executed.
 
 Enforcement is at the final consumer, not the config: the template flag
 (`chat_template_kwargs` / `extra_body.chat_template_kwargs`) must pass through the local
