@@ -167,6 +167,33 @@ episode 正常记分。
 另有几项一致或只影响展示：max_steps 200、max_errors 10、不开 communication 校验、 LLMAgent、无 think
 工具、airline/retail 无用户工具、cost/日志相关 monkey patch。
 
-2026-10-09 决定：1、2、4（仅评测）、5（仅评测，墙钟 1800 s）、6、8（去掉 512 上限）、10 按官方对齐；3 不改；7 待定；9 保留。见
-[ADR 0009](../../decisions/0009-official-tau2-runner-semantics.md) 和
+2026-10-09 决定：1、2、4（仅评测）、5（仅评测，墙钟 1800 s）、6、8（去掉 512 上限）、10 按官方对齐；3 不改；7 待定；9 评测去掉 4096
+回复上限、训练保留。见 [ADR 0009](../../decisions/0009-official-tau2-runner-semantics.md) 和
 [PRD](../../prd/2026-10-09-tau2-official-runner.md)。
+
+## 8. 官方 runner 口径下的 step 0 评测（同日补充）
+
+两组都用 commit `31634dee`：未训练的 Qwen3.5-4B（non-thinking），base 集（Airline 50 + Retail 114 题，不含
+Telecom），policy temperature 0，每题 4 次，用户模拟器 temperature 0、无回复上限，32K context，评测不设单次回复上限。
+
+| 用户模拟器       | 领域    | episode（排除） | mean@4 | pass@2 | pass@4  | pass^2 | pass^4  |
+| ---------------- | ------- | --------------- | ------ | ------ | ------- | ------ | ------- |
+| DeepSeek-Flash   | 合计    | 656（0）        | 0.838  | 0.925  | 0.970   | 0.752  | 0.646   |
+| DeepSeek-Flash   | Airline | 200（0）        | 0.810  | 0.887  | 0.940   | 0.733  | 0.660   |
+| DeepSeek-Flash   | Retail  | 456（0）        | 0.851  | 0.942  | 0.982   | 0.760  | 0.640   |
+| Doubao 2.1 Turbo | 合计    | 656（2）        | 0.691  | 0.834  | 0.920\* | 0.548  | 0.426\* |
+| Doubao 2.1 Turbo | Airline | 200（1）        | 0.783  | 0.863  | 0.898\* | 0.703  | 0.633\* |
+| Doubao 2.1 Turbo | Retail  | 456（1）        | 0.651  | 0.822  | 0.929\* | 0.480  | 0.336\* |
+
+\* Doubao 有 2 个 episode 在重试时遇到 Ark 账户欠费，被排除；pass@4 / pass^4 只在其余 162 题上算。
+
+- 只换用户模拟器，Retail 从 0.851 降到 0.651，Airline 只差 0.03。Doubao 用户下的 Retail（0.651）已经接近 Recuris
+  报告的 68.0；Airline（0.783）仍高于 75.3。
+- 旧代码下同配置的 DeepSeek 评测是 0.794，新代码 0.838。区别是评测不再截断 4096 token 的回复（旧代码有 32 个 episode
+  被截断）和重试规则；本次无排除。两者和用户模拟器本身的随机性各占多少，没有逐题核对。
+- Doubao 评测里 3 个 episode 是用户第一句就 stop，按官方打分，没有中止评测。
+- 第 6 节第 2 条的 Doubao 对照已完成（2.0 Pro 已下线，用 2.1 Turbo）。和 Recuris 的剩余差距还在核查 Recuris 源码。
+
+产物：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-eval-20261009/step0-base-t0-deepseek-official/`
+和
+`.../step0-base-t0-doubao21turbo-official/`（`summary.json`、`episodes.jsonl`、`trajectories/`）。
