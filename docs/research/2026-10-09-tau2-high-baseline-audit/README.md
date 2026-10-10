@@ -4,8 +4,17 @@
 `mixed-v1`/`mixed-v4-disk`（Qwen3.5-4B，non-thinking，DeepSeek Flash 用户模拟器与 NL judge，评测
 temperature=1、每题 8 次）。全部结论来自已有记录的重算，没有新增采样、训练或付费模型调用。
 
-第 1–6 节是对 2026-09-27 训练记录的核查；第 7–8 节是同日评测调度对齐官方与新口径 step 0 评测；第 9 节是与 Recuris、 官方榜单的对比和
-Doubao 用户失败精读（2026-10-10）。τ² 的调研、对比、找 gap 都记在本文，不另开文档。
+各节内容：
+
+- 第 1–5 节：核查 2026-09-27 的训练记录。
+- 第 7–8 节：评测调度与官方对齐，以及新口径下的 step 0 评测。
+- 第 9 节：与 Recuris、官方榜单的对比，以及 Doubao 用户失败精读。
+- 第 10 节：失败分类。
+- 第 11 节：当前 benchmark 变体的定义和校验步骤。
+- 第 12 节：训练计划。
+- 第 13 节：两轮 step 0 评测。
+
+第 11–12 节只保留最新的决策和执行步骤。τ² 的调研、对比、找 gap 都记在本文，不另开文档。
 
 原始数据根目录：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-training-20260927-nonthinking`。
 核查脚本在本目录 `scripts/`，大体积中间结果保留在
@@ -118,16 +127,7 @@ gold 固定为 "no longer needed"，用户多数时候选 "ordered by mistake"�
 
 ## 6. 下一步
 
-1. 不单独跑 DeepSeek 用户下的 temperature=0 step 0 评测：GRPO/SAO 配置
-   `eval_before_train: true`，训练启动时会在新口径（test、temperature 0、每题 4 次）下自动评一次 step 0。
-1. 复现 Recuris 的小规模实验（待购买 API）：沿用我们的 harness，只把用户模拟器与 NL judge 换成 Recuris 源码固定的
-   `doubao-seed-2-0-pro-260215`（temperature 0，reasoning_effort medium），agent temperature
-   0，Airline+Retail base 全量，每题 1 次（164 条）。同一配置下另跑一组 DeepSeek 作为对照。若 Doubao 组接近
-   68%/75%，差距来自用户模拟器；若仍约 80%，差距来自 Recuris fork harness（如 `TAU2_GATE_TERM`
-   等开关）或其他协议差异。注意我们的 `user_llm_args.max_completion_tokens: 512` 对推理模型可能截断，换 Doubao
-   时需去掉或调大。
-1. 重训 airline+retail critic，再跑 SAO；GRPO 可直接跑。
-1. 若仍需提升学习量，考虑调大 actor lr 或增加步数（本次未改）。
+已执行或并入第 12 节。
 
 ## 7. 当前实现与官方 `tau2 run` 的差异（2026-10-10 复核）
 
@@ -155,20 +155,21 @@ stop，policy 一次都没被调用，旧代码把这种 episode 当导出错误
 
 仍不同的项：
 
-| #   | 维度                 | 官方                                                | 我们（评测）                                                        | 我们（训练）                       | 状态               | 影响                                                                       |
-| --- | -------------------- | --------------------------------------------------- | ------------------------------------------------------------------- | ---------------------------------- | ------------------ | -------------------------------------------------------------------------- |
-| 1   | 用户模拟器模型       | gpt-4.1，temperature 0；榜单推荐 gpt-5.2            | DeepSeek-Flash（默认）或 Doubao，temperature 0，top_p 1，超时 120 s | 同评测                             | 未对齐             | 最大的一项：只换用户，Retail 差约 20pp（9.1）；与榜单数字不可直接比        |
-| 2   | NL judge             | gpt-4.1，temperature 0                              | 与用户模拟器同一模型和参数                                          | 同评测                             | 未对齐（暂不拆）   | 只影响含 NL_ASSERTION 的任务，约 1pp（9.1）                                |
-| 3   | seed                 | `random.seed(300)` 为每个 trial 生成 seed           | 不传                                                                | 不传                               | 未对齐（决定不改） | 只影响可复现性；provider 是否支持 seed 未核实                              |
-| 4   | policy `num_retries` | 3                                                   | 0，重试放在 episode 层                                              | 同评测                             | 未对齐（决定不改） | 一次传输错误会让整段 episode 重跑                                          |
-| 5   | 上下文               | 不设窗口                                            | 32K；溢出抛异常，重试后排除                                         | 溢出记 `context_limit`，0 分并计入 | 有意不同           | 只有极长 episode 会被排除；两组 step 0 评测都没有发生                      |
-| 6   | 墙钟超时             | 默认不设                                            | 1800 s，超时按官方 TIMEOUT 记 0 分                                  | 1200 s，超时当 infra 重试          | 有意不同           | 实测最长 651 s，评测基本不触发                                             |
-| 7   | policy 生成设置      | temperature 0                                       | temperature 0，thinking 关闭，concat 模板加 qwen3_coder 解析        | temperature 1，单次回复 4096 上限  | 有意不同           | concat 拼接与服务端完整渲染的 token 差异未量化                             |
-| 8   | 领域                 | 榜单覆盖全部领域                                    | 只跑 Airline + Retail                                               | 同评测                             | 有意不同           | 不能和榜单总分比，只能按领域比                                             |
-| 9   | `pass^k` 的 k        | k 裁到每题最少有效 trial 数，排除 1 条就没有 pass^4 | 只报 k=1/2/4，每个 k 在有效 trial 数 ≥ k 的题上平均，并报题数       | 同评测                             | 有意不同           | 无排除时两种算法结果相同；有排除时多报出一个 pass^4                        |
-| 10  | 失败 episode 处理    | —                                                   | 同官方                                                              | 被拒结果会让整组 GRPO 中止         | 训练有意不同       | 训练一旦有排除或用户首句就 stop，整轮训练中止（DeepSeek 用户下还没发生过） |
-| 11  | 用户工具             | `get_user_tools(include=task.user_tools)`           | `get_user_tools()`，不按任务过滤                                    | 同评测                             | 未对齐（新发现）   | Airline/Retail 没有用户工具，无影响；重新加 Telecom 前要改                 |
-| 12  | `evaluate.py` 题集   | 榜单用 base 全量，≥4 trials                         | `--task-set` 默认 test，需显式传 `base`                             | 训练中评测用 test（formal）或 dev  | 默认值不同         | 忘传 `--task-set base` 的结果和榜单不可比                                  |
+| #   | 维度                 | 官方                                                | 我们（评测）                                                        | 我们（训练）                                                                | 状态               | 影响                                                                |
+| --- | -------------------- | --------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------- |
+| 1   | 用户模拟器模型       | gpt-4.1，temperature 0；榜单推荐 gpt-5.2            | DeepSeek-Flash（默认）或 Doubao，temperature 0，top_p 1，超时 120 s | 同评测                                                                      | 未对齐             | 最大的一项：只换用户，Retail 差约 20pp（9.1）；与榜单数字不可直接比 |
+| 2   | NL judge             | gpt-4.1，temperature 0                              | 与用户模拟器同一模型和参数                                          | 同评测                                                                      | 未对齐（暂不拆）   | 只影响含 NL_ASSERTION 的任务，约 1pp（9.1）                         |
+| 3   | seed                 | `random.seed(300)` 为每个 trial 生成 seed           | 不传                                                                | 不传                                                                        | 未对齐（决定不改） | 只影响可复现性；provider 是否支持 seed 未核实                       |
+| 4   | policy `num_retries` | 3                                                   | 0，重试放在 episode 层                                              | 同评测                                                                      | 未对齐（决定不改） | 一次传输错误会让整段 episode 重跑                                   |
+| 5   | 上下文               | 不设窗口                                            | 32K；溢出抛异常，重试后排除                                         | 溢出记 `context_limit`，0 分并计入                                          | 有意不同           | 只有极长 episode 会被排除；两组 step 0 评测都没有发生               |
+| 6   | 墙钟超时             | 默认不设                                            | 1800 s，超时按官方 TIMEOUT 记 0 分                                  | 1200 s，超时记 truncated、0 分                                              | 有意不同           | 实测最长 651 s，评测基本不触发                                      |
+| 7   | policy 生成设置      | temperature 0                                       | temperature 0，thinking 关闭，concat 模板加 qwen3_coder 解析        | temperature 1，单次回复 4096 上限                                           | 有意不同           | concat 拼接与服务端完整渲染的 token 差异未量化                      |
+| 8   | 领域                 | 榜单覆盖全部领域                                    | 只跑 Airline + Retail                                               | 同评测                                                                      | 有意不同           | 不能和榜单总分比，只能按领域比                                      |
+| 9   | `pass^k` 的 k        | k 裁到每题最少有效 trial 数，排除 1 条就没有 pass^4 | 只报 k=1/2/4，每个 k 在有效 trial 数 ≥ k 的题上平均，并报题数       | 同评测                                                                      | 有意不同           | 无排除时两种算法结果相同；有排除时多报出一个 pass^4                 |
+| 10  | 失败 episode 处理    | —                                                   | 同官方                                                              | 丢弃重试用尽的成员，存活 ≥4 的组照常训练，否则 epoch 末重跑一次（ADR 0011） | 训练有意不同       | 存活成员可能偏向短对话；按题失败率尚未统计                          |
+| 11  | 用户工具             | `get_user_tools(include=task.user_tools)`           | `get_user_tools()`，不按任务过滤                                    | 同评测                                                                      | 未对齐（新发现）   | Airline/Retail 没有用户工具，无影响；重新加 Telecom 前要改          |
+| 12  | `evaluate.py` 题集   | 榜单用 base 全量，≥4 trials                         | `--task-set` 默认 test，需显式传 `base`                             | 训练中评测用 test（formal）或 dev                                           | 默认值不同         | 忘传 `--task-set base` 的结果和榜单不可比                           |
+| 13  | 题目与评分           | `b7ea907` 原样                                      | official 与 fixed 两个变体都报（第 11 节）                          | fixed                                                                       | 有意不同           | fixed 的数字不能和榜单比                                            |
 
 10-09 旧对照表中已经解决的项：重试、最终失败排除、评测时的上下文溢出与墙钟、原地重试、用户 512 上限 （`afb42082`），评测去掉 4096
 回复上限（`31634dee`），汇总改为官方 pass^k（`afb42082`、`c70a9800`）。
@@ -331,9 +332,7 @@ mean@4 同口径。
 
 ### 9.6 下一步
 
-1. 用 gpt-5.2（reasoning low）做用户跑一次 base 集，和榜单定标（需要 OpenAI 渠道和费用，需批准）。
-1. 选训练用的用户模拟器前先定：Doubao 的提前结束会把正确行为记 0 分；DeepSeek 也有，频率约 1/4.5。
-1. 把 NL judge 和用户模拟器分开配置（`econfig` 新增 judge 字段，属于配置结构改动，需批准），judge 固定为官方 gpt-4.1 或同一模型。
+仍未完成的项目已并入 12.6。
 
 复现脚本：`scripts/official-runner/fault_user_proxy.py`（PRD 第 6 节的故障注入
 smoke）、`scripts/official-runner/metrics_table.py` （从 `episodes.jsonl` 重算第 8 节的 mean@4 /
@@ -439,14 +438,14 @@ NL 断言是 "Agent should refuse to proceed with the cancellation"。在这类"
 
 ### 10.4 可提升的方向
 
-| 方向                           | 涉及的失败                      | 量级（pp，DeepSeek / Doubao）     | 做法                                                                                            | 是否改变与官方的可比性        |
-| ------------------------------ | ------------------------------- | --------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------- |
-| 训练用的用户模拟器             | 确认后 STOP、OUT-OF-SCOPE、编造 | 零售 5 / 21                       | 训练用 DeepSeek（已定），不用 Doubao                                                            | 不改评测                      |
-| 训练 reward 罚转人工           | 转人工假阳性，以及不该转却转    | 航空约 30 的假阳性 + 约 10 的失败 | 航空任务把 NL 断言纳入训练 reward，或对无 gold 转人工的转人工罚分。属于 reward 设计改动，需批准 | 只改训练 reward，评测仍用官方 |
-| 训练（模型能力）               | 参数、物品、支付、政策违规      | 航空约 17，零售 6–11              | GRPO / SAO（第 11 节）                                                                          | —                             |
-| 评测时附报一个去掉转人工的视图 | 转人工假阳性                    | 航空约 30                         | 在官方指标之外，报"不含转人工成功的 pass^1"，用于判断训练是否只是学会了转人工                   | 不改官方指标                  |
-| benchmark 本身                 | gold 不可行、歧义、环境 bug     | 1.5–3.5                           | 不修，作为固定的上限损失                                                                        | —                             |
-| infra                          | Ark 欠费；32K 边缘超限          | 排除 2 条                         | Ark 充值并换 key；32K 不改                                                                      | —                             |
+| 方向                           | 涉及的失败                      | 量级（pp，DeepSeek / Doubao）     | 做法                                                  | 是否改变与官方的可比性    |
+| ------------------------------ | ------------------------------- | --------------------------------- | ----------------------------------------------------- | ------------------------- |
+| 训练用的用户模拟器             | 确认后 STOP、OUT-OF-SCOPE、编造 | 零售 5 / 21                       | 训练用 DeepSeek（已定），不用 Doubao                  | 不改评测                  |
+| 训练 reward 罚转人工           | 转人工假阳性，以及不该转却转    | 航空约 30 的假阳性 + 约 10 的失败 | 已做：fixed 变体的转人工规则（11.3），训练用 fixed    | 只改 fixed，official 不变 |
+| 训练（模型能力）               | 参数、物品、支付、政策违规      | 航空约 17，零售 6–11              | GRPO / SAO（第 12 节）                                | —                         |
+| 评测时附报一个去掉转人工的视图 | 转人工假阳性                    | 航空约 30                         | 由 fixed 变体代替：评测同时报 official 与 fixed（13） | 不改官方指标              |
+| benchmark 本身                 | gold 不可行、歧义、环境 bug     | 1.5–3.5                           | fixed 已修大部分（11.1–11.2）；official 不改          | 只改 fixed                |
+| infra                          | Ark 欠费；32K 边缘超限          | 排除 2 条                         | Ark 充值并换 key；32K 不改                            | —                         |
 
 ### 10.5 官方和社区是否已经修过（2026-10-10 调研）
 
@@ -478,7 +477,7 @@ pin 旧，内容已经被官方吸收。AGI-Eval 的
 [tau2-bench-revised](https://github.com/AGI-Eval-Official/tau2-bench-revised) 只改了用户
 prompt。两者都没有修转人工问题。
 
-**没有任何来源修过的**：
+**调研时没有任何来源修过的**（除 airline:7 和 #514 外，现已在 fixed 变体中由我们修复，见第 11 节）：
 
 - 评测端针对转人工的直接规则；
 - airline:7 的金额歧义（只有 issue
@@ -491,136 +490,186 @@ prompt。两者都没有修转人工问题。
 [#554](https://github.com/sierra-research/tau2-bench/issues/554) 中空回复会被判通过。把
 NL_ASSERTION 放进训练 reward，这些缺陷会直接变成 reward 噪声。
 
-**转人工规则的边界很清楚**：gold 动作含 `transfer_to_human_agents` 的只有 Airline 1 题（13）和 Retail 4
-题（10、12、26、50）。Airline 有 23 题、Retail 有 7 题没有 gold 写操作。
+**转人工规则的边界**（official 数据）：gold 动作含 `transfer_to_human_agents` 的只有 Airline 1 题（13）和
+Retail 4 题（10、12、26、50）。Airline 有 23 题、Retail 有 7 题没有 gold 写操作。fixed 的现状见 11.3。
 
 分类脚本和逐条结果：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/audits/tau2-failure-taxonomy-20261010/`。其中
 `auto.json` 的 `final` 字段是逐条分类，`table.py` 的 `MAN` 字典记录精读时的人工改判。
 
-## 11. 下一轮训练计划（2026-10-10，待批准启动）
+## 11. benchmark 变体：official 与 fixed（当前定义）
 
-### 11.1 题目划分
+决策记录见 [ADR 0010](../../decisions/0010-tau2-official-and-fixed-benchmark-variants.md)。
 
-不用 Telecom，其余划分与之前相同（[ADR 0003](../../decisions/0003-tau2-data-and-evaluation.md)）。
+- `official` 是 tau2-bench `b7ea907` 原样，用于和榜单比较。
+- `fixed` 用于训练。
 
-| 模式           | 训练集                                         | 训练中评测                                        |
-| -------------- | ---------------------------------------------- | ------------------------------------------------- |
-| formal（本轮） | 官方 train 104 题：Airline 30、Retail 74       | 官方 test 60 题：Airline 20、Retail 40            |
-| tune           | 从官方 train 切出 83 题：Airline 24、Retail 59 | dev 21 题：Airline 6、Retail 15，也来自官方 train |
+评测时两个变体都报，fixed 的数字不单独报。用 `econfig.benchmark_variant` 选择变体，所有配置的默认值都是 `official`。
 
-- tune 的 dev 切法：每个领域先排序，再用 `Random("42:<domain>")` 打乱，取 `round(n × 0.2)` 题。代码会检查 dev
+### 11.1 fixed 包含什么
+
+| 层           | 内容                                                             | 来源                                                                        |
+| ------------ | ---------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| 数据（上游） | Airline 44 题、Retail 105 题的 reward_basis；替换 retail 64、105 | PR #411、#571，pin 的 head commit 记在 `examples/tau2/benchmark_fixes.json` |
+| 数据（我们） | 20 道 Retail 题的补丁，见 11.2                                   | 2026-10-10 的 Retail 核查                                                   |
+| 环境         | `modify_pending_order_items` 按每个 item 自己的 variant 定价     | PR #322                                                                     |
+| 评分         | 两条转人工规则，见 11.3                                          | 我们                                                                        |
+| 训练集       | Retail train 去掉与 test 重复的 5 题，见 11.4                    | 我们                                                                        |
+
+- **官方没有修。**`b7ea907` 之后，main 没有改过 Airline 和 Retail 的数据、工具或评估器（10.5）。
+- \*\*#580 没有作为代码合入。\*\*它的作用是：gold 写操作执行抛错时，DB 判定不算通过。fixed 下，`check_gold_replay.py`
+  没有查出抛错的 gold 写操作，合入它不会改变任何分数。
+- **社区里不采用的修改**：
+  - Amazon verified 对 49、18、91、21 的改动：49 的新 gold 不在订单里，18、91 的目标商品缺货，21 把 product id 当成了
+    item id；
+  - #561：它会替换 `pyproject.toml`；
+  - #392 中把用户模型默认换成 gpt-5.5、修改转人工停止条件的部分；
+  - AGI-Eval revised：只改了用户 prompt。
+
+### 11.2 我们自己的 Retail 补丁
+
+依据是两次 step 0（official 和 fixed v1，各 456 条 Retail episode）的失败轨迹：逐条比较 agent 实际的写操作和 gold
+的写操作。补丁和每题的理由记在 `benchmark_fixes.json` 的 `patches` 里。社区调研的中间结果存档在
+`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/audits/tau2-retail-audit-20261010/`。
+
+| 问题                                                                                             | 题号（划分）                                 | 补丁                                                                                                                                | 两次运行中直接因此失败的 episode |
+| ------------------------------------------------------------------------------------------------ | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| 指令没写支付或退款方式，gold 用的是原支付方式 PayPal                                             | 16、63（train）；60、61（test）              | 用户指令加一句：被问到时选 PayPal                                                                                                   | 3                                |
+| 指令里的 "the other card" 指向 gold 没用的那张卡                                                 | 98（train）                                  | 改为"尾号 8484 的 Mastercard"                                                                                                       | 4                                |
+| 指令没写取消原因，gold 是 "no longer needed"                                                     | 59、66（train）；38（test）                  | 用户指令加一句：被问到原因时说 no longer needed                                                                                     | 10（38 题 8 条全挂）             |
+| 64（#571 的替换题）：预算内有两款 4K 防水相机，gold 选了较便宜的黑色，agent 选了与原机同色的银色 | 64（test）                                   | 指令加一句：多款符合时选最便宜的                                                                                                    | 4（fixed v1 中 4/4）             |
+| 什么都不做也得 1 分                                                                              | 25、57（train）；65（test）                  | 25：gold 加上转人工（用户要求退到 Amex，账户里没有 Amex），并加 COMMUNICATE 检查追踪号；57、65：改为 DB+ACTION，要求 agent 查过订单 | 25 有 2 条转人工被清零           |
+| gold 里的转人工是从 25 抄来的：summary 写的是 Amex 退款，26 的用户根本没提                       | 26（test）                                   | 删掉这个 gold 转人工                                                                                                                | —                                |
+| NL 断言只是重述写操作，而 judge 只看对话文本                                                     | 105–107、109、110、113（train）；111（test） | reward_basis 只保留 DB                                                                                                              | 2（110 只因这条断言失败）        |
+
+**对已删除的旧 12.7 的两处更正**：
+
+- 82 不是指令矛盾。用户在两个订单里各有一台平板，较贵的那台是用 gift card 付的，退款回不到信用卡。按指令，这时应整单退到 gift card，这正是 gold
+  的做法。
+- 在 fixed v1 中，10、12、50 已经按 DB+ACTION 计分，必须转人工才能得分，不属于"什么都不做也得分"。
+
+**不修的**：
+
+- 5–9 等 23 道题的 known_info 只给了 user id 和邮编（#337/#356）。这些题只按 DB 计分，失败轨迹里也没有卡在认证上的。
+- 20、18、79 等题是 agent 选错了变体，gold 是对的，属于正常难度。
+- 30–32、54、55、69 的取消原因能从指令推出来。
+- 40（test）和 99（train）的指令只说"信用卡"，用户却有两张。两次运行中没有因此失败的 episode。
+- airline:7 的金额有歧义（#495），Airline `payment_history` 的 hash 对列表顺序敏感（#514）。
+
+### 11.3 转人工规则
+
+两条规则都在官方 evaluator 之后执行（`benchmark_variant.apply_transfer_rule`）：
+
+1. agent 转了人工而 gold 没有转，记 0 分。例外：Retail 中 gold 有写操作的题。
+1. gold 有转人工而 agent 没有转，记 0 分。gold 含转人工的题是 Airline 13，Retail 10、12、25、50。
+
+**为什么只在 Retail 设例外**（依据 fixed v1 的 step 0）：
+
+- Retail 有 17 条原本成功的 episode 被转人工规则清零，其中 13 条在有 gold
+  写操作的题上（1、32、43、46、47、51、53、93、94、101）。 抽读到的都是写操作已经完成后，用户提出 agent
+  做不了的要求，比如"收不到邮件，拿不到退货单""能不能加急退款"，agent 才转人工。这符合 Retail policy 的"超出能力范围时转人工"。
+- Airline 有 63 条被清零，其中 14 条在有写操作的题上（24、32、35、37、39）。抽读到的是在回避拒绝：35 的用户明确说 "I don't want
+  to be transferred"，agent 应该拒绝全额退款，却转了人工；37、39 同类。所以 Airline 不设例外。
+- 代价：两个领域的规则不一致；例外的依据是抽读，不是 evaluator 能检查的条件。
+
+### 11.4 训练集去重
+
+Retail train 的 72、96、37、41、67 与 test 的 71、97、36、42、68 是同一用户，gold 写操作完全相同（逐条核对），因此从训练中去掉。
+
+- test 不变。去重后 train 是 Airline 30 + Retail 69 = 99 题。
+- 实现方式是 `get_tau2_dataset(variant="fixed")` 在训练集里去掉这些题。benchmark 本身不变，`--task-set base`
+  仍然评全部 164 题；报告中另给 `retail/train_pool`（69 题）。
+- 近似重复的题没有去掉，因为 gold 不同：31↔32、93↔94、6/7/8↔5/9、63↔62、13/14↔12、34↔33、25↔26。
+
+### 11.5 生成与校验步骤
+
+1. **生成数据目录**：`python scripts/tau2/build_fixed_data.py <official data> <out>`，生成的 digest
+   必须等于 `benchmark_variant.TASK_FILE_SHA256["fixed"]`。
+
+   - 当前目录：`_cache/tau2-bench-b7ea9074…-fixed-v2/data`。Retail `tasks.json` 的 sha256 是
+     `03a79539…`，Airline 不变（`ec04aec0…`）。
+   - 上一版 `…-fixed-pr411-pr571/data` 保留，只用于复现 13.1。
+
+1. **gold
+   重放**：`TAU2_DATA_DIR=<fixed> python scripts/tau2/check_gold_replay.py fixed`，要求没有抛错的写操作。当前是
+   0 条；另有 16 条读操作失败，读操作不影响 DB。
+
+1. **补丁题打分检查**：运行本目录的 `scripts/official-runner/check_patched_scoring.py`。
+
+   - 做法：对 20 道补丁题各构造三条合成轨迹（空轨迹、gold、去掉转人工的 gold），用真实 evaluator 打分，NL 断言打桩为通过。
+   - 要求：gold 得 1 分，空轨迹得 0 分。当前全部满足。
+   - 这个检查能失败：换到上一版数据上运行，会报出 25、57、65。
+
+1. **单元测试**：
+
+   - `tests/test_tau2_benchmark_variant.py`：补丁操作、两条转人工规则、Retail 例外、固定的 digest；
+   - `tests/test_tau2_official_runtime.py::test_fixed_variant_trains_without_the_test_twins`。
+
+   分别破坏反向转人工规则、Retail 例外和训练集去重，对应的测试都会失败。
+
+1. **启动校验**：评测、训练和 critic 启动时都核对 `TAU2_DATA_DIR` 的 digest，与变体不符就直接报错。
+
+## 12. 训练计划（待批准启动）
+
+### 12.1 题目划分
+
+不用 Telecom，用 fixed 变体去重后的训练集（11.4）。
+
+| 模式           | 训练集                                      | 训练中评测                                      |
+| -------------- | ------------------------------------------- | ----------------------------------------------- |
+| formal（本轮） | 99 题：Airline 30、Retail 69                | 官方 test 60 题：Airline 20、Retail 40          |
+| tune           | 从这 99 题切出 79 题：Airline 24、Retail 55 | dev 20 题：Airline 6、Retail 14，同样来自训练集 |
+
+- **tune 的 dev 切法**：每个领域先排序，再用 `Random("42:<domain>")` 打乱，取 `round(n × 0.2)` 题。代码会检查 dev
   与训练集不重叠。
-- 每个领域的题数和 sha256 必须与 `examples/tau2/contracts.py` 的 `OFFICIAL_SPLIT_SNAPSHOTS`
-  一致，否则拒绝启动。
-- **之前的划分**：最初是 Airline + Retail + Telecom 三域。上一次 formal critic 用了 178 题，共 24 步。Telecom
-  在训练前就是 320/320 全对，166 个 GRPO 组里 160 个全对，没有组内对比，却占了约 42% 的 rollout，所以 ADR 0003 把 policy
-  训练改成两域。这次 critic 也去掉 Telecom。
-- 训练只在 train 上做，test 只记录、不用来选 checkpoint。base 集（164 题）里包含 train，所以训练后的 base 分数不是
-  held-out 结果，test 60 题才是。
+- **划分校验**：官方划分的题数和 sha256 必须与 `examples/tau2/contracts.py` 的 `OFFICIAL_SPLIT_SNAPSHOTS`
+  一致，否则拒绝启动。去重在这一步之后执行。
+- **为什么不用 Telecom**：训练前 Telecom 就是 320/320 全对，166 个 GRPO 组里 160 个全对，没有组内对比，却占了约 42% 的
+  rollout（[ADR 0003](../../decisions/0003-tau2-data-and-evaluation.md)）。
+- **哪些结果是 held-out**：训练只在 train 上做，test 只记录，不用来选 checkpoint。base 集包含 train，所以训练后的 base
+  分数不是 held-out 结果，test 60 题才是。
 
-### 11.2 运行顺序与配置
+### 12.2 运行顺序与配置
 
-都用 DeepSeek-Flash 做用户模拟器和 NL judge：temperature 0，无回复上限，key 从 `TAU2_DEEPSEEK_ENV_FILE`
-读取。
+都用 DeepSeek-Flash 做用户模拟器和 NL judge，temperature 0，不设回复上限，key 从 `TAU2_DEEPSEEK_ENV_FILE`
+读取。每次运行都要传 `econfig.benchmark_variant=fixed`，并把 `TAU2_DATA_DIR` 指向 fixed-v2 数据目录。配置的默认值是
+official，目录与变体不符时会拒绝启动。
 
-| 步骤            | 配置                                            | 步数                                                                    | 存档与评测                                  | 评测内容                                                |
-| --------------- | ----------------------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------- |
-| 1. critic       | `scripts/tau2/train_critic.sh`，formal          | 2 epoch：$\\lceil 104/16 \\rceil \\times 2 = 14$ 步，208 条训练 episode | 第 5、10、14 步存档；第 0、5、10、14 步验证 | critic 在 60 条固定 test 轨迹上的 MSE、EV（按领域分开） |
-| 2. SAO          | `run.sh policy mixed sao`，加载第 1 步的 critic | 2 epoch，26 步                                                          | 每 5 步存档并评测，训练前先评一次           | test 60 题 × 4 次，temperature 0：mean@4、pass^1/2/4    |
-| 3. GRPO（对照） | `run.sh policy mixed grpo`                      | 2 epoch：$\\lceil 104/8 \\rceil \\times 2 = 26$ 步，每题 8 条           | 同上                                        | 同上                                                    |
+| 步骤            | 配置                                            | 步数与 episode                                                           | 存档与评测                                  | 评测内容                                                |
+| --------------- | ----------------------------------------------- | ------------------------------------------------------------------------ | ------------------------------------------- | ------------------------------------------------------- |
+| 1. critic       | `scripts/tau2/train_critic.sh`，formal          | 2 epoch：$\\lceil 99/16 \\rceil \\times 2 = 14$ 步，198 条训练 episode   | 第 5、10、14 步存档；第 0、5、10、14 步验证 | critic 在 60 条固定 test 轨迹上的 MSE、EV（按领域分开） |
+| 2. SAO          | `run.sh policy mixed sao`，加载第 1 步的 critic | 2 epoch，26 步；每 epoch Airline 240 + Retail 552 条，共 1584 条         | 每 5 步存档并评测，训练前先评一次           | test 60 题 × 4 次，temperature 0：mean@4、pass^1/2/4    |
+| 3. GRPO（对照） | `run.sh policy mixed grpo`                      | 2 epoch：$\\lceil 99/8 \\rceil \\times 2 = 26$ 步，每题 8 条，共 1584 条 | 同上                                        | 同上                                                    |
 
-- 已用 `--check-config` 核对过三份配置，都退出 0，没有调用 API 或 GPU：
-  - critic：train 104、validation 60、步数 14；
-  - GRPO / SAO：领域只有 Airline + Retail，步数都是 26，每 5 步存档和评测；
-  - 用户只设 temperature 0。
-- **critic 的 epoch**（ADR 0005）：actor 固定（lr 0），每个 epoch 给每道训练题现采一条 temperature 1 的
-  episode，只更新 critic。每个 epoch 的最后一个 batch 只有 8 题（`drop_last: false`）。
-- **critic 的验证**：开头用训练的 `gconfig`（temperature 1，每题 1 次）采一次 60 条固定轨迹，之后每次验证都复用。验证测的是
-  critic，不是 policy，所以没有 mean@4 / pass^k。这一点写死在 `train_critic.py`，要改成 temperature 0 × 4
-  必须改代码。
-- **资源**：8 张 A100-80GB，当前全部空闲。
-  - critic：rollout 4 卡，actor 和 critic 共用另外 4 卡，阶段之间 offload。
+- **SAO 预算**：每个训练题 8 条，与 GRPO 相同。`config_sao.yaml` 已从 Retail 592（74 × 8）改为 552（69 × 8）。
+- **critic 的 epoch**（ADR 0005）：actor 固定（lr 0）。每个 epoch 给每道训练题现采一条 temperature 1 的
+  episode，只更新 critic。每个 epoch 的最后一个 batch 只有 3 题（`drop_last: false`）。
+- **critic 的验证**：开头用训练的 `gconfig`（temperature 1，每题 1 次）采一次 60 条固定轨迹，之后每次验证都复用这批轨迹。验证测的是
+  critic，不是 policy，所以没有 mean@4 / pass^k。
+- **资源**：8 张 A100-80GB。
+  - critic：rollout 用 4 卡，actor 和 critic 共用另外 4 卡，阶段之间 offload。
   - GRPO / SAO：rollout 3 卡，独立评测 1 卡，actor 4 卡。
-- **critic 耗时与用量（估计）**：上一次 critic 跑 24 步用了 1h44m，按比例本次约 1–1.5 h。DeepSeek 用户侧约 2.2M
-  prompt token、0.55M completion token，按 temperature 1 和重试留 1.3 倍余量，约 3M / 0.7M。这个用量里是否包含
-  NL judge 调用，没有核实。
-- 每次运行都要用新的 `TAU2_RUN_ROOT`。`recover.mode=auto` 会续跑同一目录，而旧 `critic-formal-v1` 是含 Telecom
-  的运行，固定验证集的 digest 对不上。
+- **critic 耗时与用量（估计）**：上一次 critic 跑 24 步用了 1h44m，按步数比例，本次约 1–1.5 h。DeepSeek 用户侧约 3M
+  prompt token、0.7M completion token，已按 1.3 倍留了余量。这个用量里是否包含 NL judge 的调用，没有核实。
+- **运行目录**：每次运行都要用新的 `TAU2_RUN_ROOT`，因为 `recover.mode=auto` 会续跑同一目录。
+- **启动前**：按上面的变体参数，对三份配置各跑一次 `--check-config`。题数变成 99 之后还没有重跑过。
 
-### 11.3 这轮能验证什么
+### 12.3 训练侧的处理（已实现）
 
-- **critic 能否在两域上学到价值**：60 条 test 轨迹上 MSE 下降、EV 上升，按领域分开看。
-- **SAO / GRPO 是否提高 test 成功率**：每 5 步一次 mean@4 和 pass^1/2/4。step 0 的 temperature 0
-  评测由训练启动时自动产出，作为同口径基线。
-- **SAO 与 GRPO 的对比**：两者 rollout 预算相同，题集相同，评测相同。
-- **稳定性（pass^4 − pass^1 的差）**：训练是否让模型在同一题上更一致。
-- **链路**：去掉用户回复上限后，在线采样、训练、存档和 recover 都能跑完。
-
-### 11.4 这轮验证不了什么
-
-- **和 Recuris 或榜单的绝对分数对比**：用户模拟器不同（7.2 第 1 项），且没有 Telecom。
-- **成功是真解决还是转人工**：官方指标分不出来（10.3）。训练 reward 不改的话，航空的提升可能来自更多转人工。要分辨，需要第 10.4
-  节的附加视图，这个视图还没实现。
-- **小于噪声的提升**：test 只有 60 题。此前同一初始模型的两次 step 0 在 Retail+Airline 上差 4.58pp，仅采样噪声的 95%
-  半宽合并约 ±4.1pp、Airline ±6.4pp（3.1）。164 题 base 集上的 bootstrap 区间宽 12–18pp（9.2），60
-  题只会更宽。几个点的变化不能当成训练有效。
-- **对 Doubao 或 gpt-5.2 用户的泛化**：训练和评测都用 DeepSeek 用户，换用户后的效果需要另跑评测。
-- **critic 对 SAO 的具体贡献**：critic 的 MSE / EV 只说明它拟合了 temperature 1 下的回报；它对 SAO 有没有帮助，只能从
-  SAO 与 GRPO 的对比间接看出，而这个对比还混着两种算法的其他差异。
-- **训练中途的中止风险**：GRPO 组里一旦有 episode 被排除，或用户首句就 stop，训练会中止（7.2 第 10 项）。DeepSeek
-  用户下还没发生过，但不能排除。
-
-启动需要批准。启动前先把当前改动 commit，因为相关文件的哈希会写进 critic 固定验证集的 manifest。
-
-## 12. 合入上游修复与训练侧改动（2026-10-10）
-
-### 12.1 两个 benchmark 变体
-
-可用的上游 PR 已合入，原版也保留，按 `econfig.benchmark_variant`
-选择（[ADR 0010](../../decisions/0010-tau2-official-and-fixed-benchmark-variants.md)）。
-
-| 变体       | 内容                                                                                                                     | 数据目录                                                                                         |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| `official` | tau2-bench `b7ea907` 原样，可与榜单比                                                                                    | `_cache/tau2-bench-b7ea9074…/data`                                                               |
-| `fixed`    | #411 的 reward_basis、#571 替换 retail 64/105、#322 修改价环境 bug、转人工规则（gold 不含转人工时，agent 转人工记 0 分） | `_cache/tau2-bench-b7ea9074…-fixed-pr411-pr571/data`，由 `scripts/tau2/build_fixed_data.py` 生成 |
-
-- #580 没有作为代码合入。它的作用是：gold 写操作执行抛错时，DB 判定不能算通过。合入 #571
-  后，`scripts/tau2/check_gold_replay.py fixed` 显示 Airline/Retail 没有执行抛错的 gold
-  写操作（official 有 retail 64 和 105 两条），#580 不会改变任何分数。这个脚本保留下来，用于持续检查。
-- 生成的 fixed 数据与独立做 git merge（#411 + #571）得到的结果逐题一致。两个变体都固定了 `tasks.json` 的
-  sha256，数据目录和变体不匹配时，评测、训练和 critic 启动都会直接报错（已实测）。
-- #322 改变了 5 道 Retail 题的 gold DB hash：train 20、21、37，test 36、100。
-
-### 12.2 训练集也被修复了
-
-这些修复按题生效，不区分 train/test，所以官方 train 104 题也在修复范围内：
-
-| 领域    | 划分        | reward_basis 改动 | 新增 NL 断言计分 | 无 gold 写操作 | gold 含转人工 | 题目替换 |
-| ------- | ----------- | ----------------- | ---------------- | -------------- | ------------- | -------- |
-| Airline | train（30） | 25                | 17               | 17             | 无            | 无       |
-| Airline | test（20）  | 19                | 9                | 7              | 13            | 无       |
-| Retail  | train（74） | 67                | 0                | 6              | 10、50        | 105      |
-| Retail  | test（40）  | 38                | 0                | 4              | 12、26        | 64       |
-
-- Retail 的 basis 改动大多只是删掉空的 NL_ASSERTION（没有断言却列在 basis 里），或补上已有的
-  COMMUNICATE/ACTION，不改变实际评分对象。Airline 的改动才是实质性的：17 道 train 题开始对 NL 断言计分。
-- 社区没有专门针对 train 的修复。10.2 里 train 上的问题，有修复的是 retail:105（#571）、retail:20/21/37（#322 价格
-  bug），以及 Airline 拒绝题的转人工（#411 + 转人工规则）。airline:7（train）和
-  retail:38（test）、60（test）、110（train）仍然没有任何来源修过。
-- 代价：Airline 17 道 train 题的 reward 现在依赖 NL judge，而 judge 就是 DeepSeek 用户模型（7.2 第 2
-  项），judge 的噪声会进入训练 reward。
-
-### 12.3 训练侧改动
-
-- **单次回复上限**：保留 4096，以节省资源（用户决定）。12% 到 17% 的 Airline 训练 episode
-  至少有一次回复被截断（9.5），这一代价已知并接受。
-- **训练墙钟超时**：已改为保留 episode，标记为 truncated，reward 0，不再重跑（ADR 0009 修订）。原来的重跑做法只保留按时跑完的
+- **单次回复上限**：保留 4096，以节省资源（用户决定）。已知代价：上一轮 12% 到 17% 的 Airline 训练 episode
+  至少有一次回复被截断（9.5）。
+- **训练墙钟超时**：保留这条 episode，标记为 truncated，reward 0，不重跑（ADR 0009 修订）。如果重跑，只会保留按时跑完的
   episode，会系统性地去掉慢的长轨迹。
-- **组内成员丢失**：12.4
-  的方案已批准并实现（[ADR 0011](../../decisions/0011-tau2-lost-episodes-in-training.md)），细节见 12.4
-  末尾。
+- **组内成员丢失**（[ADR 0011](../../decisions/0011-tau2-lost-episodes-in-training.md)）：
+  - 上下文超限和墙钟超时记 0 分，照常训练。
+  - 其他异常对单个成员从头重跑，最多 3 次。仍然失败的成员从组里去掉，不计入 baseline，也不训练。
+  - 存活成员 ≥ $\\lceil n/2 \\rceil = 4$ 时，在存活成员上归一化。不足 4 个时，这道题放到本 epoch 末尾重跑一次；再被拒就记为
+    skipped。每个 epoch 超过 2 题 skipped，训练中止。
+  - 用户第一句就结束、policy 一次都没被调用的 episode，按同样的方式丢弃。
+  - critic 每题只有一条 episode，所以在同一步内重跑一次，预算相同。
+  - 新增训练指标：`tau2_batch/epoch_deferred_tasks`、`tau2_batch/epoch_skipped_tasks`。
+- **还没实现**：按题统计 infra 失败率，以及失败与轮数的相关性。这是判断上述处理是否偏向短对话的依据。
 
-### 12.4 组内成员丢失：同类框架的做法
+同类框架的做法（定阈值 4、预算 2 的依据）：
 
 调研了 AReaL upstream、verl、OpenRLHF、slime、ROLL、SkyRL、rLLM、Agent Lightning、TRL、NeMo-RL、ART 和
 DAPO。下表的结论来自代码，不是文档：
@@ -640,42 +689,39 @@ DAPO。下表的结论来自代码，不是文档：
 - 2 个成员、二值 reward 时，advantage 只有两种情况：全 0，或者 ±1，噪声很大。
 - 一个组丢了 6 个成员，本身就说明任务或环境有系统性问题；这个阈值会把这个信号掩盖掉。
 
-**建议**：
+### 12.4 这轮能验证什么
 
-1. **我们已经做了分类**：上下文超限和墙钟超时记 0 分训练（模型或预算导致的失败），其余异常算 infra。
-1. **infra 失败先对单个成员从头重跑**，上限 3 次，这是现有行为。
-1. **重试用尽后**：
-   - 存活成员 ≥ $\\lceil n/2 \\rceil = 4$ 时，用 `traj_group_sizes` 在存活成员上算 mean/std。
-   - 不足 4 个时，把这道题推到同一个 epoch 的末尾再跑一次，保持"每题一次"；还失败就记为 skipped。
-   - 每个 epoch 允许的 skipped 题数要有上限（建议 ≤ 2 题，约 2%），超过就中止训练。
-   - 阈值 4 是推断出来的，没有框架给出过这个具体数字。
-1. **用户第一句就结束、policy 一个 token 都没产出**：这种成员的 reward 与策略无关，不计入
-   baseline，也不训练。同一题反复出现时单独报出来。DeepSeek 用户下 656 条里没有出现过。
-1. **训练指标**：报每道题的 infra 失败率，以及失败与轮数的相关性。这是判断第 2、3 步是否无偏的唯一依据。
+- **critic 能否在两个领域上学到价值**：60 条 test 轨迹上 MSE 下降、EV 上升，按领域分开看。
+- **SAO / GRPO 是否提高 test 成功率**：每 5 步评测一次 mean@4 和 pass^1/2/4，fixed 和 official
+  两个变体都报。step 0 的同口径基线由训练启动时自动产出。
+- **提升是不是靠转人工**：在 fixed 上，不该转却转、该转却没转都会记 0 分，所以 fixed 上的提升不会来自转人工。official 上的提升如果明显大于
+  fixed， 多出来的部分可能来自转人工。
+- **SAO 与 GRPO 的对比**：两者的 rollout 预算、题集和评测都相同。
+- **稳定性**：看 pass^4 与 pass^1 的差，判断训练是否让模型在同一题上表现更一致。
 
-本地 fork 与 upstream 的差别：本地的 `_normalize_group_rewards` 只要组里有一个 None 就丢整组，再加上
-`fail_on_rejection=True`，结果就是训练中止。upstream 已经改为在存活成员上归一化。
+### 12.5 这轮验证不了什么
 
-**实现**（已获批准，2026-10-10）：
+- **与 Recuris 或榜单比绝对分数**：用户模拟器不同（7.2 第 1 项），也没有 Telecom。fixed 的分数本来就不能与榜单比。
+- **小于噪声的提升**：test 只有 60 题。同一配置两次重测相差约 3pp（13.1）；采样噪声的 95% 半宽，合计约 ±4.1pp，Airline 约
+  ±6.4pp（3.1）。 几个点的变化不能当作训练有效。
+- **对 Doubao 或 gpt-5.2 用户的泛化**：训练和评测都用 DeepSeek 用户，换用户后的效果需要另跑评测。
+- **critic 对 SAO 的具体贡献**：MSE / EV 只说明 critic 拟合了 temperature 1 下的回报。它对 SAO 有没有帮助，只能从 SAO
+  与 GRPO 的对比里间接看出，而这个对比还混着两种算法的其他差异。
+- **NL judge 带来的 reward 噪声有多大**：Airline 有 26 道题按 NL 断言计分，judge 就是用户模拟器所用的模型。
 
-- 训练中，episode 重试用尽后从组里丢掉，不再让整组失败（`reject_exhausted_episode`）。
-- 不足 4 个成员的组被拒绝（`min_usable_group_size`）。
-- 被拒的题在本 epoch 末尾重跑一次；重跑再被拒就记为 skipped。每个 epoch 超过 2 次
-  skipped，训练中止（`max_skipped_tasks_per_epoch`）。
-- critic 每题只有一条 episode，所以在同一步内重跑一次，预算相同。
-- recover 时，等待重跑的题会写进恢复缓冲区。
-- 训练指标新增 `tau2_batch/epoch_deferred_tasks` 和 `tau2_batch/epoch_skipped_tasks`。
+### 12.6 未决事项
 
-还没实现的是第 5 条：按题统计失败率，以及失败与轮数的相关性。
+1. 启动 critic、SAO、GRPO，需要批准。
+1. 用 gpt-5.2（reasoning low）做用户跑一次 base 集，与榜单定标。需要 OpenAI 渠道和费用，需要批准。
+1. NL judge 与用户模拟器分开配置：暂不做（用户决定）。
+1. 按题统计 infra 失败率（12.3）。
+1. 查清 13.2 中 rank 3 的挂起：在启动训练前，至少确认它与 `2d7d342a` 无关，或者把训练的 `request_timeout` 调小。
 
-### 12.5 下一步
+## 13. step 0 评测
 
-1. 12.4 已实现。
-1. 训练使用 fixed 变体（用户决定）。两个变体的评测都要报。
-1. 在两个变体上各跑一次 step 0 评测，结果见 12.6。
-1. 按第 11 节启动 critic、SAO 和 GRPO，需要另行批准。
+### 13.1 上一轮：official 与 fixed v1（2026-10-10）
 
-### 12.6 两个变体的 step 0 评测（2026-10-10）
+fixed v1 是加入 11.2–11.4 之前的版本，只有 #411、#571、#322 和第一条转人工规则（没有 Retail 例外）。
 
 配置与第 8 节相同：未训练的 Qwen3.5-4B，base 集 164 题，每题 4 次，policy 和 DeepSeek-Flash 用户都是 temperature
 0。代码是 `1d14d8dc`，从一个单独固定在这个提交的 worktree 运行。两个变体先后在同一台 8 卡机上跑完，各用约 26 分钟和 31 分钟。
@@ -689,21 +735,21 @@ DAPO。下表的结论来自代码，不是文档：
 | official | Retail        | 114  | 0    | 0.820           | 0.703  | 0.535  |
 | official | Retail train  | 74   | 0    | 0.848           | 0.739  | 0.568  |
 | official | Retail test   | 40   | 0    | 0.769           | 0.637  | 0.475  |
-| fixed    | 合计          | 164  | 1    | 0.690           | 0.571  | 0.460  |
-| fixed    | Airline       | 50   | 1    | 0.428           | 0.297  | 0.224  |
-| fixed    | Airline train | 30   | 1    | 0.364           | 0.228  | 0.138  |
-| fixed    | Airline test  | 20   | 0    | 0.525           | 0.400  | 0.350  |
-| fixed    | Retail        | 114  | 0    | 0.805           | 0.692  | 0.561  |
-| fixed    | Retail train  | 74   | 0    | 0.845           | 0.750  | 0.635  |
-| fixed    | Retail test   | 40   | 0    | 0.731           | 0.583  | 0.425  |
+| fixed v1 | 合计          | 164  | 1    | 0.690           | 0.571  | 0.460  |
+| fixed v1 | Airline       | 50   | 1    | 0.428           | 0.297  | 0.224  |
+| fixed v1 | Airline train | 30   | 1    | 0.364           | 0.228  | 0.138  |
+| fixed v1 | Airline test  | 20   | 0    | 0.525           | 0.400  | 0.350  |
+| fixed v1 | Retail        | 114  | 0    | 0.805           | 0.692  | 0.561  |
+| fixed v1 | Retail train  | 74   | 0    | 0.845           | 0.750  | 0.635  |
+| fixed v1 | Retail test   | 40   | 0    | 0.731           | 0.583  | 0.425  |
 
-fixed 排除了 1 条 episode，`airline:14:trial1`：4 次尝试都超过了 32K 上下文。它所在题的 pass^4 只按 3 次有效 trial
-无法计算，所以 Airline 的 pass^4 只在 49 题上算。
+fixed v1 排除了 1 条 episode，`airline:14:trial1`：4 次尝试都超过了 32K 上下文。它所在题的 pass^4 只按 3 次有效
+trial 无法计算，所以 Airline 的 pass^4 只在 49 题上算。
 
-**fixed 的下降几乎全在 Airline，主要来自转人工规则**：
+**fixed v1 的下降几乎全在 Airline，主要来自转人工规则**：
 
-- Airline 从 0.780 降到 0.428。fixed 运行中，转人工规则之前的分数是 0.744，规则把 199 条 episode 里 63 条原本成功的记为
-  0，扣了 31.7pp。剩下约 3.6pp 是 #411 新增的 NL 断言计分，这个量与下面的运行间噪声同级，不能单独确认。
+- Airline 从 0.780 降到 0.428。fixed v1 运行中，转人工规则之前的分数是 0.744，规则把 199 条 episode 里 63
+  条原本成功的记为 0，扣了 31.7pp。剩下约 3.6pp 是 #411 新增的 NL 断言计分，这个量与下面的运行间噪声同级，不能单独确认。
 - Retail 几乎不变（0.820 → 0.805）。转人工规则扣了 17 条成功（3.7pp），规则之前的分数是 0.842，高于 official。
 - 这和 10.3 的估计（Airline 约 30pp 来自转人工）一致。也就是说，修复后这个 4B 模型的 Airline 真实水平约为 0.43，Airline
   train 只有 0.36。
@@ -722,65 +768,87 @@ train 基本不变。
 
 产物：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-eval-20261010/step0-base-t0-deepseek-{official,fixed}/`。对比脚本：`scripts/official-runner/variant_compare.py`。
 
-### 12.7 Retail 的题目问题与社区修复（2026-10-10 调研）
+### 13.2 本轮：fixed v2
 
-**结论**：
+配置与 13.1 相同：未训练的 Qwen3.5-4B，base 集 164 题，每题 4 次，policy 和 DeepSeek-Flash 用户都是 temperature
+0。代码 `b31e8eb5`，在固定于该提交的 worktree 中运行，数据目录 `…-fixed-v2/data`。official 没有重跑：它的数据和评分都没变，沿用
+13.1。
 
-- 官方 main 在 `b7ea907` 之后没有改过 Retail 的数据、工具或评估器。
-- 社区的 Retail 修复都还是 open 或已关闭未合并的 PR。我们发现的 38、60、110，没有任何 issue、PR 或社区修订版处理过。
-- 与 Airline 不同，Retail 的问题不在评分规则，而在题目本身：
-  - 指令没写清楚关键参数；
-  - 有些题什么都不做也能得分；
-  - train 和 test 之间有重复题。
+| 变体     | 领域 / 划分                   | 题数 | 排除 | mean@4 = pass^1 | pass^2 | pass^4 |
+| -------- | ----------------------------- | ---- | ---- | --------------- | ------ | ------ |
+| fixed v2 | 合计                          | 164  | 4    | 0.708           | 0.612  | 0.512  |
+| fixed v2 | Airline                       | 50   | 2    | 0.388           | 0.283  | 0.229  |
+| fixed v2 | Airline train                 | 30   | 2    | 0.356           | 0.233  | 0.179  |
+| fixed v2 | Airline test                  | 20   | 0    | 0.438           | 0.358  | 0.300  |
+| fixed v2 | Retail                        | 114  | 2    | 0.849           | 0.756  | 0.634  |
+| fixed v2 | Retail train                  | 74   | 2    | 0.868           | 0.782  | 0.667  |
+| fixed v2 | Retail 训练池（去重后 69 题） | 69   | 2    | 0.880           | 0.792  | 0.672  |
+| fixed v2 | Retail test                   | 40   | 0    | 0.812           | 0.708  | 0.575  |
 
-下表中，"已核实"表示我或调研 agent 读过代码或数据，或在本地重放过；其余来自 issue 或论文文字。
+排除 4 条，按题计算的 pass^4 因此只覆盖 160 题：
 
-| 问题                                                                 | 题号（划分）                                                                                    | 来源                                        | 现状                    | 影响                                                                         |
-| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------- | ----------------------- | ---------------------------------------------------------------------------- |
-| 指令没写支付或退款方式，gold 却固定了一种                            | 41、63、16、98（train）；60、61（test）                                                         | 我们核查；#319                              | 无修复                  | 用户模拟器选另一种合法方式时，正确操作也记 0 分；训练 reward 有噪声          |
-| 指令没写取消原因，gold 固定为 "no longer needed"                     | 66（train）；38（test）；30、31、54、59、69（train）和 32、55（test）只是暗示了原因             | 我们核查；#392 只修了 66                    | #392 open               | 同上                                                                         |
-| NL 断言要求一次空操作写入                                            | 110（train）                                                                                    | 我们核查，已复核：gold 地址本来就是目标地址 | 无修复                  | 按断言做是空写入，不做又不满足断言                                           |
-| NL 断言写的是"应当执行某操作"，但 judge 只看对话文本，看不到工具调用 | 105–107、109、110、113（train）；111（test）                                                    | 读评估器代码                                | 无修复                  | 与 DB 检查重复，只增加 judge 噪声                                            |
-| gold 不改 DB，什么都不做也能得 1 分                                  | 10、25、50、57（train）；12、65（test）                                                         | 本地重放；#384                              | #411 只覆盖了其中一部分 | 训练时会奖励不作为                                                           |
-| gold 要求转人工，agent 不转也得分                                    | 50（train）；26（test）                                                                         | #320；arXiv 2605.10448                      | 无修复                  | 我们的转人工规则只处理反方向（不该转却转了）                                 |
-| 指令与 gold 不一致                                                   | 10（train）：指令说退两单，gold 只读取并转人工；82（train）：指令说收到两台平板，订单里只有一台 | #316；82 是我本次在轨迹里发现的             | 无修复                  | 三次 DeepSeek 运行 82 都只有 0.25，41 是 0–0.25；41 的失败来自支付方式未指定 |
-| train 和 test 重复题：同一用户、gold 写操作完全相同                  | 72↔71、96↔97、37↔36（38 是同一订单）、41↔42、67↔68                                              | 已复核                                      | —                       | test 被训练集污染                                                            |
-| 近似重复：指令相似度 ≥ 0.8，同一用户                                 | 31↔32、93↔94、6/7/8↔5/9、63↔62、13/14↔12、34↔33、25↔26                                          | 我们核查                                    | —                       | 轻度污染                                                                     |
-| 已修复                                                               | 105、64（#571）；20、21、36、37、100（#322）                                                    | —                                           | 已在 fixed 中           | —                                                                            |
+- `airline:10:trial3`、`airline:34:trial2`：4 次尝试都超过 32K 上下文，和 v1 的 `airline:14` 同类。
+- `retail:59:trial3`、`retail:99:trial3`：`MissingAttemptRecord`，见本节末尾的"新出现的挂起"。
 
-修正一个之前的说法：Retail 的"DB hash 对列表顺序敏感"其实是 #322 那个价格 bug 造成的（issue #325）。打上 #322 后，没有任何 gold
-写操作对顺序敏感。
+\*\*Airline 和预期一致：基本不变。\*\*0.428 → 0.388（−4.0pp）。fixed v2 对 Airline 只改了反向转人工规则，这条规则只影响
+airline:13， 这次没有清零任何 Airline episode。所以这 4pp 是运行间噪声，在 13.1 测得的约 3pp 的量级内。正向转人工规则在
+Airline 清零了 75 条原本成功的 episode（v1 是 63 条）。
 
-**不建议采用的**：
+\*\*Retail 没有降低，反而升高了。\*\*0.805 → 0.849（+4.4pp）。按题分组归因（114 题，每组为 4 次平均分之和的变化）：
 
-- Amazon verified 对 49、18、91、21 的改动。49 的新 gold 不在订单里，与指令矛盾；18、91 的目标商品是
-  `available: false`；21 把 product id 当作 item id。我们 pin 的版本在这几题上是对的。
-- #561：它会替换 `pyproject.toml`。
+| 题组                                                               | 题数 | v1 → v2  | 折合 Retail pp |
+| ------------------------------------------------------------------ | ---- | -------- | -------------- |
+| 20 道打了补丁的题                                                  | 20   | +3.50 题 | +3.1           |
+| v1 被正向规则清零、v2 按 Retail 例外恢复的题（1、32、43 等 10 题） | 10   | +2.25 题 | +2.0           |
+| 其余未改动的题                                                     | 84   | −0.75 题 | −0.7（噪声）   |
 
-**可以考虑的**：
+- \*\*补丁让分数上升，是补丁本身的性质。\*\*补丁去掉的是"做对了也判错"的失败：
 
-- #392 的数据部分（66 的取消原因、93）。不要采用它把用户模型默认换成 gpt-5.5，也不要采用它对转人工停止条件的改动。
-- #356（已关闭）对 5–9 的 `known_info` 修改。
-- Amazon verified 只改指令提示的那部分（8、35、42、59、71、72、74、93、109）。
+  - 38：v1 是 0/4，v2 是 4/4，补丁写明了取消原因；
+  - 64：0/4 → 4/4，补丁加了"多款符合时选最便宜的"；
+  - 59、60、63、66、110 也都升到了 4/4。
 
-**Retail 的处理建议**，作为下一版 fixed 的候选，尚未实现：
+  这些失败原本就不是模型能力的问题，留着只会给训练加噪声，不会增加可学的空间。
 
-- **train（74 题）**，目标是降低训练 reward 的噪声：
-  - 在指令里补上支付或退款方式（41、63、16、98），补上取消原因（66，取自 #392）。
-  - 删掉 110 的空操作断言，以及 105–107、109、113 中描述动作的 NL 断言，只保留 DB 检查。
-  - 修正 82 的指令，或把 82 排除。
-  - 把重复题 72、96、37、41、67 移出训练，否则 test 上对应的 71、97、36、38、42、68 等于见过的题。另一种做法是保留它们，但 test
-    单独报一个"去重后"的子集。
-  - 什么都不做也能得分的 10、25、50、57：要么排除，要么要求出现 gold 中的转人工或必须传达的信息。
-  - 增加反向的转人工规则：gold 中有转人工而 agent 没转，记 0 分。
-- **test（40 题）**：
-  - official 保持原样不动。
-  - fixed 中，38 接受任一取消原因，60、61 接受任一支付方式；12、65 单独标出。
-  - 另报一个"排除重复题"的 test 子集（去掉 71、97、36、38、42、68）。
+- \*\*本该降分的三题没有降。\*\*57、65 改为必须查订单，但这个模型本来就会查：57 在 v1、v2 都是 4/4，65 从 3/4 升到 4/4。25
+  要求转人工，v2 是 2/4，与 v1 相同。 "什么都不做也得分"的漏洞对这个模型的分数影响很小。
 
-**需要决定**：
+- **Retail 例外恢复了 v1 误清零的分数**（+2.0pp），这和 11.3 的判断一致。正向规则在 Retail 不再清零任何 episode。反向规则清零了 2
+  条（retail train）。
 
-1. 是否把上面的 Retail 修订做进 fixed。这会改变 fixed 的定义，step 0 要重跑，结果与 12.6 不再可比。
-1. 重复题怎么处理：从训练中移除，还是保留并在 test 上单独报去重子集。
+**训练集上的组内对比**（temperature 0，每题 4 次，按 train 池统计）：
 
-调研脚本和中间结果：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/audits/tau2-retail-audit-20261010/`。
+| 领域          | 题数 | v1：全对 / 全错 / 有对比 | v2：全对 / 全错 / 有对比     |
+| ------------- | ---- | ------------------------ | ---------------------------- |
+| Airline train | 30   | 4 / 11 / 15              | 5 / 12 / 13                  |
+| Retail 训练池 | 69   | 45 / 0 / 22              | 47 / 0 / 22（另 2 题有排除） |
+
+- Retail 训练池有 47/69 题在 temperature 0 下 4 次全对。可学的空间主要在 Airline，以及 Retail 剩下的约 22 题。
+- 训练用 temperature 1、每组 8 条，组内对比会比这里多。上一轮 GRPO（含 Telecom、官方数据）训练期 Retail reward 是
+  0.868，72.5% 的组没有组内优势（3.2）。所以"Retail 提升空间小"在训练里同样存在。
+- 去掉不公平的失败后 Retail 分数上升，是修复的预期结果。如果想要更多 Retail 训练空间，办法只能是加更难的题或换更难的用户模拟器，不能靠让评分变得不公平。
+  本轮没有做这类改动。
+
+**新出现的挂起**（未解决，记为待查）：
+
+- **现象**：controller 的 task 611、643 都分到了 engine rank 3，这两个任务就是 `retail:59:trial3` 和
+  `retail:99:trial3`。它们被 submit 之后，一直没有打出 `STARTING SIMULATION`，也没有写任何尝试记录，直到
+  `request_timeout`（3600 s）后才被 controller 拒绝。
+
+- **对结果和耗时的影响**：评测因此多挂了约 45 分钟，总耗时 77 分钟（v1 是 31 分钟）。这两条按 infra 排除，不影响其他 episode 的分数。
+
+- **过往运行**：之前 5 次运行（10-09 的 3 次、10-10 的 2 次）的 `run.log` 里都没有 `Rollout timed out`。
+
+- **嫌疑范围**：
+
+  - `2d7d342a`（组内成员丢失的处理）进入了这次运行，它改动了 `workflow_executor` 和 proxy workflow；
+  - 挂起发生在 `agent.run` 被调用之前，即 proxy 的 grant capacity / session 建立阶段。proxy 在 11:11 清理了 2
+    个 stale session（`267-0`、`275-0`），数量与挂起的任务一致。
+
+  没有复现，也没有定位到根因。
+
+- **对训练的影响**：同样的挂起如果发生在训练中，这个成员要等 3600 s 才会被当作丢失成员，按 ADR 0011 处理。这不会让训练中止，但会让那一步多等 1 小时。
+
+产物：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-eval-20261010-fixed-v2/step0-base-t0-deepseek-fixed-v2/`。
+对比脚本是 `scripts/official-runner/variant_compare.py`，按领域、划分和训练池输出 mean@4 /
+pass^k，以及转人工规则清零的条数。
