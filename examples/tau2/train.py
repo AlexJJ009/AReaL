@@ -46,6 +46,7 @@ def get_tau2_dataset(
     critic_dev_fraction: float = 0.2,
     critic_tasks_per_domain: int | None = None,
     critic_rollouts_per_task: int = 1,
+    variant: str = "official",
 ) -> Dataset:
     """Create a HuggingFace Dataset from tau2 task IDs.
 
@@ -53,6 +54,8 @@ def get_tau2_dataset(
         domain: One or more τ² domains, or ``mixed``.
         split: Dataset split (e.g., 'train', 'test', 'small')
         type: Dataset type (e.g., 'rl', 'sft'), only 'rl' is supported for now
+        variant: τ² benchmark variant; ``fixed`` leaves out the train tasks
+            listed in ``benchmark_fixes.json``.
 
     Returns:
         Dataset: HuggingFace Dataset containing task_id entries
@@ -74,6 +77,17 @@ def get_tau2_dataset(
         domains=domains,
         split="train" if split == "dev" else split,
     )
+    if split in ("train", "dev"):
+        excluded = {
+            (d, task_id)
+            for d in domains
+            for task_id in benchmark_variant.train_excluded_task_ids(variant, d)
+        }
+        dataset_items = [
+            row
+            for row in dataset_items
+            if (row["domain"], row["task_id"]) not in excluded
+        ]
     if provenance is not None:
         dataset_items = [{**row, **provenance} for row in dataset_items]
     if critic_rollouts_per_task != 1:
@@ -357,6 +371,7 @@ def main(args):
         critic_dev_fraction=config.critic_dev_fraction,
         critic_tasks_per_domain=config.critic_tasks_per_domain,
         critic_rollouts_per_task=config.critic_rollouts_per_task,
+        variant=econfig.benchmark_variant,
     )
     if _dataset_split(config.train_dataset, "train") != "train":
         raise ValueError("Gradient training must use official train tasks")

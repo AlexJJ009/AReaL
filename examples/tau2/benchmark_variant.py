@@ -4,10 +4,14 @@
 ``official`` is tau2-bench ``b7ea907`` unchanged and stays comparable with the
 leaderboard. ``fixed`` applies open upstream fixes that are not merged yet:
 
-- data (``benchmark_fixes.json``): PR #411 reward bases, PR #571 tasks 64/105;
+- data (``benchmark_fixes.json``): PR #411 reward bases, PR #571 tasks 64/105,
+  then our own Retail patches;
 - environment: PR #322, ``modify_pending_order_items`` prices every item from
   its own new variant instead of the last one in the loop;
-- scoring: a transfer to a human agent scores 0 unless the gold actions transfer.
+- scoring: an episode scores 0 when it transfers to a human agent and the gold
+  actions do not, or does not transfer when they do. In Retail a transfer is
+  allowed on tasks with gold writes, where it follows the finished task;
+- training: train tasks that duplicate a test task are left out.
 
 The variant is a property of the process: the data directory is fixed when
 ``tau2`` is imported, and the environment patch is global. Each variant checks
@@ -39,7 +43,7 @@ TASK_FILE_SHA256: dict[str, dict[str, str]] = {
     },
     "fixed": {
         "airline": "ec04aec07306c8fe640b40905e1e7b9b7c88e55132cdcf9cc5448daa1798c5a4",
-        "retail": "61fa8da9b1ee1a245f1a719ec23d18fc3cbf74b938495de974c02f153226eedb",
+        "retail": "03a79539bff56afefcad29eece5bcf55884a3bda67bd60b862134e64ea4c005d",
     },
 }
 
@@ -56,26 +60,68 @@ def apply_task_fixes(
 ) -> list[dict[str, Any]]:
     """Return ``tasks`` with the fixed reward bases and replaced tasks."""
 
-    domain_fixes = fixes["domains"].get(
-        domain, {"reward_basis": {}, "replace_tasks": {}}
-    )
+    domain_fixes = fixes["domains"].get(domain, {})
+    reward_basis = domain_fixes.get("reward_basis", {})
+    replace_tasks = domain_fixes.get("replace_tasks", {})
+    patches = domain_fixes.get("patches", {})
     by_id = {str(task["id"]): task for task in tasks}
-    unknown = (
-        set(domain_fixes["reward_basis"]) | set(domain_fixes["replace_tasks"])
-    ) - set(by_id)
+    unknown = (set(reward_basis) | set(replace_tasks) | set(patches)) - set(by_id)
     if unknown:
         raise ValueError(f"{domain} fixes name unknown tasks: {sorted(unknown)}")
     fixed = []
     for task in tasks:
         task_id = str(task["id"])
-        task = domain_fixes["replace_tasks"].get(task_id, task)
-        if task_id in domain_fixes["reward_basis"]:
+        task = replace_tasks.get(task_id, task)
+        if task_id in reward_basis or task_id in patches:
             task = json.loads(json.dumps(task))
-            task["evaluation_criteria"]["reward_basis"] = domain_fixes["reward_basis"][
-                task_id
-            ]
+        if task_id in reward_basis:
+            task["evaluation_criteria"]["reward_basis"] = reward_basis[task_id]
+        for op in patches.get(task_id, {}).get("ops", []):
+            _apply_patch(task, op)
         fixed.append(task)
     return fixed
+
+
+def _apply_patch(task: dict[str, Any], op: dict[str, Any]) -> None:
+    """Apply one patch op; ops that no longer match their target raise."""
+
+    *parents, key = op["path"].split(".")
+    target = task
+    for name in parents:
+        target = target[name]
+    kind = op["op"]
+    if kind == "set":
+        target[key] = op["value"]
+    elif kind == "append":
+        target[key] = [*(target[key] or []), op["value"]]
+    elif kind == "remove":
+        items = target[key] or []
+        kept = [
+            item
+            for item in items
+            if any(item.get(k) != v for k, v in op["match"].items())
+        ]
+        if len(items) - len(kept) != 1:
+            raise ValueError(f"Task {task['id']}: {op} must match exactly one entry")
+        target[key] = kept
+    elif kind == "append_text":
+        text = (target[key] or "").strip()
+        target[key] = op["text"] if text in ("", ".") else f"{text} {op['text']}"
+    elif kind == "replace_text":
+        if (target[key] or "").count(op["old"]) != 1:
+            raise ValueError(f"Task {task['id']}: {op['old']!r} must occur once")
+        target[key] = target[key].replace(op["old"], op["new"])
+    else:
+        raise ValueError(f"Unknown patch op: {kind}")
+
+
+def train_excluded_task_ids(variant: str, domain: str) -> set[str]:
+    """Train task ids the variant leaves out of training."""
+
+    if variant != "fixed":
+        return set()
+    domain_fixes = load_fixes()["domains"].get(domain, {})
+    return set(domain_fixes.get("exclude_from_train", {}).get("tasks", []))
 
 
 def file_sha256(path: str | Path) -> str:
@@ -199,20 +245,49 @@ def agent_transferred(messages: Iterable[Any]) -> bool:
     return False
 
 
-def apply_transfer_rule(task: Any, messages: list[Any], reward_info: Any) -> Any:
-    """Score 0 when the agent transfers but the gold actions never do.
+@functools.cache
+def _tools_class(domain: str) -> type:
+    from tau2.registry import registry
+
+    return type(registry.get_env_constructor(domain)().tools)
+
+
+def _gold_writes(domain: str, gold: Iterable[Any]) -> bool:
+    from tau2.environment.toolkit import TOOL_TYPE_ATTR, ToolType
+
+    tools = _tools_class(domain)
+    return any(
+        getattr(getattr(tools, action.name, None), TOOL_TYPE_ATTR, None)
+        == ToolType.WRITE
+        for action in gold
+    )
+
+
+def apply_transfer_rule(
+    task: Any, messages: list[Any], reward_info: Any, domain: str
+) -> Any:
+    """Score 0 when the agent's transfer disagrees with the gold actions.
 
     The official DB check cannot see a transfer: on tasks whose correct outcome
-    is a refusal, handing off leaves the database unchanged and scores 1.
+    is a refusal, handing off leaves the database unchanged and scores 1, and a
+    required hand-off can be skipped. In Retail, a transfer on a task with gold
+    writes comes after the task is done, at the user's request for something
+    the agent cannot do, and keeps its score. In Airline it dodges a refusal.
     """
 
     criteria = task.evaluation_criteria
     gold = (criteria.actions or []) if criteria else []
-    if any(action.name == TRANSFER_TOOL for action in gold):
-        return reward_info
-    if not agent_transferred(messages):
+    expected = any(action.name == TRANSFER_TOOL for action in gold)
+    transferred = agent_transferred(messages)
+    if expected and not transferred:
+        flag = "missing_transfer"
+    elif transferred and not expected:
+        if domain == "retail" and _gold_writes(domain, gold):
+            return reward_info
+        flag = "unexpected_transfer"
+    else:
         return reward_info
     info = dict(reward_info.info or {})
-    info["unexpected_transfer"] = True
+    info[flag] = True
     info["official_reward"] = reward_info.reward
     return reward_info.model_copy(update={"reward": 0.0, "info": info})

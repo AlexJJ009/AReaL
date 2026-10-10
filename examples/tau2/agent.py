@@ -441,7 +441,7 @@ class Tau2Runner:
             )
             if self.econfig.benchmark_variant == "fixed":
                 reward_info = benchmark_variant.apply_transfer_rule(
-                    task, simulation.messages, reward_info
+                    task, simulation.messages, reward_info, domain
                 )
         except Exception as e:
             # Official τ² scores inside the simulation run, so a scoring failure

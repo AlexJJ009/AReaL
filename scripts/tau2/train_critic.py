@@ -395,7 +395,11 @@ def _expected_validation_rows(config: Tau2PPOConfig) -> int:
     # Mirrors split_critic_tasks: dev tasks are carved out of each train pool.
     total = 0
     for domain in domains:
-        pool = int(OFFICIAL_SPLIT_SNAPSHOTS[domain]["train"])
+        pool = int(OFFICIAL_SPLIT_SNAPSHOTS[domain]["train"]) - len(
+            benchmark_variant.train_excluded_task_ids(
+                config.econfig.benchmark_variant, domain
+            )
+        )
         if config.critic_tasks_per_domain is not None:
             pool = min(pool, config.critic_tasks_per_domain)
         total += max(1, min(pool - 1, round(pool * config.critic_dev_fraction)))
@@ -445,6 +449,7 @@ def build_tau2_critic_datasets(
         critic_tasks_per_domain=config.critic_tasks_per_domain,
         critic_rollouts_per_task=1,
         algorithm=config.algorithm,
+        variant=config.econfig.benchmark_variant,
     )
     train_dataset = get_tau2_dataset(**dataset_kwargs, split="train")
     validation_dataset = get_tau2_dataset(**dataset_kwargs, split=validation_split)

@@ -1,5 +1,5 @@
 {
- "_doc": "Per-task fixes applied on top of tau2-bench b7ea907 to build the 'fixed' benchmark variant. Generated from the PR head commits below; Build with scripts/tau2/build_fixed_data.py.",
+ "_doc": "Per-task fixes applied on top of tau2-bench b7ea907 to build the 'fixed' benchmark variant: reward bases and task replacements from the PR head commits in 'sources', then our own 'patches' from the 2026-10-10 Retail audit, and the train tasks left out of training. Build with scripts/tau2/build_fixed_data.py.",
  "base_revision": "b7ea9074c1cba482b30687fecdb5c8425fd6f619",
  "sources": {
   "reward_basis": {
@@ -9,6 +9,9 @@
   "tasks": {
    "pr": 571,
    "commit": "cc3103351cdbb9cbdee446cf46cd857ac1e10972"
+  },
+  "patches": {
+   "audit": "docs/research/2026-10-09-tau2-high-baseline-audit/README.md"
   }
  },
  "domains": {
@@ -173,7 +176,12 @@
      "NL_ASSERTION"
     ]
    },
-   "replace_tasks": {}
+   "replace_tasks": {},
+   "patches": {},
+   "exclude_from_train": {
+    "tasks": [],
+    "reason": ""
+   }
   },
   "retail": {
    "reward_basis": {
@@ -708,6 +716,301 @@
       ]
      }
     }
+   },
+   "patches": {
+    "16": {
+     "reason": "Refund method unspecified; gold refunds to PayPal.",
+     "ops": [
+      {
+       "op": "append_text",
+       "path": "user_scenario.instructions.task_instructions",
+       "text": "If the agent asks which payment method to use for a price difference or refund, choose your PayPal account."
+      }
+     ]
+    },
+    "25": {
+     "reason": "No gold write, so doing nothing scored 1. The user asks for the tracking number and for a human if the Amex refund is impossible.",
+     "ops": [
+      {
+       "op": "append",
+       "path": "evaluation_criteria.actions",
+       "value": {
+        "action_id": "25_transfer",
+        "requestor": "assistant",
+        "name": "transfer_to_human_agents",
+        "arguments": {
+         "summary": "The user wants the refund to an Amex credit card, which is not a payment method on the account."
+        },
+        "info": null,
+        "compare_args": []
+       }
+      },
+      {
+       "op": "set",
+       "path": "evaluation_criteria.communicate_info",
+       "value": [
+        "907614527588"
+       ]
+      },
+      {
+       "op": "set",
+       "path": "evaluation_criteria.reward_basis",
+       "value": [
+        "DB",
+        "COMMUNICATE"
+       ]
+      }
+     ]
+    },
+    "26": {
+     "reason": "The gold transfer is copied from task 25 (its summary is about an Amex refund the user never asks for).",
+     "ops": [
+      {
+       "op": "remove",
+       "path": "evaluation_criteria.actions",
+       "match": {
+        "name": "transfer_to_human_agents"
+       }
+      }
+     ]
+    },
+    "38": {
+     "reason": "Cancel reason unspecified; gold uses 'no longer needed'.",
+     "ops": [
+      {
+       "op": "append_text",
+       "path": "user_scenario.instructions.task_instructions",
+       "text": "If the agent asks for the reason for cancelling an order, say it is no longer needed."
+      }
+     ]
+    },
+    "57": {
+     "reason": "No gold action, so doing nothing scored 1. The agent must at least look the order up.",
+     "ops": [
+      {
+       "op": "set",
+       "path": "evaluation_criteria.actions",
+       "value": [
+        {
+         "action_id": "57_lookup",
+         "requestor": "assistant",
+         "name": "get_order_details",
+         "arguments": {
+          "order_id": "#W4284542"
+         },
+         "info": null,
+         "compare_args": [
+          "order_id"
+         ]
+        }
+       ]
+      },
+      {
+       "op": "set",
+       "path": "evaluation_criteria.reward_basis",
+       "value": [
+        "DB",
+        "ACTION"
+       ]
+      }
+     ]
+    },
+    "59": {
+     "reason": "Cancel reason unspecified; gold uses 'no longer needed'.",
+     "ops": [
+      {
+       "op": "append_text",
+       "path": "user_scenario.instructions.task_instructions",
+       "text": "If the agent asks for the reason for cancelling an order, say it is no longer needed."
+      }
+     ]
+    },
+    "60": {
+     "reason": "Payment method unspecified; gold uses PayPal.",
+     "ops": [
+      {
+       "op": "append_text",
+       "path": "user_scenario.instructions.task_instructions",
+       "text": "If the agent asks which payment method to use for a price difference or refund, choose your PayPal account."
+      }
+     ]
+    },
+    "61": {
+     "reason": "Payment method unspecified; gold uses PayPal.",
+     "ops": [
+      {
+       "op": "append_text",
+       "path": "user_scenario.instructions.task_instructions",
+       "text": "If the agent asks which payment method to use for a price difference or refund, choose your PayPal account."
+      }
+     ]
+    },
+    "63": {
+     "reason": "Payment method unspecified; gold uses PayPal.",
+     "ops": [
+      {
+       "op": "append_text",
+       "path": "user_scenario.instructions.task_instructions",
+       "text": "If the agent asks which payment method to use for a price difference or refund, choose your PayPal account."
+      }
+     ]
+    },
+    "64": {
+     "reason": "Two 4K waterproof cameras fit the budget (PR #571 replacement); gold takes the cheaper one.",
+     "ops": [
+      {
+       "op": "append_text",
+       "path": "user_scenario.instructions.task_instructions",
+       "text": "If several cameras fit, choose the cheapest one."
+      }
+     ]
+    },
+    "65": {
+     "reason": "No gold write, so doing nothing scored 1. The agent must at least look the order up.",
+     "ops": [
+      {
+       "op": "set",
+       "path": "evaluation_criteria.actions",
+       "value": [
+        {
+         "action_id": "65_lookup",
+         "requestor": "assistant",
+         "name": "get_order_details",
+         "arguments": {
+          "order_id": "#W5362037"
+         },
+         "info": null,
+         "compare_args": [
+          "order_id"
+         ]
+        }
+       ]
+      },
+      {
+       "op": "set",
+       "path": "evaluation_criteria.reward_basis",
+       "value": [
+        "DB",
+        "ACTION"
+       ]
+      }
+     ]
+    },
+    "66": {
+     "reason": "Cancel reason unspecified; gold uses 'no longer needed' (as in PR #392).",
+     "ops": [
+      {
+       "op": "append_text",
+       "path": "user_scenario.instructions.task_instructions",
+       "text": "If the agent asks for the reason for cancelling an order, say it is no longer needed."
+      }
+     ]
+    },
+    "98": {
+     "reason": "'The other card' points away from the card gold uses for both exchanges.",
+     "ops": [
+      {
+       "op": "replace_text",
+       "path": "user_scenario.instructions.reason_for_call",
+       "old": "you'd prefer the other card as payment or refund method",
+       "new": "you'd prefer your Mastercard ending in 8484 as payment or refund method"
+      }
+     ]
+    },
+    "105": {
+     "reason": "The NL assertion restates a write the DB check already scores; the judge sees only text.",
+     "ops": [
+      {
+       "op": "set",
+       "path": "evaluation_criteria.reward_basis",
+       "value": [
+        "DB"
+       ]
+      }
+     ]
+    },
+    "106": {
+     "reason": "The NL assertion restates a write the DB check already scores; the judge sees only text.",
+     "ops": [
+      {
+       "op": "set",
+       "path": "evaluation_criteria.reward_basis",
+       "value": [
+        "DB"
+       ]
+      }
+     ]
+    },
+    "107": {
+     "reason": "The NL assertion restates a write the DB check already scores; the judge sees only text.",
+     "ops": [
+      {
+       "op": "set",
+       "path": "evaluation_criteria.reward_basis",
+       "value": [
+        "DB"
+       ]
+      }
+     ]
+    },
+    "109": {
+     "reason": "The NL assertion restates a write the DB check already scores; the judge sees only text.",
+     "ops": [
+      {
+       "op": "set",
+       "path": "evaluation_criteria.reward_basis",
+       "value": [
+        "DB"
+       ]
+      }
+     ]
+    },
+    "110": {
+     "reason": "The NL assertion restates a write the DB check already scores; the judge sees only text.",
+     "ops": [
+      {
+       "op": "set",
+       "path": "evaluation_criteria.reward_basis",
+       "value": [
+        "DB"
+       ]
+      }
+     ]
+    },
+    "111": {
+     "reason": "The NL assertion restates a write the DB check already scores; the judge sees only text.",
+     "ops": [
+      {
+       "op": "set",
+       "path": "evaluation_criteria.reward_basis",
+       "value": [
+        "DB"
+       ]
+      }
+     ]
+    },
+    "113": {
+     "reason": "The NL assertion restates a write the DB check already scores; the judge sees only text.",
+     "ops": [
+      {
+       "op": "set",
+       "path": "evaluation_criteria.reward_basis",
+       "value": [
+        "DB"
+       ]
+      }
+     ]
+    }
+   },
+   "exclude_from_train": {
+    "tasks": [
+     "37",
+     "41",
+     "67",
+     "72",
+     "96"
+    ],
+    "reason": "Same user and identical gold writes as test tasks 36, 42, 68, 71 and 97."
    }
   }
  }

@@ -49,6 +49,16 @@ def test_official_loader_matches_all_three_domains():
         assert len(test) == OFFICIAL_SPLIT_SNAPSHOTS[domain]["test"]
 
 
+def test_fixed_variant_trains_without_the_test_twins():
+    train = get_tau2_dataset("retail", split="train", variant="fixed")
+    test = get_tau2_dataset("retail", split="test", variant="fixed")
+
+    twins = {"37", "41", "67", "72", "96"}
+    assert len(train) == OFFICIAL_SPLIT_SNAPSHOTS["retail"]["train"] - len(twins)
+    assert not twins & {row["task_id"] for row in train}
+    assert len(test) == OFFICIAL_SPLIT_SNAPSHOTS["retail"]["test"]
+
+
 def test_online_task_split_is_disjoint_per_domain():
     kwargs = dict(
         domain=["airline", "retail", "telecom"],

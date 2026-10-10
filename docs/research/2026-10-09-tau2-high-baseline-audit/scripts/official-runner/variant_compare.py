@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Compare official and fixed step-0 runs: mean@4 and pass^1/2/4 by domain and split.
 
+``retail/train_pool`` is the fixed variant's Retail training pool: the train
+split without the test twins left out of training.
+
 Run from the repository root:
   PYTHONPATH=. python <this file> OFFICIAL_RUN_DIR FIXED_RUN_DIR
 """
@@ -11,6 +14,7 @@ import os
 import sys
 from collections import Counter
 
+from examples.tau2.benchmark_variant import train_excluded_task_ids
 from examples.tau2.official_runner import official_metrics
 
 
@@ -34,6 +38,15 @@ def table(records):
                 if r["domain"] == domain and (split is None or r["split"] == split)
             ]
             views.append((f"{domain}{'/' + split if split else ''}", subset))
+    excluded = train_excluded_task_ids("fixed", "retail")
+    pool = [
+        r
+        for r in records
+        if r["domain"] == "retail"
+        and r["split"] == "train"
+        and r["task_id"] not in excluded
+    ]
+    views.append(("retail/train_pool", pool))
     for name, subset in views:
         m = official_metrics(subset, repeats=4)["overall"]
         out[name] = {
@@ -52,15 +65,17 @@ for record in fixed:
     info = (last_attempt(fixed_run, record["source_id"]).get("reward_info") or {}).get(
         "info"
     ) or {}
-    if info.get("unexpected_transfer"):
-        transfer_zeroed[(record["domain"], record["split"])] += 1
+    for flag in ("unexpected_transfer", "missing_transfer"):
+        if info.get(flag) and info.get("official_reward") == 1.0:
+            transfer_zeroed[(record["domain"], record["split"], flag)] += 1
 print(
     json.dumps(
         {
             "official": table(official),
             "fixed": table(fixed),
             "fixed_transfer_rule_zeroed": {
-                f"{d}/{s}": n for (d, s), n in sorted(transfer_zeroed.items())
+                f"{d}/{s}/{flag}": n
+                for (d, s, flag), n in sorted(transfer_zeroed.items())
             },
         },
         indent=1,
