@@ -82,6 +82,13 @@ class Tau2EnvConfig:
         default=3,
         metadata={"help": "Maximum retries for one user-simulator request."},
     )
+    benchmark_variant: str = field(
+        default="official",
+        metadata={
+            "help": "'official' (tau2-bench b7ea907) or 'fixed' (upstream fixes, "
+            "see examples/tau2/benchmark_variant.py). TAU2_DATA_DIR must match."
+        },
+    )
     turn_discount: float = field(
         default=1.0, metadata={"help": "Discount factor for turn-based learning."}
     )
@@ -104,6 +111,8 @@ class Tau2EnvConfig:
             raise ValueError(
                 "user_llm_api_key_env must not alias a policy proxy session key"
             )
+        if self.benchmark_variant not in ("official", "fixed"):
+            raise ValueError(f"Unknown benchmark_variant: {self.benchmark_variant}")
         if self.user_llm_num_retries < 0:
             raise ValueError("user_llm_num_retries must be non-negative")
 

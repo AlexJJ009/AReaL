@@ -236,6 +236,8 @@ econfig:
   user_llm: deepseek-flash
   user_llm_api_key_env: DEEPSEEK_API_KEY
   user_llm_num_retries: 3
+  # official = tau2-bench b7ea907; fixed = upstream fixes (ADR 0010).
+  benchmark_variant: official
   user_llm_args:
     temperature: 0.0
   turn_discount: 1.0

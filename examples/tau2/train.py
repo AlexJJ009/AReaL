@@ -13,6 +13,7 @@ from datasets import Dataset
 from omegaconf import OmegaConf
 from tau2.registry import registry
 
+from examples.tau2 import benchmark_variant
 from examples.tau2.contracts import (
     MAX_ASSISTANT_TOKENS,
     build_sampling_schedule,
@@ -291,6 +292,7 @@ def collection_provenance(
         "policy_id": policy_id,
         "policy_revision": policy_revision,
         "simulator_id": config.econfig.user_llm,
+        "benchmark_variant": config.econfig.benchmark_variant,
     }
 
 
@@ -346,6 +348,7 @@ def main(args):
     provenance = collection_provenance(config, actor_source=actor_source)
     domains = validate_tau2_recipe(config)
     econfig = config.econfig
+    benchmark_variant.validate_task_files(econfig.benchmark_variant, domains)
     dataset_kwargs = dict(
         domain=domains,
         provenance=provenance,

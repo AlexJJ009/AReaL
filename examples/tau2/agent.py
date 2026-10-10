@@ -32,6 +32,7 @@ from tau2.user.user_simulator import DummyUser
 from tau2.user.user_simulator_base import HalfDuplexUser
 
 # Import utilities (also patches tau2.utils.llm_utils)
+from examples.tau2 import benchmark_variant
 from examples.tau2.contracts import bind_policy_request
 from examples.tau2.user_simulator import RecordingUserSimulator
 from examples.tau2.utils import Tau2EnvConfig, Tau2RunInfo, trajectory_record_dir
@@ -45,10 +46,6 @@ from areal.utils import logging
 
 logger = logging.getLogger("Tau2Agent")
 _T = TypeVar("_T")
-
-
-class Tau2EpisodeTimeoutError(TimeoutError):
-    """Wall-clock safety timeout, distinct from a model token/step budget."""
 
 
 class Tau2InfrastructureError(RuntimeError):
@@ -255,6 +252,7 @@ class Tau2Runner:
         self.messages: list[Message] = []
 
     def _get_environment(self) -> Environment:
+        benchmark_variant.activate(self.econfig.benchmark_variant, [self.domain])
         environment_constructor = registry.get_env_constructor(self.domain)
         return environment_constructor(solo_mode=self.solo_mode)
 
@@ -412,17 +410,25 @@ class Tau2Runner:
         reason = getattr(simulation, "termination_reason", "completed")
         termination_reason = str(getattr(reason, "value", reason)).lower()
         # Evaluation scores TIMEOUT through the official evaluator (reward 0) and
-        # keeps episodes that finished, like `tau2 run --timeout`. Training treats
-        # the wall clock as infrastructure: official termination checks are
-        # cooperative and can skip the deadline when the last message has already
-        # marked the episode done, so the episode budget is enforced here.
+        # keeps episodes that finished, like `tau2 run --timeout`. Training keeps
+        # an over-budget episode as truncated with reward 0, like context_limit:
+        # replaying it would drop slow trajectories from the training data.
+        # Official termination checks are cooperative and can skip the deadline
+        # when the last message already ended the episode, so it is enforced here.
         if not self.evaluation and (
             termination_reason == "timeout" or elapsed >= self.timeout
         ):
-            error = Tau2EpisodeTimeoutError(
-                f"Episode wall-clock limit {self.timeout}s reached for {domain}/{task.id}"
+            run_info.error_type = "task_budget"
+            run_info.terminated = False
+            run_info.truncated = True
+            run_info.stop_reason = "timeout"
+            logger.info(
+                "FINISHED SIMULATION: Domain: %s, Task: %s, Reward: 0.0, "
+                "Stop reason: timeout",
+                domain,
+                task.id,
             )
-            raise Tau2InfrastructureError(str(error)) from error
+            return run_info
 
         try:
             self._bind_nl_assertion_evaluator()
@@ -433,6 +439,10 @@ class Tau2Runner:
                 evaluation_type=EvaluationType.ALL,
                 solo_mode=solo_mode,
             )
+            if self.econfig.benchmark_variant == "fixed":
+                reward_info = benchmark_variant.apply_transfer_rule(
+                    task, simulation.messages, reward_info
+                )
         except Exception as e:
             # Official τ² scores inside the simulation run, so a scoring failure
             # replays the whole episode through the episode-level retry.

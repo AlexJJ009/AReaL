@@ -19,6 +19,7 @@ from typing import Any
 import torch
 from omegaconf import OmegaConf
 
+from examples.tau2 import benchmark_variant
 from examples.tau2.contracts import (
     MAX_ASSISTANT_TOKENS,
     OFFICIAL_SPLIT_SNAPSHOTS,
@@ -428,6 +429,7 @@ def build_tau2_critic_datasets(
 ) -> tuple[Any, Any, dict[str, Any]]:
     provenance = collection_provenance(config, actor_source=config.actor.path)
     domains = normalize_domains(config.domains)
+    benchmark_variant.validate_task_files(config.econfig.benchmark_variant, domains)
     validation_split = "test" if config.experiment_mode == "formal" else "dev"
     dataset_kwargs = dict(
         domain=domains,

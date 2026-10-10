@@ -571,3 +571,94 @@ NL_ASSERTION 放进训练 reward，这些缺陷会直接变成 reward 噪声。
   用户下还没发生过，但不能排除。
 
 启动需要批准。启动前先把当前改动 commit，因为相关文件的哈希会写进 critic 固定验证集的 manifest。
+
+## 12. 合入上游修复与训练侧改动（2026-10-10）
+
+### 12.1 两个 benchmark 变体
+
+可用的上游 PR 已合入，原版也保留，按 `econfig.benchmark_variant`
+选择（[ADR 0010](../../decisions/0010-tau2-official-and-fixed-benchmark-variants.md)）。
+
+| 变体       | 内容                                                                                                                     | 数据目录                                                                                         |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| `official` | tau2-bench `b7ea907` 原样，可与榜单比                                                                                    | `_cache/tau2-bench-b7ea9074…/data`                                                               |
+| `fixed`    | #411 的 reward_basis、#571 替换 retail 64/105、#322 修改价环境 bug、转人工规则（gold 不含转人工时，agent 转人工记 0 分） | `_cache/tau2-bench-b7ea9074…-fixed-pr411-pr571/data`，由 `scripts/tau2/build_fixed_data.py` 生成 |
+
+- #580 没有作为代码合入。它的作用是：gold 写操作执行抛错时，DB 判定不能算通过。合入 #571
+  后，`scripts/tau2/check_gold_replay.py fixed` 显示 Airline/Retail 没有执行抛错的 gold
+  写操作（official 有 retail 64 和 105 两条），#580 不会改变任何分数。这个脚本保留下来，用于持续检查。
+- 生成的 fixed 数据与独立做 git merge（#411 + #571）得到的结果逐题一致。两个变体都固定了 `tasks.json` 的
+  sha256，数据目录和变体不匹配时，评测、训练和 critic 启动都会直接报错（已实测）。
+- #322 改变了 5 道 Retail 题的 gold DB hash：train 20、21、37，test 36、100。
+
+### 12.2 训练集也被修复了
+
+这些修复按题生效，不区分 train/test，所以官方 train 104 题也在修复范围内：
+
+| 领域    | 划分        | reward_basis 改动 | 新增 NL 断言计分 | 无 gold 写操作 | gold 含转人工 | 题目替换 |
+| ------- | ----------- | ----------------- | ---------------- | -------------- | ------------- | -------- |
+| Airline | train（30） | 25                | 17               | 17             | 无            | 无       |
+| Airline | test（20）  | 19                | 9                | 7              | 13            | 无       |
+| Retail  | train（74） | 67                | 0                | 6              | 10、50        | 105      |
+| Retail  | test（40）  | 38                | 0                | 4              | 12、26        | 64       |
+
+- Retail 的 basis 改动大多只是删掉空的 NL_ASSERTION（没有断言却列在 basis 里），或补上已有的
+  COMMUNICATE/ACTION，不改变实际评分对象。Airline 的改动才是实质性的：17 道 train 题开始对 NL 断言计分。
+- 社区没有专门针对 train 的修复。10.2 里 train 上的问题，有修复的是 retail:105（#571）、retail:20/21/37（#322 价格
+  bug），以及 Airline 拒绝题的转人工（#411 + 转人工规则）。airline:7（train）和
+  retail:38（test）、60（test）、110（train）仍然没有任何来源修过。
+- 代价：Airline 17 道 train 题的 reward 现在依赖 NL judge，而 judge 就是 DeepSeek 用户模型（7.2 第 2
+  项），judge 的噪声会进入训练 reward。
+
+### 12.3 训练侧改动
+
+- **单次回复上限**：保留 4096，以节省资源（用户决定）。12% 到 17% 的 Airline 训练 episode
+  至少有一次回复被截断（9.5），这一代价已知并接受。
+- **训练墙钟超时**：已改为保留 episode，标记为 truncated，reward 0，不再重跑（ADR 0009 修订）。原来的重跑做法只保留按时跑完的
+  episode，会系统性地去掉慢的长轨迹。
+- **组内成员丢失**：没有改代码，方案见 12.4，待批准。
+
+### 12.4 组内成员丢失：同类框架的做法
+
+调研了 AReaL upstream、verl、OpenRLHF、slime、ROLL、SkyRL、rLLM、Agent Lightning、TRL、NeMo-RL、ART 和
+DAPO。下表的结论来自代码，不是文档：
+
+| 做法                                              | 谁在用                                                                              | 偏差                                                            |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| 先分类：模型造成的失败记 0 分，infra 失败另行处理 | AReaL upstream（`_classify_agent_failure`）、NeMo-RL、SkyRL harbor                  | 依赖分类是否准确                                                |
+| infra 失败对单个成员做有上限的重跑                | NeMo-RL（行级 3 次，再整组）、SkyRL（每条 2 次）、rLLM（3 次）                      | 对与轨迹无关的瞬时故障无偏；对随轮数增长的故障，仍偏向短对话    |
+| 在剩余成员上算 baseline                           | AReaL upstream（`min_usable_group_size` 默认 1）、verl v1、ART、TRL（NaN 不计入）   | 失败与轨迹有关时会有幸存者偏差                                  |
+| 丢掉整组，用别的 prompt 补                        | AReaL upstream 系统错误、OpenRLHF、ROLL、DAPO 动态采样                              | 难任务被少采；破坏有限 epoch 的"每题一次"                       |
+| infra 失败记 0 分照常训练                         | AReaL upstream tau2 示例、Agent Lightning、slime 示例                               | 把 infra 失败当成策略失败，惩罚失败前的动作，并推动策略缩短对话 |
+| 预算用尽就中止训练                                | NeMo-RL 默认 `max_skipped_prompts=0`、ART `max_exceptions=0`、rLLM `raise_on_error` | 不静默吞掉问题，代价是训练会停                                  |
+
+**"至少剩 2 个就保留"的问题**：
+
+- 没有一个框架用这个阈值作为默认值，最接近的是 rLLM 的 `min_trajs_per_group=2`，默认关闭。
+- 2 个成员、二值 reward 时，advantage 只有两种情况：全 0，或者 ±1，噪声很大。
+- 一个组丢了 6 个成员，本身就说明任务或环境有系统性问题；这个阈值会把这个信号掩盖掉。
+
+**建议**：
+
+1. **我们已经做了分类**：上下文超限和墙钟超时记 0 分训练（模型或预算导致的失败），其余异常算 infra。
+1. **infra 失败先对单个成员从头重跑**，上限 3 次，这是现有行为。
+1. **重试用尽后**：
+   - 存活成员 ≥ $\\lceil n/2 \\rceil = 4$ 时，用 `traj_group_sizes` 在存活成员上算 mean/std。
+   - 不足 4 个时，把这道题推到同一个 epoch 的末尾再跑一次，保持"每题一次"；还失败就记为 skipped。
+   - 每个 epoch 允许的 skipped 题数要有上限（建议 ≤ 2 题，约 2%），超过就中止训练。
+   - 阈值 4 是推断出来的，没有框架给出过这个具体数字。
+1. **用户第一句就结束、policy 一个 token 都没产出**：这种成员的 reward 与策略无关，不计入
+   baseline，也不训练。同一题反复出现时单独报出来。DeepSeek 用户下 656 条里没有出现过。
+1. **训练指标**：报每道题的 infra 失败率，以及失败与轮数的相关性。这是判断第 2、3 步是否无偏的唯一依据。
+
+本地 fork 与 upstream 的差别：本地的 `_normalize_group_rewards` 只要组里有一个 None 就丢整组，再加上
+`fail_on_rejection=True`，结果就是训练中止。upstream 已经改为在存活成员上归一化。
+
+这个改动涉及 `areal/infra/workflow_executor.py` 和 `remote_inf_engine.py` 的批次逻辑，按项目规则改之前要先批准。
+
+### 12.5 下一步
+
+1. 批准 12.4 的方案后再实现，否则 GRPO 训练一旦遇到被拒的成员就会中止。
+1. 在 official 和 fixed 两个变体上各跑一次 step 0 评测：base 集，DeepSeek 用户，temperature 0，每题 4 次。
+1. 定下训练用哪个变体，建议用 fixed，否则训练 reward 会奖励转人工。两个变体的评测都要报。
+1. 再按第 11 节启动 critic、SAO 和 GRPO。

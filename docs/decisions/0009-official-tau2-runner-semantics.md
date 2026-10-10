@@ -84,8 +84,8 @@ Evaluation and training differ only where official τ² has no training mode:
 | Event                                                                             | Evaluation (`evaluation=True`)                       | Training (`evaluation=False`)                                                         |
 | --------------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------- |
 | Policy context exhausted (32K)                                                    | Exception → retries → excluded (official behaviour)  | `context_limit`, reward 0, kept ([ADR 0002](0002-tau2-policy-generation-protocol.md)) |
-| Wall clock (`eval_episode_timeout_seconds` 1800 / `episode_timeout_seconds` 1200) | Official `TIMEOUT`, scored 0 and counted             | Exception → retries                                                                   |
-| Episode finished but over wall clock                                              | Kept and scored                                      | Exception → retries                                                                   |
+| Wall clock (`eval_episode_timeout_seconds` 1800 / `episode_timeout_seconds` 1200) | Official `TIMEOUT`, scored 0 and counted             | `timeout`, truncated, reward 0, kept (2026-10-10)                                     |
+| Episode finished but over wall clock                                              | Kept and scored                                      | `timeout`, truncated, reward 0, kept (2026-10-10)                                     |
 | Any other exception                                                               | Retries ×3 → excluded                                | Retries ×3 → rejected; an incomplete GRPO group aborts                                |
 | User stop before any policy call                                                  | Scored, counted as policy-free                       | Rejected (no tokens to train on)                                                      |
 | Policy reply length                                                               | Bounded by the remaining 32K context only (official) | At most 4096 tokens ([ADR 0002](0002-tau2-policy-generation-protocol.md))             |
@@ -98,6 +98,10 @@ DeepSeek temperature-0 base evaluation it truncated 48 of 8211 replies, in 32 of
 episodes. Not aligned: no seed is passed (user decision); the NL judge still uses the
 user-simulator model because no OpenAI key is available; the policy keeps
 `num_retries 0` behind the local proxy, with retries at the episode layer.
+
+2026-10-10 amendment: training no longer replays an over-budget episode. Replaying it
+kept only the episodes that finished in time, which removes slow, long trajectories from
+the training data; it is now kept as truncated with reward 0, like a context overflow.
 
 ### Consequences
 

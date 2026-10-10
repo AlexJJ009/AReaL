@@ -557,11 +557,13 @@ async def test_terminal_episode_deadline_is_checked_before_scoring(
     )
 
     if elapsed >= 1200.0:
-        with pytest.raises(
-            module.Tau2InfrastructureError, match="wall-clock"
-        ) as caught:
-            await runner.run(task)
-        assert isinstance(caught.value.__cause__, module.Tau2EpisodeTimeoutError)
+        result = await runner.run(task)
+        assert (result.reward, result.truncated, result.terminated) == (
+            0.0,
+            True,
+            False,
+        )
+        assert (result.stop_reason, result.error_type) == ("timeout", "task_budget")
         evaluator.assert_not_called()
     else:
         result = await runner.run(task)
@@ -570,7 +572,7 @@ async def test_terminal_episode_deadline_is_checked_before_scoring(
 
 
 @pytest.mark.asyncio
-async def test_episode_wall_timeout_is_retryable_infra_before_reward(monkeypatch):
+async def test_training_episode_timeout_is_kept_as_truncated_zero(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import Mock
 
@@ -604,11 +606,11 @@ async def test_episode_wall_timeout_is_retryable_infra_before_reward(monkeypatch
     task = _get_task(
         "telecom", get_tau2_dataset("telecom", split="train")[0]["task_id"], "train"
     )
-    with pytest.raises(module.Tau2InfrastructureError, match="wall-clock") as caught:
-        await runner.run(task)
+    # Replaying a timed-out episode would drop slow trajectories from training.
+    result = await runner.run(task)
     evaluator.assert_not_called()
-    assert isinstance(caught.value.__cause__, module.Tau2EpisodeTimeoutError)
-    assert Tau2AgentWorkflow.should_retry_episode(caught.value)
+    assert (result.reward, result.truncated, result.terminated) == (0.0, True, False)
+    assert (result.stop_reason, result.error_type) == ("timeout", "task_budget")
 
 
 @pytest.mark.asyncio

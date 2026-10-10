@@ -125,6 +125,7 @@ def test_build_tau2_critic_datasets_uses_official_formal_train_and_test(
         "policy_id": "Qwen/Qwen3.5-4B",
         "policy_revision": "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
         "simulator_id": "deepseek-flash",
+        "benchmark_variant": "official",
     }
 
 

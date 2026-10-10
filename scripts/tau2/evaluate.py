@@ -17,6 +17,7 @@ from typing import Any
 
 from omegaconf import OmegaConf
 
+from examples.tau2 import benchmark_variant
 from examples.tau2.contracts import (
     OFFICIAL_SPLIT_SNAPSHOTS,
     OFFICIAL_TAU2_REVISION,
@@ -431,6 +432,10 @@ def run(argv: list[str]) -> dict[str, Any]:
         "schema_version": 1,
         "config_file": config_file,
         "tau2_revision": OFFICIAL_TAU2_REVISION,
+        "benchmark_variant": config.econfig.benchmark_variant,
+        "task_file_sha256": benchmark_variant.validate_task_files(
+            config.econfig.benchmark_variant, normalize_domains(config.domains)
+        ),
         "model_path": model_path,
         "output_root": str(output_root),
         "domains": list(normalize_domains(config.domains)),

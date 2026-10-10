@@ -643,7 +643,9 @@ def _critic_row(task_index: int, critic_split: str) -> dict:
 
 
 def test_runtime_collection_provenance_is_config_derived_not_manifest_bound():
-    config = SimpleNamespace(econfig=SimpleNamespace(user_llm="deepseek-pinned"))
+    config = SimpleNamespace(
+        econfig=SimpleNamespace(user_llm="deepseek-pinned", benchmark_variant="fixed")
+    )
 
     provenance = collection_provenance(
         config, actor_source=f"Qwen/Qwen3.5-4B@{'b' * 40}"
@@ -653,6 +655,7 @@ def test_runtime_collection_provenance_is_config_derived_not_manifest_bound():
         "policy_id": "Qwen/Qwen3.5-4B",
         "policy_revision": "b" * 40,
         "simulator_id": "deepseek-pinned",
+        "benchmark_variant": "fixed",
     }
 
 
