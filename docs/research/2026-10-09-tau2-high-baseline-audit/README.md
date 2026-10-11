@@ -608,6 +608,34 @@ Retail train 的 72、96、37、41、67 与 test 的 71、97、36、42、68 是�
 
 1. **启动校验**：评测、训练和 critic 启动时都核对 `TAU2_DATA_DIR` 的 digest，与变体不符就直接报错。
 
+______________________________________________________________________
+
+现在强化学习没有考虑用户。
+
+user-adaptive 的能力估计或行为估计。
+
+可改动：clip，advantage 估计
+
+可以维护对用户的反馈的置信度，可以从过去任务的成功概率上计算；可以从用户给的反馈的专业程度计算。
+
+例如，对置信度高的用户反馈做高优势低裁剪学习，置信度低的则低优势高裁剪学习。
+
+在ppo的场景，critic 的训练需要 user 和 assistant 的 token 都参与到 advantage 里。gae也可以改。
+
+在 critic 训练时候的 value 的估计上改动，需要考虑 user 的置信度。
+
+actor 训练的时候看看 advantage 以及 clip 能怎么改。
+
+需要做出demo
+
+ds v4.1 再找一个弱的 user model。
+
+弱 user 和强 user 各自训一轮作为baseline。
+
+换我们的方法对弱 user 和强 user 各自训一轮，预期要都高于baseline。
+
+______________________________________________________________________
+
 ## 12. 训练计划（待批准启动）
 
 ### 12.1 题目划分
@@ -929,30 +957,60 @@ Telecom）。
 **第三步：评测证明**（2026-10-11，用户批准）
 
 1. **按任务加载 DB**（`1b17bc3f`）：
+
    - `examples/tau2/task_pack.py` 定义 task pack：每个领域一份 `tasks.json` 和 `task_db.json`，加上
      DB 文件和带每个文件 sha256 的 manifest。
    - `task_pack.install` 包装 registry 里的环境构造函数，让它接受 `task_db`。episode 和官方 evaluator 的
      gold 重放都通过它建环境，每次都拿到一份 新的 DB。
    - `scripts/tau2/evaluate.py --task-pack <pack>` 评测 pack 里的全部题。结果里的 `split` 记为 keep /
      fix，方便分开看分数。
+
 1. **生成 pack**：`scripts/tau2/build_areal_task_pack.py` 按候选集生成 pack，并应用每道 fix 的指令修改和 gold
    替换。
+
    - 当前 pack：`_cache/tau2-areal-pack-20261011-v1`，Airline 490 题、Retail 323 题。
+
 1. **打分检查**：`scripts/tau2/check_task_pack.py` 对每道题，在它自己的 DB 上构造 gold 和空轨迹，用官方
    `evaluate_simulation` 加上 fixed 的转人工规则打分。
+
    - 结果：813 题全部是 gold 1 分、空轨迹 0 分。
    - 这个检查能失败：改用默认 DB 打分（`--default-db`），402 题不通过，多数是 gold 重放报错。仍然通过的 411 题里，340 道
      Airline 题用的 DB 与官方 DB 逐字节相同，其余的新 DB 题碰到的记录与官方 DB 相同（抽查过）。
    - 单元测试 `tests/test_tau2_task_pack.py`：让 `task_db` 失效，测试就会失败。
-1. **评测**：口径与 13.2 相同。本机 Qwen3.5-4B 用 temperature 0，DeepSeek-Flash 做用户和 NL judge，每题 4
-   次，`benchmark_variant=fixed`， `sglang:d8p1t1`，并发 256。
-   - 代码固定在 `1b17bc3f` 的 worktree 中，共 3252 条 episode。
-   - 按 13.2 的用量估计：DeepSeek 用户侧约 27M prompt token、7M completion token，耗时约 2.5 小时。
+
+1. **评测**（2026-10-11 03:11 → 04:16，pueue 任务 437）：口径与 13.2 相同。本机 Qwen3.5-4B 用 temperature
+   0，DeepSeek-Flash 做用户和 NL judge，每题 4 次， `benchmark_variant=fixed`，`sglang:d8p1t1`，并发
+   256，代码固定在 `1b17bc3f`。
+
+   - 3252 条 episode 中 3251 条有分。排除的 1 条是 `retail_524` 的上下文超过 32K。DeepSeek 用户侧实际用了 33M
+     prompt token、5.0M completion token。
    - 产物：`tau2-eval-20261011-areal-pack/step0-areal-pack-v1-t0-deepseek/`。
-1. **判定**：
-   - 至少有一次通过的题，说明 gold 可达，可用。
-   - 4 次全挂的题，抽读失败轨迹，区分 agent 的错和题的错。题的错回到第二步，修或丢。
-   - 进训练集的条件，另按 pass-rate 决定：全对或全错的组没有组内对比。
+
+   | 范围         | 题数 | mean@4 = pass^1 | pass^2 | pass^4 | 4 次全对 | 有对有错 | 4 次全错 |
+   | ------------ | ---: | --------------: | -----: | -----: | -------: | -------: | -------: |
+   | 合计         |  813 |           0.912 |  0.859 |  0.783 |      637 |      161 |       15 |
+   | Airline      |  490 |           0.896 |  0.837 |  0.755 |      370 |      106 |       14 |
+   | Airline keep |  305 |           0.932 |  0.891 |  0.830 |      253 |       46 |        6 |
+   | Airline fix  |  185 |           0.838 |  0.749 |  0.630 |      117 |       60 |        8 |
+   | Retail       |  323 |           0.936 |  0.891 |  0.827 |      267 |       55 |        1 |
+   | Retail keep  |  112 |           0.902 |  0.839 |  0.759 |       85 |       26 |        1 |
+   | Retail fix   |  211 |           0.954 |  0.918 |  0.863 |      182 |       29 |        0 |
+
+   - **可用性**：798 / 813 题至少通过一次，说明 gold 可以达到。4 次全错的 15 题（Airline 14 道，Retail 只有
+     retail_353）不能直接认定为题错，要看轨迹。
+   - **这份数据对当前模型偏容易**：同一模型、同一口径下，官方 fixed v2 base 集是 0.708（Airline 0.388，Retail 0.849，见
+     13.2），这里是 0.912。 temperature 0 下，78% 的题 4 次全对。
+   - **Retail 的 fix 比 keep 还高**（0.954 对 0.902）：fix
+     往往是在指令里写明支付方式、变体、航班，让用户能直接说出唯一答案。这正是修复要做的，但也让题变容易了。 Airline 的 fix 反而低于 keep（0.838 对
+     0.932），因为替换后的 gold 多是多步的改签、降舱。
+
+1. **失败轨迹复核**（pueue 任务 438，Codex gpt-6.1-sol，规则见 `EVAL_REVIEW.md`）：
+
+   - 范围：4 次全错的 15 题，加上从"有对有错"的 161 题里随机抽的 40 题。
+   - 对每条失败轨迹，找出它和 gold 第一次在 DB 写操作上分开的地方，判断是 agent 的错还是题的错。题的错就丢掉，或者再修一次。
+
+1. **训练集**（待复核后决定）：只留 temperature 1、每组 8 条时有组内对比的题。按 temperature 0 的结果估计，可用的大约是"有对有错"的
+   161 题，加上一部分 temperature 1 下会出错的全对题。要在 temperature 1 下按训练口径再筛一次，才能定下来。
 
 工作目录：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/audits/areal-tau2-data-screen-20261010/`。其中：
 
