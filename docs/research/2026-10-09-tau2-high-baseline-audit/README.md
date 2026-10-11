@@ -14,6 +14,7 @@ temperature=1、每题 8 次）。全部结论来自已有记录的重算，没�
 - 第 12 节：训练计划，以及额外训练数据的调研与核查（12.7–12.8）。
 - 第 13 节：两轮 step 0 评测。
 - 第 15 节：Qwen3-4B-2507 两个模型的 step 0 评测、能力缺口与加速配置核查（2026-10-11）。
+- 第 16 节：研究方向讨论——RL 训练中如何对待用户模拟器的质量（2026-10-11）。
 
 第 11–12 节只保留最新的决策和执行步骤。τ² 的调研、对比、找 gap 都记在本文，不另开文档。
 
@@ -28,12 +29,12 @@ temperature=1、每题 8 次）。全部结论来自已有记录的重算，没�
 **初始分数高（Retail/Airline 约 80%，Telecom 100%）的主因是模型本身能完成多数任务，加上 benchmark
 自身的评分盲区；不是数据或评测代码被改过，也不是用户模拟器代劳。**
 
-\*\*2026-10-10 更正：\*\*第 2 节"用户模拟器过度配合：否"只说明用户没有代劳；用户模拟器的选择本身决定 Retail 分数。
-同一份代码下，DeepSeek 用户 Retail 0.851、Doubao 用户 0.651，差距主要来自 Doubao 在确认的同一句话里结束对话（第 9 节）。
+**2026-10-10 更正**：第 2 节"用户模拟器过度配合：否"只说明用户没有代劳；用户模拟器的选择本身决定 Retail 分数。 同一份代码下，DeepSeek 用户
+Retail 0.851、Doubao 用户 0.651，差距主要来自 Doubao 在确认的同一句话里结束对话（第 9 节）。
 
-\*\*训练看不出效果，原因是评测噪声大于训练带来的变化、有效学习信号少、权重几乎没有朝一致方向移动。\*\*现有证据只能说"无法判断训练是否有效"，不能说"训练变差"。
+**训练看不出效果，原因是评测噪声大于训练带来的变化、有效学习信号少、权重几乎没有朝一致方向移动**。现有证据只能说"无法判断训练是否有效"，不能说"训练变差"。
 
-\*\*2026-10-10 补充：航空的高分里约 30pp 是转人工得来的。\*\*航空任务按 DB + COMMUNICATE 打分，在"应该拒绝"的任务上，agent
+**2026-10-10 补充：航空的高分里约 30pp 是转人工得来的**。航空任务按 DB + COMMUNICATE 打分，在"应该拒绝"的任务上，agent
 转人工也能拿满分（第 10.3 节）。这是官方评分的漏洞，同样的 DB reward 用于训练时会奖励转人工。
 
 ## 2. 初始分数为什么高
@@ -59,10 +60,10 @@ gold 固定为 "no longer needed"，用户多数时候选 "ordered by mistake"�
 已在第 9 节查清：两边都用 Doubao 用户时，差距在抽样误差内；Recuris 的 harness 对这一行没有影响。下面是 2026-10-09
 的原始判断，保留作记录。
 
-- \*\*不是题集差异。\*\*未训练模型在 train split（epoch 1 覆盖全部任务，权重相对变化约 1e-4）上为 Retail 84.8%、Airline
+- **不是题集差异**。未训练模型在 train split（epoch 1 覆盖全部任务，权重相对变化约 1e-4）上为 Retail 84.8%、Airline
   78.3%；与 test 合并估算全量 114/50 题约 82%/79%。
-- \*\*论文 Table 1 的用户模拟器不是 4B 自己。\*\*Recuris 源码 `src/recuris/adapters/tau2/treatment.py`
-  的 transfer 配置固定 Doubao Seed 2.0 Pro 作为用户模拟器和 NL
+- **论文 Table 1 的用户模拟器不是 4B 自己**。Recuris 源码 `src/recuris/adapters/tau2/treatment.py` 的
+  transfer 配置固定 Doubao Seed 2.0 Pro 作为用户模拟器和 NL
   judge（`reasoning_effort=medium`，temperature=0），被测 agent temperature 强制为 0。
 
 ## 3. 训练为什么看不出效果
@@ -273,7 +274,7 @@ parser、thinking）。
 
 ### 9.3 Recuris 的 Mode A 与 terminal gate
 
-- \*\*是什么。\*\*Mode A 指"用户的确认里带着 `###STOP###`，之后没有 agent 回合"，也就是 9.1 的模式（RT2
+- **是什么**。Mode A 指"用户的确认里带着 `###STOP###`，之后没有 agent 回合"，也就是 9.1 的模式（RT2
   `orchestrator.py:303`）。代码只在这一处定义它。
 - **怎么处理。**`TAU2_GATE_TERM=1` 时，在 `USER_STOP` 之后、`_finalize()`
   之前检查：全程没执行过写工具，且任意一条用户消息命中 确认词正则（yes / sure / go ahead / confirm / ok / perfect
@@ -282,11 +283,11 @@ parser、thinking）。
   agent 再跑最多 4 轮并真实执行工具。 用户的 STOP 不删不改，`termination_reason` 仍是
   `USER_STOP`；评分重放整条轨迹，所以补执行的写操作会计入 DB 分。 变体 `_V5` 处理部分执行，`_A2` 看 agent 是否在请求确认，`_WM` 看
   Recuris agent 的待办账本。开关默认全关。
-- \*\*解决了没有。\*\*仓库里没有可复核的效果数据：唯一的数字是代码注释里的自述（在 977 条 retail 仿真上调参，对通过的仿真触发 2%、失败的
+- **解决了没有**。仓库里没有可复核的效果数据：唯一的数字是代码注释里的自述（在 977 条 retail 仿真上调参，对通过的仿真触发 2%、失败的
   47%），没有对应的结果文件或日志。从正则看有明显的误报（开场 "Yes, I need help"、告别 "Perfect, thanks"、 否定句 "that's
   not correct" 都会命中，可能把应当不写的任务强行写坏）和漏报（确认措辞不在词表里；已有任意写操作时默认路径
   直接跳过）。它改变了评分对象（多了一条伪用户消息和用户看不到的 agent 回合），结果和官方 `tau2 run` 不可比。
-- \*\*发表的 68.0 / 75.3 开了没有。\*\*base config 和 README 命令三个开关都是开的，但 `TAU2_GATE_TERM_WM=1` 时
+- **发表的 68.0 / 75.3 开了没有**。base config 和 README 命令三个开关都是开的，但 `TAU2_GATE_TERM_WM=1` 时
   gate 需要 agent 实现 `wm_pending_lines`，`llm_agent` 没有，直接返回。所以这一行名义上开、实际没生效；+Recuris
   那一行大概率生效。发表运行的 参数文件不在仓库里，这是按配置推断。
 
@@ -517,8 +518,8 @@ Retail 4 题（10、12、26、50）。Airline 有 23 题、Retail 有 7 题没�
 | 训练集       | Retail train 去掉与 test 重复的 5 题，见 11.4                    | 我们                                                                        |
 
 - **官方没有修。**`b7ea907` 之后，main 没有改过 Airline 和 Retail 的数据、工具或评估器（10.5）。
-- \*\*#580 没有作为代码合入。\*\*它的作用是：gold 写操作执行抛错时，DB 判定不算通过。fixed 下，`check_gold_replay.py`
-  没有查出抛错的 gold 写操作，合入它不会改变任何分数。
+- **#580 没有作为代码合入**。它的作用是：gold 写操作执行抛错时，DB 判定不算通过。fixed 下，`check_gold_replay.py` 没有查出抛错的
+  gold 写操作，合入它不会改变任何分数。
 - **社区里不采用的修改**：
   - Amazon verified 对 49、18、91、21 的改动：49 的新 gold 不在订单里，18、91 的目标商品缺货，21 把 product id 当成了
     item id；
@@ -1005,13 +1006,58 @@ Telecom）。
      往往是在指令里写明支付方式、变体、航班，让用户能直接说出唯一答案。这正是修复要做的，但也让题变容易了。 Airline 的 fix 反而低于 keep（0.838 对
      0.932），因为替换后的 gold 多是多步的改签、降舱。
 
-1. **失败轨迹复核**（pueue 任务 438，Codex gpt-6.1-sol，规则见 `EVAL_REVIEW.md`）：
+1. **失败轨迹复核**（pueue 任务 439，Codex gpt-6.1-sol，规则见 `EVAL_REVIEW.md`）。任务 438 因为 codex 等待
+   stdin 挂了 4 小时，没有产出，入口加了 `< /dev/null` 后重跑。
 
-   - 范围：4 次全错的 15 题，加上从"有对有错"的 161 题里随机抽的 40 题。
-   - 对每条失败轨迹，找出它和 gold 第一次在 DB 写操作上分开的地方，判断是 agent 的错还是题的错。题的错就丢掉，或者再修一次。
+   - 4 次全错的 15 题：9 道是 agent 的错，题本身没问题；6 道是题的错。
+   - 从"有对有错"的 161 题里随机抽的 40 题：15 道是 agent 的错，25 道是题或用户模拟器的错。
 
-1. **训练集**（待复核后决定）：只留 temperature 1、每组 8 条时有组内对比的题。按 temperature 0 的结果估计，可用的大约是"有对有错"的
-   161 题，加上一部分 temperature 1 下会出错的全对题。要在 temperature 1 下按训练口径再筛一次，才能定下来。
+### 12.10 v1 pack 审查（2026-10-11，结论：不能直接训练）
+
+用户的标准：题可以简单，但不能是错题，也不能是做不完的题。按这个标准，v1 的 813 题**还不能用**。证据有三部分：
+
+**1. 独立抽审**（Claude，与 Codex 不是同一个模型；分层抽 32 题，结果在 `scratch/claude_audit.jsonl`）：
+
+| 类别                  | 抽查数 | 正确 | 错误                                        | 存疑                                                             |
+| --------------------- | -----: | ---: | ------------------------------------------- | ---------------------------------------------------------------- |
+| gold 被替换的 fix     |     12 |   11 | 0                                           | 1（retail_104：gold 只有在先完成取消、礼品卡余额够了之后才成立） |
+| 只改指令的 fix        |     10 |    9 | 1（retail_375：指令里的手表在 DB 里不存在） | 0                                                                |
+| 原样 keep、只审过一轮 |     10 |   10 | 0                                           | 0                                                                |
+
+**2. 失败轨迹复核**（12.9 第 5 步）找出了几类系统性的问题。下面按根因归类，并用脚本统计了每类在整个 pack 里有多少题：
+
+| 根因                                                                                                          | pack 内题数 | 处理                                                 |
+| ------------------------------------------------------------------------------------------------------------- | ----------: | ---------------------------------------------------- |
+| HKEG34 / Mia Li 题族：指令写的是 Mia 本人的行程，DB 里的乘客却是 Amelia，用户模拟器会要求改乘客               |          54 | 整族丢弃                                             |
+| 模板套用：指令自己承认"这里的手表其实是相机"之类                                                              |          19 | 丢弃                                                 |
+| 复核判为题错的其他题，加上 airline_654（gold 改了 basic economy 的航班，违反 policy）、retail_104、retail_375 |  合计约 100 | 丢弃                                                 |
+| 国家字段：gold 写的是 "USA"，指令没写，用户会说 "United States"，DB hash 因此不同                             |          99 | 补一句"国家写 USA"，或丢弃                           |
+| 乘客列表顺序：gold 的顺序固定，指令没写                                                                       |          43 | 补一句列出顺序，或丢弃                               |
+| 用户模拟器在 agent 执行最后一步之前就发 `###STOP###`                                                          |           — | 是 DeepSeek 用户的行为噪声，不是数据错误，官方题也有 |
+
+"整族丢弃""模板套用"和"其他题错"三行合起来去重后是 100 题。
+
+**3. 机械 policy 检查**（全 pack）：取消资格（24 h、商务舱、保险及理由、航司取消）、basic economy 不能改航班、新航班存在且可订。只查出
+airline_654 一道违规。其余被标出的都是误报：gold 里先订再改的新预订；6 道靠保险取消的题都给了健康理由。
+
+**结论**：
+
+- \*\*评测通过不等于题对。\*\*模板套用的 19 题里有 13 题 4 次全对：用户模拟器把错误的描述"翻译"回来了。所以 4/4 只能说明 gold 可达。
+- **问题主要出在两处：**
+  - 只审过一轮的部分：第一轮的 keep，以及"有对有错"里没被抽到的 121 题；
+  - 只补一句指令、但没处理场景其余部分矛盾的 fix。 替换 gold 的修法经过第二轮的逐字引用规则筛选后，抽查是可靠的。
+- **估计可用量**：
+  - 去掉上面要丢弃的 100 题，剩 713 题。
+  - 其中 127 题属于"国家字段"或"乘客顺序"，补一句事实就能修。
+  - 不属于任何已知问题类的有 586 题（Airline 380、Retail 206）。
+  - 这 586 题里，"有对有错"但没复核的那部分，仍可能有未知问题。
+
+**v2 的做法**（待用户决定）：
+
+1. 丢掉上面 100 题；
+1. 对国家字段和乘客顺序两类，在指令里补一句事实，用 `score.py` 重放验证；
+1. 用 Codex 复核其余没复核过的"有对有错"题；
+1. 生成 v2 pack，只重评改动过的题。
 
 工作目录：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/audits/areal-tau2-data-screen-20261010/`。其中：
 
@@ -1093,11 +1139,11 @@ train 基本不变。
 - `airline:10:trial3`、`airline:34:trial2`：4 次尝试都超过 32K 上下文，和 v1 的 `airline:14` 同类。
 - `retail:59:trial3`、`retail:99:trial3`：`MissingAttemptRecord`，见本节末尾的"新出现的挂起"。
 
-\*\*Airline 和预期一致：基本不变。\*\*0.428 → 0.388（−4.0pp）。fixed v2 对 Airline 只改了反向转人工规则，这条规则只影响
+**Airline 和预期一致：基本不变**。0.428 → 0.388（−4.0pp）。fixed v2 对 Airline 只改了反向转人工规则，这条规则只影响
 airline:13， 这次没有清零任何 Airline episode。所以这 4pp 是运行间噪声，在 13.1 测得的约 3pp 的量级内。正向转人工规则在
 Airline 清零了 75 条原本成功的 episode（v1 是 63 条）。
 
-\*\*Retail 没有降低，反而升高了。\*\*0.805 → 0.849（+4.4pp）。按题分组归因（114 题，每组为 4 次平均分之和的变化）：
+**Retail 没有降低，反而升高了**。0.805 → 0.849（+4.4pp）。按题分组归因（114 题，每组为 4 次平均分之和的变化）：
 
 | 题组                                                               | 题数 | v1 → v2  | 折合 Retail pp |
 | ------------------------------------------------------------------ | ---- | -------- | -------------- |
@@ -1105,7 +1151,7 @@ Airline 清零了 75 条原本成功的 episode（v1 是 63 条）。
 | v1 被正向规则清零、v2 按 Retail 例外恢复的题（1、32、43 等 10 题） | 10   | +2.25 题 | +2.0           |
 | 其余未改动的题                                                     | 84   | −0.75 题 | −0.7（噪声）   |
 
-- \*\*补丁让分数上升，是补丁本身的性质。\*\*补丁去掉的是"做对了也判错"的失败：
+- **补丁让分数上升，是补丁本身的性质**。补丁去掉的是"做对了也判错"的失败：
 
   - 38：v1 是 0/4，v2 是 4/4，补丁写明了取消原因；
   - 64：0/4 → 4/4，补丁加了"多款符合时选最便宜的"；
@@ -1113,8 +1159,8 @@ Airline 清零了 75 条原本成功的 episode（v1 是 63 条）。
 
   这些失败原本就不是模型能力的问题，留着只会给训练加噪声，不会增加可学的空间。
 
-- \*\*本该降分的三题没有降。\*\*57、65 改为必须查订单，但这个模型本来就会查：57 在 v1、v2 都是 4/4，65 从 3/4 升到 4/4。25
-  要求转人工，v2 是 2/4，与 v1 相同。 "什么都不做也得分"的漏洞对这个模型的分数影响很小。
+- **本该降分的三题没有降**。57、65 改为必须查订单，但这个模型本来就会查：57 在 v1、v2 都是 4/4，65 从 3/4 升到 4/4。25 要求转人工，v2
+  是 2/4，与 v1 相同。 "什么都不做也得分"的漏洞对这个模型的分数影响很小。
 
 - **Retail 例外恢复了 v1 误清零的分数**（+2.0pp），这和 11.3 的判断一致。正向规则在 Retail 不再清零任何 episode。反向规则清零了 2
   条（retail train）。
@@ -1185,249 +1231,3 @@ Airline 清零了 75 条原本成功的 episode（v1 是 63 条）。
 产物：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-eval-20261010-fixed-v2/step0-base-t0-deepseek-fixed-v2/`。
 对比脚本是 `scripts/official-runner/variant_compare.py`，按领域、划分和训练池输出 mean@4 /
 pass^k，以及转人工规则清零的条数。
-
-## 15. Qwen3-4B-2507 的 step 0 评测与能力缺口（2026-10-11）
-
-对象：未经训练的 Qwen3-4B-Instruct-2507（non-thinking）和 Qwen3-4B-Thinking-2507（thinking）。
-目的：Qwen3.5-4B 在 fixed v2 的 Retail、Telecom 上已接近满分（13.2）。这里确认两个 Qwen3
-模型的可提升空间，并弄清分数低的原因：是模型能力不足还是题目问题，如果是模型，具体缺哪种能力。另外核查我们为 Qwen3.5 做的加速配置有哪些对 Qwen3 仍然可用。
-
-产物：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-eval-20261010-qwen3-2507/`
-
-- 每个运行目录下有 `summary.json`、`episodes.jsonl`、`trajectories/`
-- `analysis/` 存放逐 episode 特征（`feat-*.jsonl`）和 actor probe 日志
-
-脚本在本目录 `scripts/qwen3-2507/`：
-
-- 启动：`launch_eval.sh`、`lane_a.sh`、`lane_b.sh`
-- 特征与分类：`extract_episodes.py`、`aggregate.py`、`compare.py`、`write_diff.py`、`telecom.py`
-- 查看轨迹：`view.py`
-- Actor probe：`actor_probe.py`
-- 模型下载与校验：`fetch_models.py`
-
-### 15.1 结论
-
-1. **可提升空间大得多，模型本身的能力也弱得多。**
-   - fixed 下，Instruct 的 Airline / Retail mean@4 是 0.225 / 0.410，Thinking 是 0.245 /
-     0.654，Qwen3.5 是 0.388 / 0.849。
-   - Telecom 上两个 Qwen3 都约 0.37，Qwen3.5 是 456/456 全对。
-   - temperature 0 下，Retail 有组内对比的题：两个 Qwen3 有 65–72 道，Qwen3.5 只有 39 道。
-1. **分数低主要是模型问题。** 用户在确认句里结束对话、转人工漏洞这两项评测因素扣除后，与 Qwen3.5 的差距仍有 15–42pp（15.4）。
-1. **缺口集中在多子任务、长程执行。** 这与 14.1 第 2 条 Qwen3.5 的情况相反：
-   - 只需 1 个写操作的 Retail 题，Thinking 0.72，与 Qwen3.5 的 0.82 接近；
-   - 需要 ≥3 个写操作时，Thinking 掉到 0.55、Instruct 0.19，而 Qwen3.5 是 0.92；
-   - Telecom 注入 ≥6 个故障时，Thinking 为 0。
-1. **两个模型短板不同。** Instruct 主要是不查证就行动、参数填错；Thinking 单步更准，但 policy 推理不完整，常以转人工收尾。
-1. **对冷启动 / warm-up 的启示**（由失败分类推断，未经实验验证）：
-   - 工具格式没有问题，缺的是把多子任务做完的行为；
-   - Telecom 故障多的题两个模型几乎 4 次全错，单靠 RL 拿不到信号；
-   - 示范数据应覆盖：遍历完所有实体、按手册走完排障流程、不把转人工当退路。
-1. **加速配置：沿用现有 FSDP 配置，不再加其他优化**（2026-10-11 决定）。
-   - FSDP + FA2 + gradient checkpointing + packing 能直接跑通，在测过的组合里最快。
-   - Ulysses、tree training、archon 也能启动，但都不更快（15.6）。
-
-### 15.2 配置
-
-| 项                    | 设置                                                                                                              |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| 题集                  | base（train + test），每题 4 次，policy temperature 0。fixed：Airline 50 + Retail 114；official：再加 Telecom 114 |
-| 用户模拟器 / NL judge | DeepSeek-Flash，temperature 0，同 13.2                                                                            |
-| Instruct              | `enable_thinking=false`；concat 模板，与 Qwen3.5 评测相同；`tool_call_parser=qwen25`                              |
-| Thinking              | `enable_thinking=true`；hf 模板 + individual 导出；`tool_call_parser=qwen25`                                      |
-| 代码                  | `a6abe781`，在固定于该提交的 worktree 上运行                                                                      |
-| 模型                  | Instruct `cdbee75f`，Thinking `768f209d`；从 ModelScope 下载，4 个 LFS 文件的 sha256 都与 HF 一致                 |
-
-- **Telecom 不分变体。** fixed 只改了 Airline 和 Retail，Telecom 只在 official 里跑一次。Qwen3.5 的
-  Telecom 对照是这次按相同配置新跑的。
-- **与模型卡分数不可比。** 模型卡用 gpt-4.1 类用户模拟器、采样解码；这里是 DeepSeek 用户、temperature 0。
-
-**为支持 Thinking 改的代码（`a6abe781`）。** Thinking-2507 的模板在生成前缀里就放了 `<think>`，所以模型输出里只有
-`…</think>答案`。改之前有三个问题：
-
-- proxy 不把这段识别为推理，整段思维链作为 `content` 返回；
-- 用户模拟器会读到 agent 的思维链；
-- 带工具调用的回复同时带文本，orchestrator 会判为错误。
-
-改动内容：
-
-- `ReasoningStrippedLLMAgent` 在 tau2 侧去掉 `</think>` 及之前的内容，完整回复保留在 `raw_data`；
-- proxy 把只出现 `</think>` 的情况也识别为推理段；
-- 每轮用 hf 模板完整渲染，历史里不保留之前各轮的思维链；
-- 训练仍要求 `enable_thinking=false`。
-
-三处都有单元测试，分别故意破坏后对应测试会失败。
-
-已知限制：带工具调用的轮次，`raw_data` 里也没有思维链，所以 case study 只能看纯文本回复轮的推理。
-
-### 15.3 分数
-
-mean@4 = pass^1。
-
-| 模型          | 变体     | 领域    | pass^1 | pass^2 | pass^4 | test  | train |
-| ------------- | -------- | ------- | ------ | ------ | ------ | ----- | ----- |
-| Qwen3.5-4B    | official | Airline | 0.780  | 0.710  | 0.620  | 0.787 | 0.775 |
-| Qwen3.5-4B    | official | Retail  | 0.820  | 0.703  | 0.535  | 0.769 | 0.848 |
-| Qwen3.5-4B    | fixed v2 | Airline | 0.388  | 0.283  | 0.229  | 0.438 | 0.356 |
-| Qwen3.5-4B    | fixed v2 | Retail  | 0.849  | 0.756  | 0.634  | 0.812 | 0.867 |
-| Qwen3.5-4B    | official | Telecom | 1.000  | 1.000  | 1.000  | 1.000 | 1.000 |
-| Instruct-2507 | fixed    | Airline | 0.225  | 0.107  | 0.060  | 0.200 | 0.242 |
-| Instruct-2507 | fixed    | Retail  | 0.410  | 0.235  | 0.096  | 0.438 | 0.395 |
-| Instruct-2507 | official | Airline | 0.330  | 0.203  | 0.140  | 0.250 | 0.383 |
-| Instruct-2507 | official | Retail  | 0.445  | 0.288  | 0.158  | 0.481 | 0.426 |
-| Instruct-2507 | official | Telecom | 0.377  | 0.240  | 0.167  | 0.481 | 0.321 |
-| Thinking-2507 | fixed    | Airline | 0.245  | 0.140  | 0.060  | 0.263 | 0.233 |
-| Thinking-2507 | fixed    | Retail  | 0.654  | 0.494  | 0.351  | 0.619 | 0.672 |
-| Thinking-2507 | official | Airline | 0.655  | 0.533  | 0.400  | 0.650 | 0.658 |
-| Thinking-2507 | official | Retail  | 0.651  | 0.501  | 0.333  | 0.669 | 0.642 |
-| Thinking-2507 | official | Telecom | 0.373  | 0.313  | 0.246  | 0.506 | 0.301 |
-
-- **排除与超时。** 这次的 5 个运行都没有 infra 排除。Thinking official 有 7 条 1800 s 墙钟超时（Telecom 6
-  条、Airline 1 条），按官方语义记 0 分。
-- **成本。** 每轮生成的中位数：Thinking 956 token，Instruct 85，Qwen3.5 200。Thinking 单轮最长 7.5K
-  token，没有截断，也没有超出上下文。
-
-temperature 0 下各题 4 次的结果分布（全对 / 全错 / 有对有错）：
-
-| 模型          | Airline（fixed） | Retail（fixed） | Telecom      |
-| ------------- | ---------------- | --------------- | ------------ |
-| Qwen3.5-4B    | 11 / 20 / 19     | 73 / 2 / 39     | 114 / 0 / 0  |
-| Instruct-2507 | 3 / 26 / 21      | 11 / 31 / 72    | 19 / 35 / 60 |
-| Thinking-2507 | 3 / 27 / 20      | 40 / 9 / 65     | 28 / 61 / 25 |
-
-### 15.4 题目与评测因素
-
-**用户在确认句里结束对话。** agent 请求确认后，DeepSeek 用户回 "Yes, please proceed. ###STOP###"，写操作来不及执行。这和
-9.1 节 Doubao 的现象相同。
-
-判定规则：
-
-- 该 episode 失败；
-- gold 有写操作，agent 没写；
-- 最后一句用户消息带肯定词，并紧接 `###STOP###`。
-
-| 运行              | Retail 条数 | Retail mean@4 | 去掉这些 episode 后 |
-| ----------------- | ----------- | ------------- | ------------------- |
-| Qwen3.5 fixed v2  | 12          | 0.848         | 0.871               |
-| Instruct fixed    | 42          | 0.410         | 0.452               |
-| Thinking fixed    | 41          | 0.654         | 0.718               |
-| Instruct official | 48          | 0.445         | 0.498               |
-| Thinking official | 34          | 0.651         | 0.704               |
-
-- Qwen3 模型更常请求确认，所以受影响更多，但扣除后差距仍在。
-- Airline 每个运行有 0–6 条，Telecom 为 0。
-- 这些 episode 不该作为负样本进入训练，与 14.3 第 2 项是同一个问题。
-
-**转人工漏洞（10.3）。** Thinking 在 Airline 大量转人工：fixed 规则清零 95 条，其中 57 条在 official 评分下是 1
-分。official 0.655 与 fixed 0.245 之间的 41pp 差距就来自这里。Instruct 很少转人工，而是直接执行修改，所以两个变体只差 10pp。
-
-**没有发现新的题目缺陷。** 精读过的失败轨迹都能对应到 agent 的具体错误。
-
-### 15.5 能力缺口
-
-**多子任务与长程执行（两个模型共同的主因）。** 按 gold 写操作数分组的成功率（fixed）：
-
-| 模型          | Retail 1 | Retail 2 | Retail ≥3 | Airline 1 | Airline 2 | Airline ≥3 |
-| ------------- | -------- | -------- | --------- | --------- | --------- | ---------- |
-| Qwen3.5-4B    | 0.82     | 0.90     | 0.92      | 0.67      | 0.62      | 0.39       |
-| Thinking-2507 | 0.72     | 0.52     | 0.55      | 0.62      | 0.12      | 0.11       |
-| Instruct-2507 | 0.52     | 0.30     | 0.19      | 0.31      | 0.17      | 0.07       |
-
-Telecom 按注入的故障数：
-
-| 故障数   | 2    | 3    | 4    | 5    | 6    | 7    | 8    | 9    |
-| -------- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- |
-| Instruct | 0.59 | 0.38 | 0.51 | 0.37 | 0.16 | 0.09 | 0.06 | 0.04 |
-| Thinking | 0.60 | 0.48 | 0.51 | 0.31 | 0.02 | 0.00 | 0.00 | 0.00 |
-| Qwen3.5  | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
-
-失败的具体形态：
-
-- **列表没遍历完。**
-  - Thinking airline:22 t1：用户要处理"纽约→芝加哥"的行程，模型只查了第一个预订（西雅图→达拉斯），思维链里写 "picked the first
-    one"。
-  - Thinking retail:54 t1：用户有 6 个订单，只查了 5 个，漏掉一单取消。
-- **流程没走完就转人工。**
-  - 转人工在 Telecom 失败中占 Thinking 264/286、Instruct 183/284。
-  - 需要充流量的题，调用 `refuel_data` 的次数：Thinking 6/197，Instruct 48/200，Qwen3.5 200/200。
-  - Thinking 的思维链写"基础检查都做完了，按 policy 应升级"，实际上流量问题还没处理。
-- **只完成一部分子任务。** 部分 gold 写操作完成、其余缺失的失败 episode：Instruct 24，Thinking 17，Qwen3.5 4。
-
-**参数 grounding：不查证就行动（Instruct 为主）。** Retail 写操作失败按类型分（fixed）：
-
-| 模型     | 完全没写 | 参数错 | 只做了部分子任务 | 只调了非 gold 工具 | 有写操作报错 |
-| -------- | -------- | ------ | ---------------- | ------------------ | ------------ |
-| Instruct | 100      | 81     | 24               | 29                 | 55           |
-| Thinking | 63       | 45     | 17               | 12                 | 20           |
-| Qwen3.5  | 23       | 26     | 4                | 3                  | 10           |
-
-- 出错最多的参数是 `new_item_ids`（选目标变体），其次是 `item_ids` 和 `order_id`。
-- 例：Instruct retail:101 t1。它把 policy 里的格式示例 `#W0000000` 当订单号去查；没有调用
-  `get_product_details`，就断言某个变体没货。
-
-**Policy 遵守。**
-
-- **该拒绝的 Airline 题**（0 个 gold 写操作），三个模型都在 0.11–0.24，与模型代际无关，同 14.2 的 M2a。
-- **Instruct 会执行 policy 不允许的修改。** 例：airline:2 t0，它主动提出补偿并发了 $50 证书，policy 规定不能主动提补偿。
-- **Thinking 的 policy 推理不完整。** 例：airline:32 t0，policy 允许 basic economy
-  先升舱再改签，它只记住了"basic economy 不能改"。它问了一句"要不要转人工"，没等用户回答就转了。
-
-**不是缺口的部分。**
-
-- 工具调用格式没问题：Instruct 没有空消息，Thinking 没有截断。
-- 单步工具使用接近 Qwen3.5（Retail 1 个写操作的题，0.72 对 0.82）。
-- Telecom 的环境和用户模拟器能支撑完整的排障流程：Qwen3.5 在同样配置下全对。
-
-### 15.6 加速配置核查
-
-Qwen3.5-4B 是 24 层 Gated DeltaNet 加 8 层 full attention；Qwen3-4B 是 36 层全部 full attention。
-
-**推理（SGLang）：**
-
-| 配置                                         | Qwen3 上                              | 说明                                               |
-| -------------------------------------------- | ------------------------------------- | -------------------------------------------------- |
-| `attention_backend: flashinfer` + CUDA graph | 可用                                  | 本次评测就在用；FA3 只支持 Hopper                  |
-| FLA / causal-conv1d                          | 不使用                                | 只服务于线性注意力层，装着也不影响                 |
-| KV cache 容量                                | 每卡 37.4 万 token，Qwen3.5 是 155 万 | `mem_fraction_static=0.75` 时实测，小 4.2 倍       |
-| `disable_radix_cache: true`                  | 可以打开，收益未测                    | dense 模型的多轮对话每轮都要重算整段历史的 prefill |
-
-- 评测时每个 SGLang 实例只有 4–10 条请求在跑，`num_retracted_reqs = 0`，瓶颈在 DeepSeek 用户的响应延迟。
-- 训练 rollout 时每个实例 64 条并发、上下文也更长，要关注 `num_retracted_reqs`，必要时调高 `mem_fraction_static`。
-
-**Actor update（4 卡 FSDP，用 `actor_probe.py` 跑 3 步）：** 合成数据每卡 8 条序列、长 6K–16K token，每 4
-条共享一段 3K token 的前缀。
-
-| 变体                                           | 能否启动                 | token/s | 峰值显存 | 说明                                                                            |
-| ---------------------------------------------- | ------------------------ | ------- | -------- | ------------------------------------------------------------------------------- |
-| **现有配置**：FSDP + FA2 + grad ckpt + packing | 是                       | 13,435  | 39.7 GB  | "每个 microbatch 只放一条序列"的规则只对 `qwen3_5` 生效，Qwen3 自动恢复 packing |
-| Qwen3.5 现有配置（对照）                       | 是                       | 16,106  | 36.3 GB  |                                                                                 |
-| Ulysses SP=2                                   | 是                       | 12,258  | 28.2 GB  | 32K 以内用不上                                                                  |
-| Tree training                                  | 需 `pad_to_maximum=True` | 7,249   | 54.5 GB  | padding 的开销大于共享前缀省下的计算                                            |
-| Archon，默认 selective AC                      | 否，OOM                  | —       | —        |                                                                                 |
-| Archon，`ac_mode=full`                         | 是                       | 12,980  | 37.6 GB  |                                                                                 |
-| Archon，`ac_mode=full` + compile               | 是                       | 13,368  | 39.5 GB  |                                                                                 |
-
-- **结论：沿用现有 FSDP 配置，不再加其他优化。**
-- 在这个长度区间，Qwen3 每 token 比 Qwen3.5 慢约 17%，原因是 36 层 full attention 的计算量。
-- **没有测的：**
-  - FP8：A100 不支持。
-  - Qwen3 的 critic 路径：`Qwen35TokenCriticForCausalBackbone` 只适用于 Qwen3.5，Qwen3 会走通用路径。用
-    SAO 之前要单独验证。
-
-### 15.7 后续：在 AReaL-tau2-data 上训练 Qwen3
-
-**依据。** 12.9 的 813 题对 Qwen3.5-4B 太容易：mean@4 0.912，temperature 0 下 78% 的题 4 次全对。两个 Qwen3
-模型在 fixed 上比 Qwen3.5 低 15–44pp，这份数据的难度对它们可能正合适。这是一个候选方向，还没有测。
-
-**要先测的。** 用 13.2 的口径，在 813 题上评测两个 Qwen3 模型，看全对、有对有错、全错各多少。这一步需要 DeepSeek 费用：Qwen3.5
-跑一轮用户侧用了 33M prompt token；Thinking 对话更长，会更多。
-
-**训练前要处理的两点：**
-
-- 15.4 的"用户在确认句里结束对话"会让 Qwen3 产生更多假负样本；
-- Qwen3 critic 路径还没验证（15.6）。
-
-### 15.8 局限
-
-- 失败分类靠规则抽取（`aggregate.py`、`write_diff.py`）。人工精读了约 10 条轨迹，主要类别各 1–2 条，没有逐条标注。
-- temperature 0 同配置重测约有 3pp 波动（13.1）。本节比较的差距都在 15pp 以上，不受影响。
-- Actor probe 只跑了 3 步、用的是合成数据，吞吐只能做相对比较。
