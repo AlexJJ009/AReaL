@@ -49,7 +49,7 @@ def test_load_eval_config_historical_sampling_uses_requested_temperature(
     monkeypatch.setattr(
         tau2_evaluate, "load_expr_config", lambda *_: (config, "historical.yaml")
     )
-    monkeypatch.setattr(tau2_evaluate, "validate_tau2_recipe", lambda _: None)
+    monkeypatch.setattr(tau2_evaluate, "validate_tau2_recipe", lambda *_, **__: None)
     args = tau2_evaluate.parse_args(
         [
             "--config",
@@ -430,7 +430,7 @@ def test_load_eval_config_applies_hydra_overrides(monkeypatch):
         return config, "c.yaml"
 
     monkeypatch.setattr(tau2_evaluate, "load_expr_config", fake_load)
-    monkeypatch.setattr(tau2_evaluate, "validate_tau2_recipe", lambda _: None)
+    monkeypatch.setattr(tau2_evaluate, "validate_tau2_recipe", lambda *_, **__: None)
     args = tau2_evaluate.parse_args(
         [
             "--config",

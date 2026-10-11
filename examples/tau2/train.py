@@ -134,8 +134,15 @@ def _dataset_split(dataset_config: Any, default: str) -> str:
     return path_split if path_split in ("train", "test") else default
 
 
-def validate_tau2_recipe(config: Tau2PPOConfig) -> tuple[str, ...]:
-    """Fail before worker/API creation when the tool-use contract is inconsistent."""
+def validate_tau2_recipe(
+    config: Tau2PPOConfig, *, evaluation: bool = False
+) -> tuple[str, ...]:
+    """Fail before worker/API creation when the tool-use contract is inconsistent.
+
+    ``evaluation`` admits thinking policies, which only offline evaluation runs:
+    their reasoning is dropped from the history, so the server renders each
+    request with the full chat template instead of concatenating tokens.
+    """
 
     if config.algorithm == "critic":
         raise ValueError("Use scripts/tau2/train_critic.sh for critic-only training")
@@ -193,13 +200,22 @@ def validate_tau2_recipe(config: Tau2PPOConfig) -> tuple[str, ...]:
     agent_config = config.rollout.agent
     if agent_config is None:
         raise ValueError("τ² requires rollout.agent configuration")
+    if config.econfig.enable_thinking and not evaluation:
+        raise ValueError("τ² training requires enable_thinking=false")
+    template = (
+        ("hf", "individual") if config.econfig.enable_thinking else ("concat", "concat")
+    )
     if (
         agent_config.engine_max_tokens != config.econfig.context_window_tokens
-        or agent_config.chat_template_type != "concat"
-        or agent_config.export_style != "concat"
+        or (
+            agent_config.chat_template_type,
+            agent_config.export_style,
+        )
+        != template
     ):
         raise ValueError(
-            "τ² requires engine_max_tokens=32768 and concat template/export"
+            "τ² requires engine_max_tokens=32768 and concat template/export "
+            "(hf template with individual export when thinking)"
         )
     if config.dynamic_group_filter:
         raise ValueError("Dynamic group filtering is not part of the first τ² baseline")

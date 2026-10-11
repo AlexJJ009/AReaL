@@ -96,7 +96,7 @@ def load_eval_config(args: argparse.Namespace) -> tuple[Tau2PPOConfig, str]:
     if not math.isfinite(args.temperature) or args.temperature < 0:
         raise ValueError("temperature must be finite and non-negative")
     config.eval_gconfig.temperature = args.temperature
-    validate_tau2_recipe(config)
+    validate_tau2_recipe(config, evaluation=True)
     return config, config_file
 
 

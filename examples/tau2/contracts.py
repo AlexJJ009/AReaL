@@ -473,6 +473,23 @@ def bind_policy_request(
     return bound
 
 
+THINK_END = "</think>"
+
+
+def strip_policy_reasoning(content: str | None) -> str | None:
+    """Return the part of a thinking reply that follows the reasoning block.
+
+    Qwen thinking templates open ``<think>`` in the generation prompt, so the
+    reply holds only the closing tag. The user simulator and later requests see
+    the answer alone, as in an OpenAI-compatible server with a reasoning parser.
+    A reply that never closes its reasoning is returned unchanged.
+    """
+    if content is None or THINK_END not in content:
+        return content
+    answer = content.rsplit(THINK_END, 1)[1].strip()
+    return answer or None
+
+
 def validate_exported_policy_trace(record: Mapping[str, Any]) -> None:
     """Check the consumed Qwen3.5 prompt and generation segments, not config flags.
 

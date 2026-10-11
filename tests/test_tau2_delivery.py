@@ -752,3 +752,29 @@ async def test_proxy_replays_tau2_episode_three_more_times_with_official_delay(
     assert await workflow.arun_episode("engine", {"task_id": "x"}) is None
     assert len(calls) == 4
     assert sleeps == [1.0, 1.0, 1.0]
+
+
+def _thinking_eval(config: Tau2PPOConfig, template: str, export: str):
+    config = copy.deepcopy(config)
+    config.econfig.enable_thinking = True
+    config.rollout.agent.chat_template_type = template
+    config.rollout.agent.export_style = export
+    return config
+
+
+def test_thinking_is_evaluation_only_and_uses_the_full_template(
+    grpo_config: Tau2PPOConfig,
+):
+    thinking = _thinking_eval(grpo_config, "hf", "individual")
+    assert validate_tau2_recipe(thinking, evaluation=True) == ("airline", "retail")
+    with pytest.raises(ValueError, match="training requires enable_thinking=false"):
+        validate_tau2_recipe(thinking)
+    # Concatenated tokens would keep every earlier reasoning block in context.
+    with pytest.raises(ValueError, match="hf template"):
+        validate_tau2_recipe(
+            _thinking_eval(grpo_config, "concat", "concat"), evaluation=True
+        )
+    non_thinking_hf = copy.deepcopy(grpo_config)
+    non_thinking_hf.rollout.agent.chat_template_type = "hf"
+    with pytest.raises(ValueError, match="concat template"):
+        validate_tau2_recipe(non_thinking_hf, evaluation=True)

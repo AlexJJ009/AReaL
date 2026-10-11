@@ -830,3 +830,20 @@ def test_actual_single_generation_policy_trace_uses_native_dump_fields():
             "completion": "Answer<|im_end|>",
         }
     )
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        ("plan the refund</think>\n\nSure, which order?", "Sure, which order?"),
+        ("<think>\nplan\n</think>\n\nSure.", "Sure."),
+        ("plan only</think>\n\n", None),
+        ("no reasoning block", "no reasoning block"),
+        ("unterminated reasoning", "unterminated reasoning"),
+        (None, None),
+    ],
+)
+def test_strip_policy_reasoning_keeps_only_the_answer(content, expected):
+    from examples.tau2.contracts import strip_policy_reasoning
+
+    assert strip_policy_reasoning(content) == expected

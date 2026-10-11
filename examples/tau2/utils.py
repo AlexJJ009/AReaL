@@ -106,8 +106,6 @@ class Tau2EnvConfig:
             raise ValueError("The τ² SAO experiment requires a 32768-token context")
         if not 0 < self.max_completion_tokens <= 4096:
             raise ValueError("max_completion_tokens must be in [1, 4096]")
-        if self.enable_thinking:
-            raise ValueError("The τ² SAO experiment requires enable_thinking=false")
         if self.user_llm_api_key_env in _POLICY_SESSION_KEY_ENV_NAMES:
             raise ValueError(
                 "user_llm_api_key_env must not alias a policy proxy session key"

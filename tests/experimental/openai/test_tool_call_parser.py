@@ -375,3 +375,16 @@ def test_process_tool_calls_qwen25_chat_completions_with_tool_call_in_thinking_v
 
     _assert_tool_calls(tool_calls, new_text, new_finish_reason)
     assert "<tool_call>" in new_text
+
+
+def test_thinking_template_reply_without_start_token_is_reasoning():
+    # Qwen3-Thinking-2507 opens <think> in the prompt; the reply only closes it.
+    text = "I should search.\n</think>\n\n<tool_call>\n{}\n</tool_call>"
+    reasoning, content = parser_module._detect_think_and_return_ori_think(
+        text, "<think>", "</think>"
+    )
+    assert reasoning == "<think>I should search.\n</think>"
+    assert content == "\n\n<tool_call>\n{}\n</tool_call>"
+    assert parser_module._detect_think_and_return_ori_think(
+        "plain answer", "<think>", "</think>"
+    ) == ("", "plain answer")

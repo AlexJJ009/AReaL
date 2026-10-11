@@ -963,3 +963,41 @@ def test_workflow_records_failed_attempt_with_partial_trajectory(monkeypatch, tm
     assert [m["content"] for m in record["messages"]] == ["hello", "hi"]
     raw = (next((tmp_path / "retail:7:trial1").glob("*.json"))).read_text()
     assert "session-secret" not in raw and "user-secret" not in raw
+
+
+def test_thinking_agent_hides_reasoning_from_user_and_history(monkeypatch):
+    from tau2.agent import llm_agent
+    from tau2.data_model.message import AssistantMessage, ToolCall, UserMessage
+
+    from examples.tau2.agent import ReasoningStrippedLLMAgent
+
+    replies = iter(
+        [
+            AssistantMessage(
+                role="assistant",
+                content="Look up the user first.</think>\n\n",
+                tool_calls=[ToolCall(id="c1", name="find", arguments={})],
+                raw_data={"full": "Look up the user first.</think>"},
+            ),
+            AssistantMessage(
+                role="assistant",
+                content="The user is verified.</think>\n\nHow can I help?",
+            ),
+        ]
+    )
+    monkeypatch.setattr(llm_agent, "generate", lambda **_: next(replies))
+    agent = ReasoningStrippedLLMAgent(
+        tools=[], domain_policy="policy", llm="openai/dummy", llm_args={}
+    )
+    state = agent.get_init_state()
+
+    call, state = agent.generate_next_message(
+        UserMessage(role="user", content="hi"), state
+    )
+    assert call.content is None and call.is_tool_call()
+    assert call.raw_data == {"full": "Look up the user first.</think>"}
+    reply, state = agent.generate_next_message(
+        UserMessage(role="user", content="ok"), state
+    )
+    assert reply.content == "How can I help?"
+    assert all("</think>" not in (m.content or "") for m in state.messages)

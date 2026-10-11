@@ -53,7 +53,9 @@ def _detect_think_and_return_ori_think(
     return think text(with <think> and </think>) and normal text
     """
     # This code is copies from sglang https://github.com/sgl-project/sglang/blob/cb30d056e3bc1b2f70fa7c00e0844cfe15716d65/python/sglang/srt/parser/reasoning_parser.py#L18
-    in_reasoning = think_start_token in text
+    # Thinking templates (e.g. Qwen3-Thinking-2507) put the start token in the
+    # prompt, so the generated text holds only the end token.
+    in_reasoning = think_start_token in text or think_end_token in text
 
     if not in_reasoning:
         return "", text

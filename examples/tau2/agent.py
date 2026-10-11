@@ -33,7 +33,7 @@ from tau2.user.user_simulator_base import HalfDuplexUser
 
 # Import utilities (also patches tau2.utils.llm_utils)
 from examples.tau2 import benchmark_variant
-from examples.tau2.contracts import bind_policy_request
+from examples.tau2.contracts import bind_policy_request, strip_policy_reasoning
 from examples.tau2.user_simulator import RecordingUserSimulator
 from examples.tau2.utils import Tau2EnvConfig, Tau2RunInfo, trajectory_record_dir
 
@@ -225,6 +225,21 @@ def record_evaluator_incident(
     )
 
 
+class ReasoningStrippedLLMAgent(LLMAgent):
+    """Official ``LLMAgent`` whose replies drop the thinking block.
+
+    The full reply stays in ``raw_data``. Without this, the user simulator reads
+    the reasoning, and a tool call arrives with text, which the orchestrator
+    rejects as an agent error.
+    """
+
+    def _generate_next_message(self, message, state) -> AssistantMessage:
+        reply = super()._generate_next_message(message, state)
+        return reply.model_copy(
+            update={"content": strip_policy_reasoning(reply.content)}
+        )
+
+
 class Tau2Runner:
     """Run the official synchronous τ² orchestrator on a worker thread."""
 
@@ -318,7 +333,10 @@ class Tau2Runner:
             )
             user = DummyUser()
         else:
-            agent = LLMAgent(
+            agent_class = (
+                ReasoningStrippedLLMAgent if self.econfig.enable_thinking else LLMAgent
+            )
+            agent = agent_class(
                 tools=tools,
                 domain_policy=agent_policy_doc,
                 llm="openai/dummy",
