@@ -641,17 +641,31 @@ official，目录与变体不符时会拒绝启动。
 | 3. GRPO（对照） | `run.sh policy mixed grpo`                      | 2 epoch：$\\lceil 99/8 \\rceil \\times 2 = 26$ 步，每题 8 条，共 1584 条 | 同上                                        | 同上                                                    |
 
 - **SAO 预算**：每个训练题 8 条，与 GRPO 相同。`config_sao.yaml` 已从 Retail 592（74 × 8）改为 552（69 × 8）。
+
 - **critic 的 epoch**（ADR 0005）：actor 固定（lr 0）。每个 epoch 给每道训练题现采一条 temperature 1 的
   episode，只更新 critic。每个 epoch 的最后一个 batch 只有 3 题（`drop_last: false`）。
+
 - **critic 的验证**：开头用训练的 `gconfig`（temperature 1，每题 1 次）采一次 60 条固定轨迹，之后每次验证都复用这批轨迹。验证测的是
   critic，不是 policy，所以没有 mean@4 / pass^k。
+
 - **资源**：8 张 A100-80GB。
+
   - critic：rollout 用 4 卡，actor 和 critic 共用另外 4 卡，阶段之间 offload。
   - GRPO / SAO：rollout 3 卡，独立评测 1 卡，actor 4 卡。
+
 - **critic 耗时与用量（估计）**：上一次 critic 跑 24 步用了 1h44m，按步数比例，本次约 1–1.5 h。DeepSeek 用户侧约 3M
   prompt token、0.7M completion token，已按 1.3 倍留了余量。这个用量里是否包含 NL judge 的调用，没有核实。
+
 - **运行目录**：每次运行都要用新的 `TAU2_RUN_ROOT`，因为 `recover.mode=auto` 会续跑同一目录。
-- **启动前**：按上面的变体参数，对三份配置各跑一次 `--check-config`。题数变成 99 之后还没有重跑过。
+
+- **启动前检查（2026-10-10 已跑）**：三份配置加上 `econfig.benchmark_variant=fixed` 跑
+  `--check-config`，都退出 0。
+
+  - critic：train 99、validation 60，14 步；
+  - GRPO：train 99，26 步；
+  - SAO：调度 792 条，26 步。
+
+  不加变体参数时启动被拒绝：数据目录的 digest 与 official 不符。
 
 ### 12.3 训练侧的处理（已实现）
 
@@ -715,7 +729,58 @@ DAPO。下表的结论来自代码，不是文档：
 1. 用 gpt-5.2（reasoning low）做用户跑一次 base 集，与榜单定标。需要 OpenAI 渠道和费用，需要批准。
 1. NL judge 与用户模拟器分开配置：暂不做（用户决定）。
 1. 按题统计 infra 失败率（12.3）。
-1. 查清 13.2 中 rank 3 的挂起：在启动训练前，至少确认它与 `2d7d342a` 无关，或者把训练的 `request_timeout` 调小。
+1. 修复 13.2 的 proxy 容量泄漏（修法候选见 13.2，需要批准）。不修也能训练，代价是偶尔有一步多等 1 小时。
+1. Retail 训练信号不足的处理（12.7 的两条建议）。
+
+### 12.7 Retail 训练信号不足：社区的做法（2026-10-10 调研）
+
+**问题**：fixed v2 下，Retail 训练池 69 题里有 47 题在 temperature 0 下 4 次全对（13.2）。
+
+- 对 GRPO 来说，全对的组 advantage 为 0，没有梯度。
+- 对 PPO / SAO 来说，critic 能给全对轨迹的中间步骤非零的 advantage。但这些题上从来没有失败样本，critic 学不到"哪里会失败"，信号很弱。所以
+  PPO 也只是比 GRPO 好一些，题太简单的问题仍然存在。
+
+下面的结论来自调研 agent，标注说明来源：\[代码/论文\] 表示读过原文，\[摘要\] 表示只读了摘要或 README。两个 HF 数据集的存在、license 和 DB
+文件，我用 HF API 独立核对过；其余没有独立核对。
+
+**现成的、能直接当 RL 任务用的数据**：
+
+| 数据                                                                                                         | 规模                                           | 内容                                                               | License     | 用于我们的代价                                                                                          |
+| ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------ | ----------- | ------------------------------------------------------------------------------------------------------- |
+| [inclusionAI/AReaL-tau2-data](https://huggingface.co/datasets/inclusionAI/AReaL-tau2-data)（AReaL-SEA 论文） | RL 任务：Airline 1148、Retail 563、Telecom 271 | 每题带 gold actions 和 `db_path`。Retail 用 3–4 个新合成的 DB      | Apache-2.0  | 要能按任务加载各自的 DB；现在 `agent.py` 只用默认 DB。也需要核对它和官方 test 有没有重复（card 里没写） |
+| [wwwenlin/skillscaffold-tau-rl](https://huggingface.co/datasets/wwwenlin/skillscaffold-tau-rl)               | 每个领域 300 题                                | 上面那份数据的子集：用 Qwen3-8B 每题跑 8 次，只保留通过 1–6 次的题 | Apache-2.0  | 格式与上面相同。它是按 8B 筛的，要用我们的 4B 重新筛                                                    |
+| tau-bench v1 Retail train                                                                                    | 500 题                                         | 与 tau2 Retail 共用同一个 DB                                       | MIT         | **不推荐**：调研 agent 实测，tau2 Retail test 的 41 个写操作 order_id 中有 26 个出现在 v1 train 里      |
+| APIGen-MT-5k、CoVe-12k                                                                                       | 5k / 12k 条轨迹                                | 只有轨迹，没有 gold 或 DB                                          | NC / Apache | 只能用于 SFT                                                                                            |
+
+**不换数据也能做的**：
+
+- **训练时丢掉全对或全错的组**（DAPO 的 dynamic sampling）。AReaL-SEA 在 Airline 30B 上做过消融：pass^1 65.0 →
+  70.5，pass^4 40 → 52 \[论文\]。
+- **离线按 pass-rate 筛题**：用当前模型每题跑 8 次，只留通过率在 1/8 到 6/8 之间的题，即 Skywork-OR1、POLARIS 的做法
+  \[摘要\]。
+- **训练时用户模拟器用 temperature 1**：AReaL-SEA 训练时 agent 和用户都用 1.0 \[论文\]。我们的训练配置里，用户是
+  temperature 0。
+- tau2 自带的 `PersonaConfig` 只有 verbosity 和 interrupt 两项，提不了多少难度 \[代码\]。
+
+**同类工作**：
+
+| 工作        | 模型    | 训练数据                           | Retail / Airline                   |
+| ----------- | ------- | ---------------------------------- | ---------------------------------- |
+| AReaL-SEA   | 30B-A3B | 自己合成的任务和新 DB              | 54.2 → 75.0 / 56.0 → 70.5 \[论文\] |
+| MUA-RL      | 32B     | tau1 Retail 115 题 + Airline 50 题 | 67.3 / 45.4 \[摘要\]               |
+| AgentScaler | 4B      | 合成环境，只做 SFT                 | 56.1 → 62.3 / 52.0 → 56.0 \[论文\] |
+
+这些工作的训练数据都不只是官方的 train split。
+
+**建议**（未实施，需要决定）：
+
+1. 先做零成本的两项：GRPO 丢掉全对或全错的组，训练时用户模拟器用 temperature 1（评测仍用 0）。
+   - 代价：每步有效样本变少，可能要加大 batch。
+   - 与已经批准的训练计划不同，需要批准。
+1. 主方案：接入 skillscaffold 或 AReaL-tau2-data 的 Retail / Airline 任务，用我们的 4B 重新按 pass-rate
+   筛一遍，评测仍用官方 test 60 题。
+   - 工程量估计 1–2 天：按任务加载 DB、核对与官方 test 是否重复、fixed 变体的补丁对新 DB 是否适用。
+   - API 费用：每道候选题要用 DeepSeek 用户跑 8 次。
 
 ## 13. step 0 评测
 
@@ -829,25 +894,55 @@ Airline 清零了 75 条原本成功的 episode（v1 是 63 条）。
 - 去掉不公平的失败后 Retail 分数上升，是修复的预期结果。如果想要更多 Retail 训练空间，办法只能是加更难的题或换更难的用户模拟器，不能靠让评分变得不公平。
   本轮没有做这类改动。
 
-**新出现的挂起**（未解决，记为待查）：
+**两条 episode 挂起 1 小时：proxy 的 session 容量泄漏**（已复现，未修）
 
-- **现象**：controller 的 task 611、643 都分到了 engine rank 3，这两个任务就是 `retail:59:trial3` 和
-  `retail:99:trial3`。它们被 submit 之后，一直没有打出 `STARTING SIMULATION`，也没有写任何尝试记录，直到
-  `request_timeout`（3600 s）后才被 controller 拒绝。
+- **现象**：controller 的 task 611、643（`retail:59:trial3`、`retail:99:trial3`）都分到 engine rank
+  3。submit 之后，它们一直没有打出 `STARTING SIMULATION`，也没有写尝试记录，直到 `request_timeout`（3600
+  s）后才被拒绝。评测因此多花了约 45 分钟（总耗时 77 分钟，v1 是 31 分钟）。这两条按 infra 排除，不影响其他 episode 的分数。之前 5
+  次运行都没有出现过。
 
-- **对结果和耗时的影响**：评测因此多挂了约 45 分钟，总耗时 77 分钟（v1 是 31 分钟）。这两条按 infra 排除，不影响其他 episode 的分数。
+- **机制**（读代码确认，`areal/experimental/openai/proxy/`）：
 
-- **过往运行**：之前 5 次运行（10-09 的 3 次、10-10 的 2 次）的 `run.log` 里都没有 `Rollout timed out`。
+  1. 每个 episode 先 `grant_capacity`（容量 +1），再 `start_session`（容量 −1，新建 session
+     `<task>-<idx>`）。
+  1. 客户端 `_start_session` 每次请求的超时是 10 s；遇到 HTTP 429 等错误时，用 `stop_never` 无限重试。
+  1. 服务端的 `start_session` 不是幂等的。如果它在客户端超时之后才执行完，第一次请求照样建出 `<task>-0`、消耗 1 个容量，但这个
+     session 没人使用；客户端的重试又建出 `<task>-1`，再消耗 1 个容量。
+  1. 每发生一次，这个 proxy 就永久少 1 个容量。`_cleanup_stale_sessions` 在 3600 s 后会删掉孤儿
+     session，但不会归还容量。
+  1. 之后每个新 episode 的 grant 和 start 仍是一一对应，但总数差 1。这个 proxy 上最后到达的 episode 永远拿到 429，只能等
+     controller 的 `request_timeout`。
 
-- **嫌疑范围**：
+- **与本次运行的日志吻合**：rank 3 的 task 267（`retail:1`）和 275（`retail:93`）都正常完成，但 proxy 在 11:11:23
+  把 `267-0`、`275-0` 当作 stale session 删除。正常完成却留下 `-0`，说明它们实际用的是 `-1`，也就是各发生了一次泄漏。泄漏 2
+  次，挂起也正好 2 条。11:11:23 往前推 3600 s 是 10:11 左右，那时 rank 3 正有 34–35 个 episode 并发。
 
-  - `2d7d342a`（组内成员丢失的处理）进入了这次运行，它改动了 `workflow_executor` 和 proxy workflow；
-  - 挂起发生在 `agent.run` 被调用之前，即 proxy 的 grant capacity / session 建立阶段。proxy 在 11:11 清理了 2
-    个 stale session（`267-0`、`275-0`），数量与挂起的任务一致。
+- **复现**：`scripts/official-runner/repro_proxy_capacity_leak.py`。用真实的 proxy server
+  和客户端代码，在 episode A 的 `start_session` 执行期间持有 session 锁 12 s，结果是：A 用的是 `A-1`，`A-0`
+  成了孤儿，后到的 episode B 持续收到 429（等 40 s 仍未启动），脚本退出码为 0。 把锁的时间改成 5 s（小于 10 s 超时）就不会泄漏，退出码为
+  1。
 
-  没有复现，也没有定位到根因。
+- **没有确认的**：实际运行中是什么让 `start_session` 超过 10 s 才执行完，没有访问日志能证明。候选有两个：
 
-- **对训练的影响**：同样的挂起如果发生在训练中，这个成员要等 3600 s 才会被当作丢失成员，按 ADR 0011 处理。这不会让训练中止，但会让那一步多等 1 小时。
+  - 同步 handler 在线程池里排队，或在等 `_lock`；
+  - `export_trajectories` 在 async handler 里同步执行 `export_interactions`，阻塞了事件循环，导致响应发不出去。
+
+  复现脚本只注入了"执行变慢"这一个前提，没有复现这个前提是怎么产生的。
+
+- **与 `2d7d342a` 无关**：涉及的 `client_session.py` 和 `proxy_rollout_server.py`
+  在那次提交里没有改动。这条路径也不经过组内成员丢失的处理。
+
+- **对训练的影响**：同样的泄漏会让训练里的一个成员等满 3600 s。按 ADR 0011，这个成员会被当作丢失成员，训练不会中止，但那一步要多等 1 小时。
+  泄漏是累积的，一次训练运行越长，最后挂起的 episode 越多。
+
+- **修法候选**（尚未实现；改的是 proxy 的公共代码，需要批准）：
+
+  1. 让 `start_session` 幂等：客户端为每次 episode 生成一个请求 id，重试时带上同一个 id，服务端遇到已有的 id 就返回原来的
+     session，不再消耗容量；
+  1. 删除 stale session 时归还它占用的容量；
+  1. 把 `export_interactions` 移到线程里执行，不阻塞事件循环。
+
+  1 是根治，2 是兜底，3 处理的是候选诱因之一。
 
 产物：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-eval-20261010-fixed-v2/step0-base-t0-deepseek-fixed-v2/`。
 对比脚本是 `scripts/official-runner/variant_compare.py`，按领域、划分和训练池输出 mean@4 /
