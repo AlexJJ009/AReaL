@@ -2,15 +2,17 @@
 """Build a τ² task pack from screened AReaL-tau2-data tasks.
 
 Usage:
-  python scripts/tau2/build_areal_task_pack.py <areal data dir> <screen dir> <out dir>
+  python scripts/tau2/build_areal_task_pack.py <areal data dir> <decisions.json> <out dir>
 
 ``<areal data dir>`` holds ``tau2_rl_train.jsonl`` and ``tau2_rl_database/``
-from ``inclusionAI/AReaL-tau2-data``. ``<screen dir>`` is the screening work
-directory: ``out/candidates_after_review.json`` names the tasks to keep
-(``keep*`` or ``fix*``), and ``out/s*.jsonl`` holds the first-round rows whose
-``fix`` field is applied here. A fix edits the user's ``task_instructions``
-(``instruction_replace``, then ``instruction_append``) and may replace the gold
-actions, exactly as the screening replay (``tools/score.py``) did.
+from ``inclusionAI/AReaL-tau2-data``. ``<decisions.json>`` maps a task id to
+``{"verdict": "keep"|"drop", "fixes": [...], "why": [...]}``; the screening work
+directory composes it from every review round (``tools/decisions.py``). Only
+``keep`` tasks enter the pack, with their fixes applied in order. A fix edits the
+user's ``task_instructions`` (``instruction_replace``, then
+``instruction_append``) and may replace the gold actions, exactly as the
+screening replay (``tools/score.py``) did. The decisions file is copied into the
+pack, so every pack version records how it was made.
 
 The source files are parsed as data, never executed.
 """
@@ -60,23 +62,10 @@ def apply_fix(task: dict[str, Any], fix: dict[str, Any]) -> dict[str, Any]:
     return task
 
 
-def first_round_rows(screen: Path) -> dict[str, dict[str, Any]]:
-    rows = {}
-    for path in sorted((screen / "out").glob("s*.jsonl")):
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                row = json.loads(line)
-                rows[row["id"]] = row
-    return rows
-
-
-def build(source: Path, screen: Path, out: Path) -> dict[str, Any]:
+def build(source: Path, decisions_path: Path, out: Path) -> dict[str, Any]:
     from tau2.data_model.tasks import Task
 
-    candidates = json.loads(
-        (screen / "out" / "candidates_after_review.json").read_text(encoding="utf-8")
-    )
-    verdicts = first_round_rows(screen)
+    decisions = json.loads(decisions_path.read_text(encoding="utf-8"))
     raw = {}
     for line in (
         (source / "tau2_rl_train.jsonl").read_text(encoding="utf-8").splitlines()
@@ -88,11 +77,9 @@ def build(source: Path, screen: Path, out: Path) -> dict[str, Any]:
     tasks: dict[str, list[dict[str, Any]]] = {d: [] for d in DOMAINS}
     task_db: dict[str, dict[str, str]] = {d: {} for d in DOMAINS}
     splits = {}
-    for tid in sorted(
-        candidates, key=lambda t: (t.split("_")[0], int(t.split("_")[1]))
-    ):
-        label = candidates[tid]
-        if not label.startswith(("keep", "fix")):
+    for tid in sorted(decisions, key=lambda t: (t.split("_")[0], int(t.split("_")[1]))):
+        decision = decisions[tid]
+        if decision["verdict"] != "keep":
             continue
         domain = tid.split("_")[0]
         row = raw[tid]
@@ -102,12 +89,12 @@ def build(source: Path, screen: Path, out: Path) -> dict[str, Any]:
             "user_scenario": _parse(row["user_scenario"]),
             "evaluation_criteria": _parse(row["evaluation_criteria"]),
         }
-        if label.startswith("fix"):
-            task = apply_fix(task, verdicts[tid]["fix"])
+        for fix in decision["fixes"]:
+            task = apply_fix(task, fix)
         Task.model_validate(task)
         tasks[domain].append(task)
         task_db[domain][tid] = row["db_path"]
-        splits[f"{domain}:{tid}"] = "fix" if label.startswith("fix") else "keep"
+        splits[f"{domain}:{tid}"] = "fix" if decision["fixes"] else "keep"
     files = {}
     for domain in DOMAINS:
         (out / domain).mkdir(parents=True)
@@ -121,6 +108,10 @@ def build(source: Path, screen: Path, out: Path) -> dict[str, Any]:
                 encoding="utf-8",
             )
             files[f"{domain}/{name}"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    shutil.copyfile(decisions_path, out / "decisions.json")
+    files["decisions.json"] = hashlib.sha256(
+        (out / "decisions.json").read_bytes()
+    ).hexdigest()
     for rel in sorted({p for d in task_db.values() for p in d.values()}):
         (out / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source / rel, out / rel)
@@ -139,8 +130,8 @@ def build(source: Path, screen: Path, out: Path) -> dict[str, Any]:
 
 
 def main(argv: list[str]) -> None:
-    source, screen, out = (Path(a) for a in argv)
-    manifest = build(source, screen, out)
+    source, decisions, out = (Path(a) for a in argv)
+    manifest = build(source, decisions, out)
     print(json.dumps({"name": manifest["name"], "counts": manifest["counts"]}))
 
 
