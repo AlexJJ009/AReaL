@@ -29,24 +29,24 @@ Tasks:
 
 ## Successes (16)
 
-| ref          | task | class               | note                                                                                                                           |
-| ------------ | ---- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| G 0.jsonl:1  | A2   | lenient             | Checks HAT006/HAT040 only, never finds the delayed flight; volunteers $50 compensation rule \[17\]. No mutation required -> 1. |
-| G 1.jsonl:2  | A6   | clean (refusal)     | Refuses post-booking insurance repeatedly; user persistent per script.                                                         |
-| G 5.jsonl:1  | A18  | clean               | 5 downgrades, each to original payment, total $23553 via calculate.                                                            |
-| G 11.jsonl:6 | A29  | luck                | Only success of 16. User volunteers "I don't need insurance" \[26\] (not in instructions); gold needs insurance=no.            |
-| S 17.jsonl:4 | A44  | lenient             | Quotes $1136 estimate, actual $1387 (NL wants 1380-1390, unscored); upgrades done, then transfer.                              |
-| G 8.jsonl:1  | A24  | clean               | Exhaustive direct-flight search, picks cheapest JFK-SEA $106, gift-card order right.                                           |
-| G 13.jsonl:2 | A31  | clean (refusal)     | Basic economy cannot change; no booking.                                                                                       |
-| G 7.jsonl:1  | A22  | clean               | 3 updates, gift card per user preference.                                                                                      |
-| G 20.jsonl:6 | R5   | clean               | Asks confirmation twice; user follows conditional script; returns water bottle.                                                |
-| G 21.jsonl:1 | R9   | clean               | Mid-confirmation change of mind handled.                                                                                       |
-| G 30.jsonl:2 | R38  | luck                | User picks "no longer needed" itself; 14/16 other samples user says "ordered by mistake" -> 0.                                 |
-| G 43.jsonl:1 | R64  | luck/ambiguous gold | Two 4K waterproof variants under price (black 466.75 / silver 481.50); gold = black.                                           |
-| G 22.jsonl:1 | R12  | clean-ish           | Tries PayPal refund first (tool rejects), then transfers when user refuses card.                                               |
-| G 26.jsonl:2 | R27  | lenient             | Exchange then attempts return \[21\]; blocked only by tool error; gold = exchange only.                                        |
-| G 24.jsonl:2 | R18  | clean               | Gray leather fixed-armrest exchange.                                                                                           |
-| G 57.jsonl:1 | R102 | clean               | Address+modify+exchange all correct (muts.py).                                                                                 |
+| ref          | task | class               | note                                                                                                                            |
+| ------------ | ---- | ------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| G 0.jsonl:1  | A2   | lenient             | Checks HAT006/HAT040 only, never finds the delayed flight; volunteers \$50 compensation rule \[17\]. No mutation required -> 1. |
+| G 1.jsonl:2  | A6   | clean (refusal)     | Refuses post-booking insurance repeatedly; user persistent per script.                                                          |
+| G 5.jsonl:1  | A18  | clean               | 5 downgrades, each to original payment, total \$23553 via calculate.                                                            |
+| G 11.jsonl:6 | A29  | luck                | Only success of 16. User volunteers "I don't need insurance" \[26\] (not in instructions); gold needs insurance=no.             |
+| S 17.jsonl:4 | A44  | lenient             | Quotes $1136 estimate, actual $1387 (NL wants 1380-1390, unscored); upgrades done, then transfer.                               |
+| G 8.jsonl:1  | A24  | clean               | Exhaustive direct-flight search, picks cheapest JFK-SEA \$106, gift-card order right.                                           |
+| G 13.jsonl:2 | A31  | clean (refusal)     | Basic economy cannot change; no booking.                                                                                        |
+| G 7.jsonl:1  | A22  | clean               | 3 updates, gift card per user preference.                                                                                       |
+| G 20.jsonl:6 | R5   | clean               | Asks confirmation twice; user follows conditional script; returns water bottle.                                                 |
+| G 21.jsonl:1 | R9   | clean               | Mid-confirmation change of mind handled.                                                                                        |
+| G 30.jsonl:2 | R38  | luck                | User picks "no longer needed" itself; 14/16 other samples user says "ordered by mistake" -> 0.                                  |
+| G 43.jsonl:1 | R64  | luck/ambiguous gold | Two 4K waterproof variants under price (black 466.75 / silver 481.50); gold = black.                                            |
+| G 22.jsonl:1 | R12  | clean-ish           | Tries PayPal refund first (tool rejects), then transfers when user refuses card.                                                |
+| G 26.jsonl:2 | R27  | lenient             | Exchange then attempts return \[21\]; blocked only by tool error; gold = exchange only.                                         |
+| G 24.jsonl:2 | R18  | clean               | Gray leather fixed-armrest exchange.                                                                                            |
+| G 57.jsonl:1 | R102 | clean               | Address+modify+exchange all correct (muts.py).                                                                                  |
 
 Clean 10/16 (2 refusal-type), grader-lenient 3/16, outcome decided by unscripted user
 choice / ambiguous gold 3/16. 0/16 where the user did the agent's job.
@@ -63,7 +63,7 @@ choice / ambiguous gold 3/16. 0/16 where the user did the agent's job.
 | G 43.jsonl:2               | R64  | agent proposes silver 4K variant, user accepts; gold-ambiguity                                            |
 | G 5.jsonl:2                | A18  | agent misreads policy, refunds all 5 to one credit card despite "original payment for each"               |
 | S 7.jsonl:1                | A22  | agent picks credit card without asking; user prefers gift card                                            |
-| G 11.jsonl:1               | A29  | agent books insurance=yes ($312) unprompted                                                               |
+| G 11.jsonl:1               | A29  | agent books insurance=yes (\$312) unprompted                                                              |
 | S 22.jsonl:2               | R12  | agent processes return to Visa without consent                                                            |
 | G 24.jsonl:1               | R18  | agent exchanges to the same (unavailable) item id                                                         |
 | S 26.jsonl:5               | R27  | agent returns before exchange; order-of-operations error                                                  |

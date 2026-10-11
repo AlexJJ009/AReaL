@@ -100,7 +100,8 @@ directly from the base model to keep the verification setup minimal.
 ### Training Curves
 
 Training Qwen2.5-7B-Base on `Anthropic/hh-rlhf` for one epoch (no SFT warmup) reproduces
-the canonical DPO signature from the original paper: `loss` starts near $\\log 2
+the canonical DPO signature from the original paper: `loss` starts near
+$\\log 2
 \\approx 0.693$ and decreases, `reward_accuracy` rises from 0.50 to ~0.70,
 `reward_margin` grows monotonically, and `rejected_reward` decreases faster than
 `chosen_reward`.

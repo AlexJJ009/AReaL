@@ -42,6 +42,8 @@ repos:
           - mdformat-gfm
           - mdformat-tables
           - mdformat-frontmatter
+          # Keeps $...$ / $$...$$ math intact instead of escaping it
+          - mdformat-myst==0.2.2
         exclude: ^(docs/(en|zh)/algorithms/.*\.md|docs/(en|zh)/best_practices/algo_perf\.md)$
 
   - repo: https://github.com/astral-sh/ruff-pre-commit

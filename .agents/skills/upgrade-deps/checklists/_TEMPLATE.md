@@ -2,7 +2,7 @@
 
 ______________________________________________________________________
 
-package: <pip-package-name> github: \<org/repo> branch_template: "v${VERSION}"
+package: <pip-package-name> github: \<org/repo> branch_template: "v\$\{VERSION}"
 upstream_paths:
 
 - path/to/relevant/file.py
