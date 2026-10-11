@@ -28,6 +28,9 @@ class StartSessionRequest(BaseModel):
 
     task_id: str
     api_key: str | None = None  # Reuse a previously-issued key (refresh)
+    # Client-chosen id shared by every retry of one start, so a retry after a
+    # client-side timeout returns the session the first request created.
+    request_id: str | None = None
 
 
 class StartSessionResponse(BaseModel):

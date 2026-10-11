@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from types import TracebackType
 from typing import TYPE_CHECKING
 
@@ -192,10 +193,14 @@ class OpenAIProxyClient:
 
     async def __aenter__(self) -> OpenAIProxyClient:
         """Start the RL session via HTTP request."""
+        # Every retry carries the same request_id, so a start the server
+        # finished after this client timed out is not started twice.
         data = await _start_session(
             self._session,
             url=f"{self.base_url}{RL_START_SESSION_PATHNAME}",
-            payload=StartSessionRequest(task_id=self.task_id),
+            payload=StartSessionRequest(
+                task_id=self.task_id, request_id=uuid.uuid4().hex
+            ),
             headers=self._admin_auth_headers(),
         )
         self.session_id = data["session_id"]
@@ -272,14 +277,18 @@ def log_retry(retry_state: RetryCallState):
 
 
 def get_retry_strategy(
-    allowed_attempt: int, multiplier: float = 0.5, min: float = 0.5, max: float = 5
+    allowed_attempt: int,
+    multiplier: float = 0.5,
+    min: float = 0.5,
+    max: float = 5,
+    before_sleep=None,
 ):
     return retry(
         retry=retry_if_exception(should_retry),
         wait=wait_exponential(multiplier=multiplier, min=min, max=max),
         stop=stop_never if allowed_attempt < 0 else stop_after_attempt(allowed_attempt),
         reraise=True,
-        # before_sleep=log_retry,
+        before_sleep=before_sleep,
     )
 
 
@@ -340,6 +349,8 @@ async def set_last_interaction_reward(
     )
 
 
-@get_retry_strategy(allowed_attempt=-1)
+# Unbounded, so log each retry: a start that never gets capacity is otherwise
+# silent until the caller's own timeout.
+@get_retry_strategy(allowed_attempt=-1, before_sleep=log_retry)
 async def _start_session(*args, **kwargs):
     return await post_json(*args, **kwargs)

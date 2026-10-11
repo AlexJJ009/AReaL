@@ -181,6 +181,10 @@ _session_timeout_seconds: int = 3600  # Default timeout (overridden by config)
 _admin_api_key: str = secrets.token_urlsafe(32)
 _api_key_to_session: dict[str, str] = {}
 _session_to_api_key: dict[str, str] = {}  # Reverse mapping for O(1) cleanup
+# start_session request_id -> (session_id, api_key, served_at). A client that
+# times out retries with the same id; without this the late first request and
+# the retry would each create a session and each consume a unit of capacity.
+_start_requests: dict[str, tuple[str, str, float]] = {}
 
 # Pluggable message preprocessors loaded from config at setup time.
 # Applied in order after Anthropic-to-OpenAI translation, before content
@@ -492,6 +496,16 @@ def _cleanup_stale_sessions():
             _remove_api_keys_for_session(sid)
         logger.info(f"Cleaned up {len(stale_sessions)} stale sessions")
 
+    # Served start requests are kept past their session's end so a very late
+    # duplicate cannot start a second session; drop them once they are stale.
+    expired = [
+        rid
+        for rid, (_sid, _key, served_at) in _start_requests.items()
+        if current_time - served_at > _session_timeout_seconds
+    ]
+    for rid in expired:
+        _start_requests.pop(rid, None)
+
     # Sweep orphaned API key mappings whose session_id is no longer in cache.
     # Handles edge case where client crashes after end_session but before
     # export_trajectories, leaving key mappings with no cleanup path.
@@ -510,6 +524,10 @@ def start_session(request: StartSessionRequest) -> StartSessionResponse:
     a new one.  When the key already maps to a *finished* session on this
     worker, the stale mapping is cleaned up first.  If it maps to an
     *active* (unfinished) session, the request is rejected with HTTP 409.
+
+    A request carrying a ``request_id`` that was already served returns the
+    same session without consuming capacity, or HTTP 409 if that session has
+    since ended.
     """
     global _capacity
     task_id = request.task_id
@@ -517,6 +535,18 @@ def start_session(request: StartSessionRequest) -> StartSessionResponse:
     with _lock:
         # Periodically cleanup stale sessions
         _cleanup_stale_sessions()
+
+        if request.request_id is not None and request.request_id in _start_requests:
+            session_id, session_api_key, _ = _start_requests[request.request_id]
+            if session_id not in _session_cache:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Start request {request.request_id} already served "
+                        f"session {session_id}, which has ended."
+                    ),
+                )
+            return StartSessionResponse(session_id=session_id, api_key=session_api_key)
 
         if _capacity <= 0:
             raise HTTPException(
@@ -565,6 +595,12 @@ def start_session(request: StartSessionRequest) -> StartSessionResponse:
         )
         _api_key_to_session[session_api_key] = session_id
         _session_to_api_key[session_id] = session_api_key
+        if request.request_id is not None:
+            _start_requests[request.request_id] = (
+                session_id,
+                session_api_key,
+                time.time(),
+            )
 
     return StartSessionResponse(session_id=session_id, api_key=session_api_key)
 
@@ -998,20 +1034,24 @@ async def export_trajectories(
     # Wait for session to complete (non-blocking, outside lock)
     await session_data.wait_for_finish()
 
-    # Export interactions
-    interactions = session_data.export_interactions(
-        discount=request.discount,
-        style=request.style,
-        drop_retry_orphans=request.drop_retry_orphans,
-    )
+    # Building and serializing the token tensors is CPU work; run it off the
+    # event loop so concurrent start_session and chat requests are not held
+    # past their client timeouts.
+    def _export() -> dict[str, Any]:
+        interactions = session_data.export_interactions(
+            discount=request.discount,
+            style=request.style,
+            drop_retry_orphans=request.drop_retry_orphans,
+        )
+        return serialize_interactions(interactions)
+
+    serialized = await asyncio.to_thread(_export)
 
     # Remove session from cache and clean up API key mapping
     with _lock:
         _session_cache.pop(session_id, None)
         _remove_api_keys_for_session(session_id)
 
-    # Serialize for HTTP transport
-    serialized = serialize_interactions(interactions)
     return ExportTrajectoriesResponse(interactions=serialized)
 
 

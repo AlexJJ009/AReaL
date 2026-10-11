@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Reproduce the proxy capacity leak that hung two fixed-v2 eval episodes.
 
-Runs the real ``proxy_rollout_server`` app and the real client helpers. Two
-episodes each grant one unit of capacity and start a session, as
-``OpenAIProxyWorkflow._arun_episode`` does. Episode A's ``start_session``
+Runs the real ``proxy_rollout_server`` app and starts sessions through the real
+``OpenAIProxyClient``, as ``OpenAIProxyWorkflow._arun_episode`` does. Two
+episodes each grant one unit of capacity and start a session. Episode A's ``start_session``
 request is already being handled when the handler has to wait longer than the
 client's 10 s timeout; here the wait is injected by holding the server's
 session lock. The client gives up and retries, but the server still finishes
@@ -11,9 +11,12 @@ the original request: it creates session ``A-0`` that nobody uses, and A's
 retry takes a second unit of capacity. ``start_session`` retries HTTP 429
 without limit, so when episode B arrives, one of the two retries forever.
 
+Since ``start_session`` takes a client ``request_id`` (2026-10-10), the
+retry returns ``A-0`` and B starts; before that change the leak reproduces.
+
 Usage, from the repository root:
   PYTHONPATH=. python <this file> [--block-seconds 12] [--wait-seconds 40]
-Exit code 0 means the leak reproduced.
+Exit code 0 means the leak reproduced, 1 that it did not.
 """
 
 import argparse
@@ -26,12 +29,8 @@ import aiohttp
 import uvicorn
 
 from areal.experimental.openai.proxy import proxy_rollout_server as server
-from areal.experimental.openai.proxy.client_session import _start_session
-from areal.experimental.openai.proxy.server import (
-    GRANT_CAPACITY_PATHNAME,
-    RL_START_SESSION_PATHNAME,
-    StartSessionRequest,
-)
+from areal.experimental.openai.proxy.client_session import OpenAIProxyClient
+from areal.experimental.openai.proxy.server import GRANT_CAPACITY_PATHNAME
 
 ADMIN = "repro-admin-key"
 
@@ -62,13 +61,11 @@ async def main(block_seconds: float, wait_seconds: float) -> int:
 
         async def start(task_id: str):
             t0 = time.monotonic()
-            data = await _start_session(
-                http,
-                url=base + RL_START_SESSION_PATHNAME,
-                payload=StartSessionRequest(task_id=task_id),
-                headers=headers,
+            client = OpenAIProxyClient(
+                session=http, base_url=base, task_id=task_id, admin_api_key=ADMIN
             )
-            return data["session_id"], time.monotonic() - t0
+            await client.__aenter__()
+            return client.session_id, time.monotonic() - t0
 
         # Episode A: grant, then start while the session lock is held.
         await grant()

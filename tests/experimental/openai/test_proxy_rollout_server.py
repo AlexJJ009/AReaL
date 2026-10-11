@@ -23,6 +23,7 @@ def _reset_server_globals(monkeypatch):
     monkeypatch.setattr(srv, "_session_cache", {})
     monkeypatch.setattr(srv, "_api_key_to_session", {})
     monkeypatch.setattr(srv, "_session_to_api_key", {})
+    monkeypatch.setattr(srv, "_start_requests", {})
     monkeypatch.setattr(srv, "_capacity", 0)
     monkeypatch.setattr(srv, "_admin_api_key", _ADMIN_KEY)
     monkeypatch.setattr(srv, "_lock", threading.Lock())
@@ -135,6 +136,93 @@ class TestStartSessionApiKey:
 
 
 # ---------------------------------------------------------------------------
+# Tests: start_session is idempotent per request_id
+# ---------------------------------------------------------------------------
+
+
+class TestStartSessionRequestId:
+    @pytest.mark.asyncio
+    async def test_retry_returns_the_same_session_and_capacity_once(self, monkeypatch):
+        """A retried start must not create a second session or spend capacity."""
+        monkeypatch.setattr(srv, "_capacity", 2)
+        body = {"task_id": "t", "request_id": "r1"}
+        async with _client() as client:
+            first = await client.post(
+                "/rl/start_session", headers=_admin_headers(), json=body
+            )
+            retry = await client.post(
+                "/rl/start_session", headers=_admin_headers(), json=body
+            )
+        assert first.status_code == retry.status_code == 200
+        assert retry.json() == first.json()
+        assert list(srv._session_cache) == ["t-0"]
+        assert srv._capacity == 1
+
+    @pytest.mark.asyncio
+    async def test_retry_after_the_session_ended_is_rejected(self, monkeypatch):
+        """A very late duplicate cannot start a fresh session either."""
+        monkeypatch.setattr(srv, "_capacity", 2)
+        body = {"task_id": "t", "request_id": "r1"}
+        async with _client() as client:
+            await client.post("/rl/start_session", headers=_admin_headers(), json=body)
+            srv._session_cache.clear()
+            late = await client.post(
+                "/rl/start_session", headers=_admin_headers(), json=body
+            )
+        assert late.status_code == 409
+        assert srv._session_cache == {}
+        assert srv._capacity == 1
+
+    @pytest.mark.asyncio
+    async def test_distinct_request_ids_start_distinct_sessions(self, monkeypatch):
+        monkeypatch.setattr(srv, "_capacity", 2)
+        async with _client() as client:
+            for rid in ("r1", "r2"):
+                resp = await client.post(
+                    "/rl/start_session",
+                    headers=_admin_headers(),
+                    json={"task_id": "t", "request_id": rid},
+                )
+                assert resp.status_code == 200
+        assert sorted(srv._session_cache) == ["t-0", "t-1"]
+        assert srv._capacity == 0
+
+    def test_stale_cleanup_forgets_old_request_ids(self, monkeypatch):
+        monkeypatch.setattr(srv, "_session_timeout_seconds", 10)
+        now = srv.time.time()
+        srv._start_requests["old"] = ("s-old", "k-old", now - 11)
+        srv._start_requests["new"] = ("s-new", "k-new", now)
+        with srv._lock:
+            srv._cleanup_stale_sessions()
+        assert list(srv._start_requests) == ["new"]
+
+
+@pytest.mark.asyncio
+async def test_client_retries_a_start_with_the_same_request_id(monkeypatch):
+    """The client side of the contract: a timed-out start is retried, not renewed."""
+
+    from areal.experimental.openai.proxy import client_session
+
+    payloads = []
+
+    async def fake_post_json(session, url, payload=None, *args, **kwargs):
+        payloads.append(payload.model_dump())
+        if len(payloads) == 1:
+            raise TimeoutError
+        return {"session_id": "t-0", "api_key": "k"}
+
+    monkeypatch.setattr(client_session, "post_json", fake_post_json)
+    client = client_session.OpenAIProxyClient(
+        session=None, base_url="http://proxy", task_id="t", admin_api_key=_ADMIN_KEY
+    )
+    await client.__aenter__()
+
+    assert client.session_id == "t-0"
+    assert len(payloads) == 2
+    assert payloads[0]["request_id"] and payloads[0] == payloads[1]
+
+
+# ---------------------------------------------------------------------------
 # Tests: end_session returns interaction_count
 # ---------------------------------------------------------------------------
 
@@ -206,6 +294,47 @@ class TestExportTrajectories:
             )
             assert resp_export.status_code == 200
             assert "interactions" in resp_export.json()
+
+    @pytest.mark.asyncio
+    async def test_slow_export_does_not_block_start_session(self, monkeypatch):
+        """Export runs off the event loop, so a start served meanwhile is fast."""
+        import asyncio
+        import time
+
+        monkeypatch.setattr(srv, "_capacity", 2)
+
+        def slow_export(self, **kwargs):
+            time.sleep(2.0)
+            return {}
+
+        monkeypatch.setattr(SessionData, "export_interactions", slow_export)
+        async with _client() as client:
+            resp = await client.post(
+                "/rl/start_session", headers=_admin_headers(), json={"task_id": "a"}
+            )
+            session_id, api_key = resp.json()["session_id"], resp.json()["api_key"]
+            await client.post(
+                "/rl/end_session",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={},
+            )
+            finished = []
+
+            async def post(name, path, body):
+                resp = await client.post(path, headers=_admin_headers(), json=body)
+                finished.append(name)
+                return resp
+
+            export = asyncio.create_task(
+                post("export", "/export_trajectories", {"session_id": session_id})
+            )
+            start = asyncio.create_task(
+                post("start", "/rl/start_session", {"task_id": "b"})
+            )
+            assert (await export).status_code == 200
+            assert (await start).status_code == 200
+        # On the event loop, the 2 s export would finish before the start.
+        assert finished == ["start", "export"]
 
     @pytest.mark.asyncio
     async def test_export_rejects_non_admin_key(self, monkeypatch):
