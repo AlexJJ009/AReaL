@@ -13,6 +13,7 @@ temperature=1、每题 8 次）。全部结论来自已有记录的重算，没�
 - 第 11 节：当前 benchmark 变体的定义和校验步骤。
 - 第 12 节：训练计划，以及额外训练数据的调研与核查（12.7–12.8）。
 - 第 13 节：两轮 step 0 评测。
+- 第 15 节：Qwen3-4B-2507 两个模型的 step 0 评测、能力缺口与加速配置核查（2026-10-11）。
 
 第 11–12 节只保留最新的决策和执行步骤。τ² 的调研、对比、找 gap 都记在本文，不另开文档。
 
@@ -1184,3 +1185,249 @@ Airline 清零了 75 条原本成功的 episode（v1 是 63 条）。
 产物：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-eval-20261010-fixed-v2/step0-base-t0-deepseek-fixed-v2/`。
 对比脚本是 `scripts/official-runner/variant_compare.py`，按领域、划分和训练池输出 mean@4 /
 pass^k，以及转人工规则清零的条数。
+
+## 15. Qwen3-4B-2507 的 step 0 评测与能力缺口（2026-10-11）
+
+对象：未经训练的 Qwen3-4B-Instruct-2507（non-thinking）和 Qwen3-4B-Thinking-2507（thinking）。
+目的：Qwen3.5-4B 在 fixed v2 的 Retail、Telecom 上已接近满分（13.2）。这里确认两个 Qwen3
+模型的可提升空间，并弄清分数低的原因：是模型能力不足还是题目问题，如果是模型，具体缺哪种能力。另外核查我们为 Qwen3.5 做的加速配置有哪些对 Qwen3 仍然可用。
+
+产物：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-eval-20261010-qwen3-2507/`
+
+- 每个运行目录下有 `summary.json`、`episodes.jsonl`、`trajectories/`
+- `analysis/` 存放逐 episode 特征（`feat-*.jsonl`）和 actor probe 日志
+
+脚本在本目录 `scripts/qwen3-2507/`：
+
+- 启动：`launch_eval.sh`、`lane_a.sh`、`lane_b.sh`
+- 特征与分类：`extract_episodes.py`、`aggregate.py`、`compare.py`、`write_diff.py`、`telecom.py`
+- 查看轨迹：`view.py`
+- Actor probe：`actor_probe.py`
+- 模型下载与校验：`fetch_models.py`
+
+### 15.1 结论
+
+1. **可提升空间大得多，模型本身的能力也弱得多。**
+   - fixed 下，Instruct 的 Airline / Retail mean@4 是 0.225 / 0.410，Thinking 是 0.245 /
+     0.654，Qwen3.5 是 0.388 / 0.849。
+   - Telecom 上两个 Qwen3 都约 0.37，Qwen3.5 是 456/456 全对。
+   - temperature 0 下，Retail 有组内对比的题：两个 Qwen3 有 65–72 道，Qwen3.5 只有 39 道。
+1. **分数低主要是模型问题。** 用户在确认句里结束对话、转人工漏洞这两项评测因素扣除后，与 Qwen3.5 的差距仍有 15–42pp（15.4）。
+1. **缺口集中在多子任务、长程执行。** 这与 14.1 第 2 条 Qwen3.5 的情况相反：
+   - 只需 1 个写操作的 Retail 题，Thinking 0.72，与 Qwen3.5 的 0.82 接近；
+   - 需要 ≥3 个写操作时，Thinking 掉到 0.55、Instruct 0.19，而 Qwen3.5 是 0.92；
+   - Telecom 注入 ≥6 个故障时，Thinking 为 0。
+1. **两个模型短板不同。** Instruct 主要是不查证就行动、参数填错；Thinking 单步更准，但 policy 推理不完整，常以转人工收尾。
+1. **对冷启动 / warm-up 的启示**（由失败分类推断，未经实验验证）：
+   - 工具格式没有问题，缺的是把多子任务做完的行为；
+   - Telecom 故障多的题两个模型几乎 4 次全错，单靠 RL 拿不到信号；
+   - 示范数据应覆盖：遍历完所有实体、按手册走完排障流程、不把转人工当退路。
+1. **加速配置：沿用现有 FSDP 配置，不再加其他优化**（2026-10-11 决定）。
+   - FSDP + FA2 + gradient checkpointing + packing 能直接跑通，在测过的组合里最快。
+   - Ulysses、tree training、archon 也能启动，但都不更快（15.6）。
+
+### 15.2 配置
+
+| 项                    | 设置                                                                                                              |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| 题集                  | base（train + test），每题 4 次，policy temperature 0。fixed：Airline 50 + Retail 114；official：再加 Telecom 114 |
+| 用户模拟器 / NL judge | DeepSeek-Flash，temperature 0，同 13.2                                                                            |
+| Instruct              | `enable_thinking=false`；concat 模板，与 Qwen3.5 评测相同；`tool_call_parser=qwen25`                              |
+| Thinking              | `enable_thinking=true`；hf 模板 + individual 导出；`tool_call_parser=qwen25`                                      |
+| 代码                  | `a6abe781`，在固定于该提交的 worktree 上运行                                                                      |
+| 模型                  | Instruct `cdbee75f`，Thinking `768f209d`；从 ModelScope 下载，4 个 LFS 文件的 sha256 都与 HF 一致                 |
+
+- **Telecom 不分变体。** fixed 只改了 Airline 和 Retail，Telecom 只在 official 里跑一次。Qwen3.5 的
+  Telecom 对照是这次按相同配置新跑的。
+- **与模型卡分数不可比。** 模型卡用 gpt-4.1 类用户模拟器、采样解码；这里是 DeepSeek 用户、temperature 0。
+
+**为支持 Thinking 改的代码（`a6abe781`）。** Thinking-2507 的模板在生成前缀里就放了 `<think>`，所以模型输出里只有
+`…</think>答案`。改之前有三个问题：
+
+- proxy 不把这段识别为推理，整段思维链作为 `content` 返回；
+- 用户模拟器会读到 agent 的思维链；
+- 带工具调用的回复同时带文本，orchestrator 会判为错误。
+
+改动内容：
+
+- `ReasoningStrippedLLMAgent` 在 tau2 侧去掉 `</think>` 及之前的内容，完整回复保留在 `raw_data`；
+- proxy 把只出现 `</think>` 的情况也识别为推理段；
+- 每轮用 hf 模板完整渲染，历史里不保留之前各轮的思维链；
+- 训练仍要求 `enable_thinking=false`。
+
+三处都有单元测试，分别故意破坏后对应测试会失败。
+
+已知限制：带工具调用的轮次，`raw_data` 里也没有思维链，所以 case study 只能看纯文本回复轮的推理。
+
+### 15.3 分数
+
+mean@4 = pass^1。
+
+| 模型          | 变体     | 领域    | pass^1 | pass^2 | pass^4 | test  | train |
+| ------------- | -------- | ------- | ------ | ------ | ------ | ----- | ----- |
+| Qwen3.5-4B    | official | Airline | 0.780  | 0.710  | 0.620  | 0.787 | 0.775 |
+| Qwen3.5-4B    | official | Retail  | 0.820  | 0.703  | 0.535  | 0.769 | 0.848 |
+| Qwen3.5-4B    | fixed v2 | Airline | 0.388  | 0.283  | 0.229  | 0.438 | 0.356 |
+| Qwen3.5-4B    | fixed v2 | Retail  | 0.849  | 0.756  | 0.634  | 0.812 | 0.867 |
+| Qwen3.5-4B    | official | Telecom | 1.000  | 1.000  | 1.000  | 1.000 | 1.000 |
+| Instruct-2507 | fixed    | Airline | 0.225  | 0.107  | 0.060  | 0.200 | 0.242 |
+| Instruct-2507 | fixed    | Retail  | 0.410  | 0.235  | 0.096  | 0.438 | 0.395 |
+| Instruct-2507 | official | Airline | 0.330  | 0.203  | 0.140  | 0.250 | 0.383 |
+| Instruct-2507 | official | Retail  | 0.445  | 0.288  | 0.158  | 0.481 | 0.426 |
+| Instruct-2507 | official | Telecom | 0.377  | 0.240  | 0.167  | 0.481 | 0.321 |
+| Thinking-2507 | fixed    | Airline | 0.245  | 0.140  | 0.060  | 0.263 | 0.233 |
+| Thinking-2507 | fixed    | Retail  | 0.654  | 0.494  | 0.351  | 0.619 | 0.672 |
+| Thinking-2507 | official | Airline | 0.655  | 0.533  | 0.400  | 0.650 | 0.658 |
+| Thinking-2507 | official | Retail  | 0.651  | 0.501  | 0.333  | 0.669 | 0.642 |
+| Thinking-2507 | official | Telecom | 0.373  | 0.313  | 0.246  | 0.506 | 0.301 |
+
+- **排除与超时。** 这次的 5 个运行都没有 infra 排除。Thinking official 有 7 条 1800 s 墙钟超时（Telecom 6
+  条、Airline 1 条），按官方语义记 0 分。
+- **成本。** 每轮生成的中位数：Thinking 956 token，Instruct 85，Qwen3.5 200。Thinking 单轮最长 7.5K
+  token，没有截断，也没有超出上下文。
+
+temperature 0 下各题 4 次的结果分布（全对 / 全错 / 有对有错）：
+
+| 模型          | Airline（fixed） | Retail（fixed） | Telecom      |
+| ------------- | ---------------- | --------------- | ------------ |
+| Qwen3.5-4B    | 11 / 20 / 19     | 73 / 2 / 39     | 114 / 0 / 0  |
+| Instruct-2507 | 3 / 26 / 21      | 11 / 31 / 72    | 19 / 35 / 60 |
+| Thinking-2507 | 3 / 27 / 20      | 40 / 9 / 65     | 28 / 61 / 25 |
+
+### 15.4 题目与评测因素
+
+**用户在确认句里结束对话。** agent 请求确认后，DeepSeek 用户回 "Yes, please proceed. ###STOP###"，写操作来不及执行。这和
+9.1 节 Doubao 的现象相同。
+
+判定规则：
+
+- 该 episode 失败；
+- gold 有写操作，agent 没写；
+- 最后一句用户消息带肯定词，并紧接 `###STOP###`。
+
+| 运行              | Retail 条数 | Retail mean@4 | 去掉这些 episode 后 |
+| ----------------- | ----------- | ------------- | ------------------- |
+| Qwen3.5 fixed v2  | 12          | 0.848         | 0.871               |
+| Instruct fixed    | 42          | 0.410         | 0.452               |
+| Thinking fixed    | 41          | 0.654         | 0.718               |
+| Instruct official | 48          | 0.445         | 0.498               |
+| Thinking official | 34          | 0.651         | 0.704               |
+
+- Qwen3 模型更常请求确认，所以受影响更多，但扣除后差距仍在。
+- Airline 每个运行有 0–6 条，Telecom 为 0。
+- 这些 episode 不该作为负样本进入训练，与 14.3 第 2 项是同一个问题。
+
+**转人工漏洞（10.3）。** Thinking 在 Airline 大量转人工：fixed 规则清零 95 条，其中 57 条在 official 评分下是 1
+分。official 0.655 与 fixed 0.245 之间的 41pp 差距就来自这里。Instruct 很少转人工，而是直接执行修改，所以两个变体只差 10pp。
+
+**没有发现新的题目缺陷。** 精读过的失败轨迹都能对应到 agent 的具体错误。
+
+### 15.5 能力缺口
+
+**多子任务与长程执行（两个模型共同的主因）。** 按 gold 写操作数分组的成功率（fixed）：
+
+| 模型          | Retail 1 | Retail 2 | Retail ≥3 | Airline 1 | Airline 2 | Airline ≥3 |
+| ------------- | -------- | -------- | --------- | --------- | --------- | ---------- |
+| Qwen3.5-4B    | 0.82     | 0.90     | 0.92      | 0.67      | 0.62      | 0.39       |
+| Thinking-2507 | 0.72     | 0.52     | 0.55      | 0.62      | 0.12      | 0.11       |
+| Instruct-2507 | 0.52     | 0.30     | 0.19      | 0.31      | 0.17      | 0.07       |
+
+Telecom 按注入的故障数：
+
+| 故障数   | 2    | 3    | 4    | 5    | 6    | 7    | 8    | 9    |
+| -------- | ---- | ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| Instruct | 0.59 | 0.38 | 0.51 | 0.37 | 0.16 | 0.09 | 0.06 | 0.04 |
+| Thinking | 0.60 | 0.48 | 0.51 | 0.31 | 0.02 | 0.00 | 0.00 | 0.00 |
+| Qwen3.5  | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+
+失败的具体形态：
+
+- **列表没遍历完。**
+  - Thinking airline:22 t1：用户要处理"纽约→芝加哥"的行程，模型只查了第一个预订（西雅图→达拉斯），思维链里写 "picked the first
+    one"。
+  - Thinking retail:54 t1：用户有 6 个订单，只查了 5 个，漏掉一单取消。
+- **流程没走完就转人工。**
+  - 转人工在 Telecom 失败中占 Thinking 264/286、Instruct 183/284。
+  - 需要充流量的题，调用 `refuel_data` 的次数：Thinking 6/197，Instruct 48/200，Qwen3.5 200/200。
+  - Thinking 的思维链写"基础检查都做完了，按 policy 应升级"，实际上流量问题还没处理。
+- **只完成一部分子任务。** 部分 gold 写操作完成、其余缺失的失败 episode：Instruct 24，Thinking 17，Qwen3.5 4。
+
+**参数 grounding：不查证就行动（Instruct 为主）。** Retail 写操作失败按类型分（fixed）：
+
+| 模型     | 完全没写 | 参数错 | 只做了部分子任务 | 只调了非 gold 工具 | 有写操作报错 |
+| -------- | -------- | ------ | ---------------- | ------------------ | ------------ |
+| Instruct | 100      | 81     | 24               | 29                 | 55           |
+| Thinking | 63       | 45     | 17               | 12                 | 20           |
+| Qwen3.5  | 23       | 26     | 4                | 3                  | 10           |
+
+- 出错最多的参数是 `new_item_ids`（选目标变体），其次是 `item_ids` 和 `order_id`。
+- 例：Instruct retail:101 t1。它把 policy 里的格式示例 `#W0000000` 当订单号去查；没有调用
+  `get_product_details`，就断言某个变体没货。
+
+**Policy 遵守。**
+
+- **该拒绝的 Airline 题**（0 个 gold 写操作），三个模型都在 0.11–0.24，与模型代际无关，同 14.2 的 M2a。
+- **Instruct 会执行 policy 不允许的修改。** 例：airline:2 t0，它主动提出补偿并发了 $50 证书，policy 规定不能主动提补偿。
+- **Thinking 的 policy 推理不完整。** 例：airline:32 t0，policy 允许 basic economy
+  先升舱再改签，它只记住了"basic economy 不能改"。它问了一句"要不要转人工"，没等用户回答就转了。
+
+**不是缺口的部分。**
+
+- 工具调用格式没问题：Instruct 没有空消息，Thinking 没有截断。
+- 单步工具使用接近 Qwen3.5（Retail 1 个写操作的题，0.72 对 0.82）。
+- Telecom 的环境和用户模拟器能支撑完整的排障流程：Qwen3.5 在同样配置下全对。
+
+### 15.6 加速配置核查
+
+Qwen3.5-4B 是 24 层 Gated DeltaNet 加 8 层 full attention；Qwen3-4B 是 36 层全部 full attention。
+
+**推理（SGLang）：**
+
+| 配置                                         | Qwen3 上                              | 说明                                               |
+| -------------------------------------------- | ------------------------------------- | -------------------------------------------------- |
+| `attention_backend: flashinfer` + CUDA graph | 可用                                  | 本次评测就在用；FA3 只支持 Hopper                  |
+| FLA / causal-conv1d                          | 不使用                                | 只服务于线性注意力层，装着也不影响                 |
+| KV cache 容量                                | 每卡 37.4 万 token，Qwen3.5 是 155 万 | `mem_fraction_static=0.75` 时实测，小 4.2 倍       |
+| `disable_radix_cache: true`                  | 可以打开，收益未测                    | dense 模型的多轮对话每轮都要重算整段历史的 prefill |
+
+- 评测时每个 SGLang 实例只有 4–10 条请求在跑，`num_retracted_reqs = 0`，瓶颈在 DeepSeek 用户的响应延迟。
+- 训练 rollout 时每个实例 64 条并发、上下文也更长，要关注 `num_retracted_reqs`，必要时调高 `mem_fraction_static`。
+
+**Actor update（4 卡 FSDP，用 `actor_probe.py` 跑 3 步）：** 合成数据每卡 8 条序列、长 6K–16K token，每 4
+条共享一段 3K token 的前缀。
+
+| 变体                                           | 能否启动                 | token/s | 峰值显存 | 说明                                                                            |
+| ---------------------------------------------- | ------------------------ | ------- | -------- | ------------------------------------------------------------------------------- |
+| **现有配置**：FSDP + FA2 + grad ckpt + packing | 是                       | 13,435  | 39.7 GB  | "每个 microbatch 只放一条序列"的规则只对 `qwen3_5` 生效，Qwen3 自动恢复 packing |
+| Qwen3.5 现有配置（对照）                       | 是                       | 16,106  | 36.3 GB  |                                                                                 |
+| Ulysses SP=2                                   | 是                       | 12,258  | 28.2 GB  | 32K 以内用不上                                                                  |
+| Tree training                                  | 需 `pad_to_maximum=True` | 7,249   | 54.5 GB  | padding 的开销大于共享前缀省下的计算                                            |
+| Archon，默认 selective AC                      | 否，OOM                  | —       | —        |                                                                                 |
+| Archon，`ac_mode=full`                         | 是                       | 12,980  | 37.6 GB  |                                                                                 |
+| Archon，`ac_mode=full` + compile               | 是                       | 13,368  | 39.5 GB  |                                                                                 |
+
+- **结论：沿用现有 FSDP 配置，不再加其他优化。**
+- 在这个长度区间，Qwen3 每 token 比 Qwen3.5 慢约 17%，原因是 36 层 full attention 的计算量。
+- **没有测的：**
+  - FP8：A100 不支持。
+  - Qwen3 的 critic 路径：`Qwen35TokenCriticForCausalBackbone` 只适用于 Qwen3.5，Qwen3 会走通用路径。用
+    SAO 之前要单独验证。
+
+### 15.7 后续：在 AReaL-tau2-data 上训练 Qwen3
+
+**依据。** 12.9 的 813 题对 Qwen3.5-4B 太容易：mean@4 0.912，temperature 0 下 78% 的题 4 次全对。两个 Qwen3
+模型在 fixed 上比 Qwen3.5 低 15–44pp，这份数据的难度对它们可能正合适。这是一个候选方向，还没有测。
+
+**要先测的。** 用 13.2 的口径，在 813 题上评测两个 Qwen3 模型，看全对、有对有错、全错各多少。这一步需要 DeepSeek 费用：Qwen3.5
+跑一轮用户侧用了 33M prompt token；Thinking 对话更长，会更多。
+
+**训练前要处理的两点：**
+
+- 15.4 的"用户在确认句里结束对话"会让 Qwen3 产生更多假负样本；
+- Qwen3 critic 路径还没验证（15.6）。
+
+### 15.8 局限
+
+- 失败分类靠规则抽取（`aggregate.py`、`write_diff.py`）。人工精读了约 10 条轨迹，主要类别各 1–2 条，没有逐条标注。
+- temperature 0 同配置重测约有 3pp 波动（13.1）。本节比较的差距都在 15pp 以上，不受影响。
+- Actor probe 只跑了 3 步、用的是合成数据，吞吐只能做相对比较。
