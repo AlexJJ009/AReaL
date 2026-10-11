@@ -926,12 +926,33 @@ Telecom）。
   - 进入的条件：两轮都没被拒绝，且不属于"商品不存在"类。
   - 共 813 题，是官方 train 99 题的 8 倍多。
 
-**第三步：评测证明**（需要批准后启动，会花 DeepSeek 费用）：
+**第三步：评测证明**（2026-10-11，用户批准）
 
-1. 实现按任务加载 `db_path`（环境构造时深拷贝或缓存，evaluator 会构造两次）。fix 的补丁按 `benchmark_fixes.json` 的格式记录。
-1. 对 keep + fix 的题，用本机 4B 做 agent、DeepSeek 做用户，每题跑 8 次。
-1. 失败的轨迹抽读，区分是 agent 的错还是题的错。题的错回到第二步，修或丢。
-1. 训练集只留通过 1–6 次的题：全对或全错的组没有组内对比。
+1. **按任务加载 DB**（`1b17bc3f`）：
+   - `examples/tau2/task_pack.py` 定义 task pack：每个领域一份 `tasks.json` 和 `task_db.json`，加上
+     DB 文件和带每个文件 sha256 的 manifest。
+   - `task_pack.install` 包装 registry 里的环境构造函数，让它接受 `task_db`。episode 和官方 evaluator 的
+     gold 重放都通过它建环境，每次都拿到一份 新的 DB。
+   - `scripts/tau2/evaluate.py --task-pack <pack>` 评测 pack 里的全部题。结果里的 `split` 记为 keep /
+     fix，方便分开看分数。
+1. **生成 pack**：`scripts/tau2/build_areal_task_pack.py` 按候选集生成 pack，并应用每道 fix 的指令修改和 gold
+   替换。
+   - 当前 pack：`_cache/tau2-areal-pack-20261011-v1`，Airline 490 题、Retail 323 题。
+1. **打分检查**：`scripts/tau2/check_task_pack.py` 对每道题，在它自己的 DB 上构造 gold 和空轨迹，用官方
+   `evaluate_simulation` 加上 fixed 的转人工规则打分。
+   - 结果：813 题全部是 gold 1 分、空轨迹 0 分。
+   - 这个检查能失败：改用默认 DB 打分（`--default-db`），402 题不通过，多数是 gold 重放报错。仍然通过的 411 题里，340 道
+     Airline 题用的 DB 与官方 DB 逐字节相同，其余的新 DB 题碰到的记录与官方 DB 相同（抽查过）。
+   - 单元测试 `tests/test_tau2_task_pack.py`：让 `task_db` 失效，测试就会失败。
+1. **评测**：口径与 13.2 相同。本机 Qwen3.5-4B 用 temperature 0，DeepSeek-Flash 做用户和 NL judge，每题 4
+   次，`benchmark_variant=fixed`， `sglang:d8p1t1`，并发 256。
+   - 代码固定在 `1b17bc3f` 的 worktree 中，共 3252 条 episode。
+   - 按 13.2 的用量估计：DeepSeek 用户侧约 27M prompt token、7M completion token，耗时约 2.5 小时。
+   - 产物：`tau2-eval-20261011-areal-pack/step0-areal-pack-v1-t0-deepseek/`。
+1. **判定**：
+   - 至少有一次通过的题，说明 gold 可达，可用。
+   - 4 次全挂的题，抽读失败轨迹，区分 agent 的错和题的错。题的错回到第二步，修或丢。
+   - 进训练集的条件，另按 pass-rate 决定：全对或全错的组没有组内对比。
 
 工作目录：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/audits/areal-tau2-data-screen-20261010/`。其中：
 
