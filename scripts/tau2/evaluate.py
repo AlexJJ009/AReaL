@@ -17,7 +17,7 @@ from typing import Any
 
 from omegaconf import OmegaConf
 
-from examples.tau2 import benchmark_variant
+from examples.tau2 import benchmark_variant, task_pack
 from examples.tau2.contracts import (
     OFFICIAL_SPLIT_SNAPSHOTS,
     OFFICIAL_TAU2_REVISION,
@@ -72,6 +72,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--tasks",
         default=None,
         help="Comma-separated domain:task_id subset of --task-set, for smoke runs.",
+    )
+    parser.add_argument(
+        "--task-pack",
+        default=None,
+        help="Evaluate every task of a task pack (examples/tau2/task_pack.py) "
+        "instead of --task-set; each task runs on its own database.",
     )
     parser.add_argument("--check-config", action="store_true")
     parser.add_argument(
@@ -196,6 +202,30 @@ def build_eval_rows(
             f"Official {task_set} coverage mismatch: {len(rows)} != {expected}"
         )
     return rows
+
+
+def build_pack_rows(
+    config: Tau2PPOConfig, repeats: int, pack: str
+) -> list[dict[str, Any]]:
+    """One row per pack task and trial; ``split`` is the task's screening verdict."""
+
+    pack = str(Path(pack).absolute())
+    manifest = task_pack.load_manifest(pack)
+    splits = manifest.get("task_splits", {})
+    tasks = []
+    for domain in normalize_domains(config.domains):
+        if domain not in task_pack.domains(pack):
+            raise ValueError(f"Task pack {pack} has no {domain} tasks")
+        tasks.extend(
+            {
+                "task_id": task_id,
+                "domain": domain,
+                "split": splits.get(f"{domain}:{task_id}", "pack"),
+                "task_pack": pack,
+            }
+            for task_id in task_pack.task_ids(pack, domain)
+        )
+    return expand_trials(tasks, repeats)
 
 
 def select_tasks(rows: list[dict[str, Any]], tasks: str | None) -> list[dict[str, Any]]:
@@ -424,7 +454,10 @@ def run(argv: list[str]) -> dict[str, Any]:
         raw_config, model_path=model_path, output_root=output_root
     )
     rows = select_tasks(
-        build_eval_rows(config, args.repeats, args.task_set), args.tasks
+        build_pack_rows(config, args.repeats, args.task_pack)
+        if args.task_pack
+        else build_eval_rows(config, args.repeats, args.task_set),
+        args.tasks,
     )
     workflow_kwargs = build_workflow_kwargs(config)
     max_inflight = resolve_eval_concurrency(config)
@@ -439,7 +472,15 @@ def run(argv: list[str]) -> dict[str, Any]:
         "model_path": model_path,
         "output_root": str(output_root),
         "domains": list(normalize_domains(config.domains)),
-        "task_set": args.task_set,
+        "task_set": None if args.task_pack else args.task_set,
+        "task_pack": None
+        if args.task_pack is None
+        else {
+            "path": str(Path(args.task_pack).absolute()),
+            "name": task_pack.load_manifest(str(Path(args.task_pack).absolute()))[
+                "name"
+            ],
+        },
         "tasks": args.tasks,
         "episode_timeout_seconds": config.eval_episode_timeout_seconds,
         "infra_retries": config.infra_retries,

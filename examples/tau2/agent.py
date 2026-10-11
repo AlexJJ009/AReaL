@@ -32,7 +32,7 @@ from tau2.user.user_simulator import DummyUser
 from tau2.user.user_simulator_base import HalfDuplexUser
 
 # Import utilities (also patches tau2.utils.llm_utils)
-from examples.tau2 import benchmark_variant
+from examples.tau2 import benchmark_variant, task_pack
 from examples.tau2.contracts import bind_policy_request, strip_policy_reasoning
 from examples.tau2.user_simulator import RecordingUserSimulator
 from examples.tau2.utils import Tau2EnvConfig, Tau2RunInfo, trajectory_record_dir
@@ -252,6 +252,7 @@ class Tau2Runner:
         user_api_key: str | None = None,
         timeout: float = 600.0,
         evaluation: bool = False,
+        task_db: str | None = None,
     ):
         self.econfig = econfig
         self.gen_args = gen_args
@@ -263,13 +264,16 @@ class Tau2Runner:
         self.evaluation = evaluation
         self.domain = econfig.domain
         self.solo_mode = econfig.solo_mode
+        # A task-pack task's own database; None uses the domain's default.
+        self.task_db = task_db
+        self._env_kwargs = {} if task_db is None else {"task_db": task_db}
         # Kept on the runner so a failed episode's partial trajectory survives.
         self.messages: list[Message] = []
 
     def _get_environment(self) -> Environment:
         benchmark_variant.activate(self.econfig.benchmark_variant, [self.domain])
         environment_constructor = registry.get_env_constructor(self.domain)
-        return environment_constructor(solo_mode=self.solo_mode)
+        return environment_constructor(solo_mode=self.solo_mode, **self._env_kwargs)
 
     def _agent_llm_args(self) -> dict[str, Any]:
         args = bind_policy_request(
@@ -456,6 +460,7 @@ class Tau2Runner:
                 simulation=simulation,
                 evaluation_type=EvaluationType.ALL,
                 solo_mode=solo_mode,
+                env_kwargs=dict(self._env_kwargs),
             )
             if self.econfig.benchmark_variant == "fixed":
                 reward_info = benchmark_variant.apply_transfer_rule(
@@ -635,7 +640,14 @@ class Tau2AgentWorkflow:
         domain = econfig.domain
         split = data.get("split", "train")
         task_id = data["task_id"]
-        task = _get_task(domain=domain, task_id=task_id, split=split)
+        pack = data.get("task_pack")
+        if pack:
+            task_pack.install(domain)
+            task = task_pack.get_task(pack, domain, task_id)
+            task_db = task_pack.task_db(pack, domain, task_id)
+        else:
+            task = _get_task(domain=domain, task_id=task_id, split=split)
+            task_db = None
 
         # The official pinned τ² orchestrator is synchronous. Tau2Runner executes
         # it in a worker thread and binds two independent OpenAI-compatible
@@ -661,6 +673,7 @@ class Tau2AgentWorkflow:
             user_api_key=user_api_key,
             timeout=self.timeout,
             evaluation=self.evaluation,
+            task_db=task_db,
         )
 
         # asyncio cannot kill a thread created by to_thread(). The official
