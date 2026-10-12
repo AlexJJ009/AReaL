@@ -2979,3 +2979,50 @@ $\beta$ 不改变梯度的期望，只降低方差。这与 Mao et al.（16.3）
 
 **汇合点**：case study 出来后，看主要的用户侧失败是"给定 agent
 的说法仍然随机"（本方法管得到），还是"系统性偏离"（管不到）。后者占主导时改方法；代码改动小，返工成本低。
+
+### 16.14 critic₀ 扩数据实验（2026-10-12，待启动）
+
+**要回答的问题**：训练集从官方 train 扩到"AReaL pack v2 + 官方 fixed train"之后，Qwen3.5-4B 的 critic₀ 在官方
+fixed test 上的 explained variance 能否变成正的。16.13 的方法线和 SAO 都以此为前提。
+
+**上一次 critic₀ 的诊断**（`tau2-training-20260927-nonthinking/critic-formal-v1`，official 变体，含
+Telecom，178 题 × 2 epoch = 24 次更新）：
+
+| 验证步 | Airline EV | Retail EV | Airline MSE | Retail MSE |
+| ------ | ---------- | --------- | ----------- | ---------- |
+| 0      | −38.7      | −50.2     | 9.95        | 8.97       |
+| 10     | −3.72      | −5.61     | 1.47        | 1.04       |
+| 20     | −1.05      | −1.51     | 0.52        | 0.39       |
+| 24     | −0.59      | −0.92     | 0.87        | 0.48       |
+
+- 0/1 目标下，永远预测平均成功率的 MSE 只有 $p(1-p) \le 0.25$。最后一步的 MSE（0.87、0.48）仍高于 0.25，critic
+  连平均值都没学到，属于**没训练完**，还谈不上"学不会区分"。
+- 原因有三：只有 24 次更新；value head 是无 bias 的线性层、按 std 0.02 随机初始化，初始输出在 $\pm 3$ 左右（第 0 步 MSE 约
+  10），而 Adam 以 5e-6 的学习率 24 步只能让每个权重移动约 1.2e-4，相对 0.02 的初始尺度几乎没动；每步梯度范数 16–1197，全部被裁剪到
+  1，训练时 value 均值在 −0.2 到 3.4 之间摆动。
+- 训练时每个 batch 只有 16 条，成功率高，有 5 个 batch 全为 1，训练侧的 EV 无定义。只看验证集的 EV。
+
+**这次的设置**（代码 `1076023b`，固定在 worktree `tau2-critic-20261012-pack/src-1076023b` 上运行）：
+
+| 项       | 上一次                                                                                                                                                   | 这次                                                                                      |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| 变体     | official                                                                                                                                                 | fixed（`fixed-v2` 数据目录）                                                              |
+| 领域     | Airline、Retail、Telecom                                                                                                                                 | Airline、Retail                                                                           |
+| 训练集   | 官方 train 178 题                                                                                                                                        | AReaL pack v2 648 题（打乱）在前，官方 fixed train 99 题（打乱）在后，每个 epoch 同一顺序 |
+| 更新次数 | 24                                                                                                                                                       | 94（747 题 / batch 16，2 epoch）                                                          |
+| 验证     | 官方 test 100 题                                                                                                                                         | 官方 fixed test 60 题，每 5 步一次                                                        |
+| 其余     | 不变：actor 固定（lr 0）、policy temperature 1.0、critic lr 5e-6、MSE、冻结 attention、梯度裁剪 1；user 与 NL judge 都是 DeepSeek-Flash（temperature 0） | 同左                                                                                      |
+
+**只改数据、不改 value head 的原因**：这次要回答的是"数据扩大后 EV 能否变正"。如果同时改 head 的初始化或学习率，EV
+变正时就分不清是哪一项起了作用。若这次 EV 仍为负，下一步单独试 head 零初始化或给 head 更高的学习率。
+
+**已知风险**：pack v2 在 temperature 0 下成功率 0.946（13.3），每个 epoch 前 648 题的目标几乎全是 1，critic
+容易学成"一律预测接近 1"；而官方 fixed test 的 Airline 只有 0.44 左右（15.3）。所以 pack 部分能提供更多更新步数，但未必教会
+critic 区分成败。验证报告要同时看 EV 和"MSE 对比 $p(1-p)$"，并按领域分开。
+
+**成本估计**：1494 条训练 episode 加 60 条验证。按 pack v2 评测的用量（每条约 10K prompt token、1.4K completion
+token）估算，约 16M prompt 和 2.2M completion token。上一次每步约 3.3 分钟，这次预计 5–6 小时，需要整机 8 张卡（4
+张训练、4 张 rollout）；每 5 步存一次 checkpoint，每次约 15 GB，共约 280 GB。
+
+**启动**：`tau2-critic-20261012-pack/launch_critic.sh <name>`（副本在
+`scripts/critic-pack/`）。结果在 `<name>/tau2-critic-fit-evidence/validation-step-*.json`。
