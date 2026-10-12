@@ -865,7 +865,7 @@ AReaL-SEA 论文）：
 归档：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/audits/areal-tau2-data-audit-20261010/`（`scripts/`
 是检查脚本，`out/` 是每题的检查结果，原始数据从 HF 下载）。
 
-### 12.9 AReaL-tau2-data 的筛选与修复（进行中）
+### 12.9 AReaL-tau2-data 的筛选与修复：v1（2026-10-10 → 10-11）
 
 **决定**（用户，2026-10-10）：从 Airline / Retail 的 1711 题里筛出一个 reward 正确的子集用于训练（按 12.1 不用
 Telecom）。
@@ -947,7 +947,7 @@ Telecom）。
   - 第一轮把它们当作"用户记错了"：agent 查无此物，只做地址修改，gold 仍然唯一。复核拒绝了其中 15 道，理由是指令说的目标做不到。
   - **处理**：24 道全部去掉。这类题的目标本来就有争议，去掉最稳妥；以后想要，可以从 `out/` 里的结论恢复。
 
-- **进入评测的候选集**（`out/candidates_after_review.json`）：
+- **进入评测的候选集**（当时写在 `out/candidates_after_review.json`，现已由 12.11 的 decisions 文件取代并删除）：
 
   | 领域    | 原样 keep，未复核 | 原样 keep，已复核 | fix，已复核 | 合计 |
   | ------- | ----------------: | ----------------: | ----------: | ---: |
@@ -1047,25 +1047,78 @@ airline_654 一道违规。其余被标出的都是误报：gold 里先订再改
 - **问题主要出在两处：**
   - 只审过一轮的部分：第一轮的 keep，以及"有对有错"里没被抽到的 121 题；
   - 只补一句指令、但没处理场景其余部分矛盾的 fix。 替换 gold 的修法经过第二轮的逐字引用规则筛选后，抽查是可靠的。
-- **估计可用量**：
-  - 去掉上面要丢弃的 100 题，剩 713 题。
-  - 其中 127 题属于"国家字段"或"乘客顺序"，补一句事实就能修。
-  - 不属于任何已知问题类的有 586 题（Airline 380、Retail 206）。
-  - 这 586 题里，"有对有错"但没复核的那部分，仍可能有未知问题。
+- **"100 题"的构成**：HKEG34 题族 54 + 模板套用 19 + 失败轨迹复核判为 drop / 重修、且不在前两类里的 26 + retail_104 =
+  100（airline_654、retail_375 已在 26 题里）。后来做了两处修正：
+  - 26 题里有 11 题是用户模拟器提前 `###STOP###`，不算题错，放回保留；
+  - 国家字段（99）和乘客顺序两类改为补一句事实，不丢弃。
 
-**v2 的做法**（待用户决定）：
+**v2 的做法与结果**（2026-10-11，用户确认：国家、乘客顺序补一句事实；用 Codex gpt-6.1-sol 复核）：
 
-1. 丢掉上面 100 题；
-1. 对国家字段和乘客顺序两类，在指令里补一句事实，用 `score.py` 重放验证；
-1. 用 Codex 复核其余没复核过的"有对有错"题；
-1. 生成 v2 pack，只重评改动过的题。
+1. 机械修正（`tools/decisions.py`）：丢掉 HKEG34 题族、模板套用题和复核判错的题；凡是 gold 写地址的，指令补"Whenever you
+   give an address, the country is USA (say exactly "USA")."；凡是 gold 改或订多名乘客的，补"When you
+   list the passengers, list them in this order: …"。按 gold 的写操作判定，所以补顺序的是 106
+   题，比上表按失败轨迹统计的 43 题多。得到 724 题的 staging 版本，全部 gold 1 分、空轨迹 0 分。
+1. 第三轮复核（`REVIEW3.md`，7 个分片，每题附 v1 的 4 次轨迹作证据）：724 题全部有结论，keep 525、fix 123、drop 76。
+   - drop 里 64 道是"场景与 DB 不符"，在 HKEG34 之外又找到同类：例如 retail_489 的指令一直把订单里的鼠标叫作手表，airline_137
+     的指令说 Ivan 改"我的行程"，预订上却没有他。
+   - 76 道 drop 里有 61 道在 v1 评测中 4 次全对，再次说明 4/4 只证明 gold 可达。我抽查了 6 道 4/4 的 drop、5 道
+     fix，判断都成立。
+   - 123 道 fix 都只改指令（替换 74、追加 43、两者都有 6），没有替换 gold。
+1. **v2 pack**：`_cache/tau2-areal-pack-20261011-v2`，Airline 380（keep 191、fix 189）、Retail
+   268（keep 48、fix 220），共 648 题；`check_task_pack.py` 结果是全部 gold 1 分、空轨迹 0 分。v2 还没有重新评测。
 
-工作目录：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/audits/areal-tau2-data-screen-20261010/`。其中：
+### 12.11 筛选流程（现行做法）
 
-- `PROMPT.md` 是给 Codex 的审题规则；
-- `tools/` 是 `dossier.py`（打印题目和相关 DB 记录）和 `score.py`（重放打分）；
-- `shards/` 是分片题号；
-- `out/` 是每片的逐题结论（JSONL）和总结。
+这一节记录现在怎么筛题、为什么这么做、用哪些脚本。12.8–12.10 是过程记录；以后筛新数据（包括 Telecom）照这一节做。
+
+**原则**：
+
+- **标准**：题可以简单，但不能是错题，也不能是做不完的题（infra 原因或题本身的原因都算）。没有把握就丢，错留一道题会把错误的 reward 带进 RL
+  训练，错丢一道只少一道题。
+- **评测通过不等于题对**。gold 可达只说明 reward 能拿到，不说明题面、DB 和 gold 互相一致。v1 里模板套用的 19 题有 13 题 4/4，v2
+  第三轮丢掉的 76 题有 61 题 4/4。评测失败轨迹的用处是发现问题类别。
+- **逐题审查看不出跨题的模板问题**。HKEG34 题族两轮 Codex 都没发现，是从失败轨迹里看到个例后，用脚本扫全量才找出来的。发现一个个例，就写规则扫整个
+  pack，再把这一类写进 rubric。
+- **修复只改指令，尽量不改 gold**。补一句用户本来就知道的事实（国家写法、乘客顺序、支付方式），或替换一个写错的名称。v1 第二轮里，替换 gold 的修法被拒
+  35%，只改指令的被拒 10%，多数是 agent 自己推断出 policy 里没有的规则。
+- **每次修改都要重放验证**：gold 1 分、空轨迹 0 分、去掉任一 gold 写操作得 0
+  分。检查本身也要能失败：`check_task_pack.py --default-db` 和单元测试里有意破坏的检查都能变红。
+- **用户模拟器提前 `###STOP###` 不算题错**，除非是场景本身诱发的。
+
+**步骤与脚本**：
+
+| 步骤              | 做什么                                                                               | 脚本或规则                                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| 1. 机械过滤       | 重复题、什么都不做也得分、gold 只有转人工、DB 坏记录、与官方 test 同用户或同写入目标 | 工作目录 `tools/common.py`、`tools/mech_check.py`（policy 规则：取消资格、basic economy 改航班等）  |
+| 2. Codex 逐题审   | keep / fix / drop，附证据；fix 用 `score.py` 自查                                    | `PROMPT.md`；`tools/dossier.py`（打印题目和相关 DB 记录）、`tools/score.py`（在该题 DB 上重放打分） |
+| 3. Codex 对抗复核 | 先独立判断再看上一轮证据；policy 结论必须逐字引用                                    | `REVIEW.md`（第二轮）、`REVIEW3.md`（第三轮，列出已知故障类别并附评测轨迹）                         |
+| 4. 评测           | 口径同 13.2：本机 4B、temperature 0、DeepSeek 用户、每题 4 次                        | `scripts/tau2/evaluate.py --task-pack`                                                              |
+| 5. 失败轨迹复核   | 找到第一个偏离 gold 的写操作，判断是 agent 错还是题错                                | `EVAL_REVIEW.md`                                                                                    |
+| 6. 汇总与构建     | 把各轮结论合成一份 decisions 文件，构建 pack，检查 gold 1 / 空轨迹 0                 | `tools/decisions.py`，`scripts/tau2/build_areal_task_pack.py`，`scripts/tau2/check_task_pack.py`    |
+
+**派发 Codex**：
+
+- `tools/run_codex.sh <rubric> <shard> <输出前缀>`，由 pueue 运行（`codex-review` 组）。分片结论缺 id
+  时自动续跑，最多 6 轮。
+- 模型 `gpt-6.1-sol`，reasoning effort high。必须显式写 `-m`：本机 Codex 的默认模型是
+  `gpt-6-astra`，第一轮就是因为没写 `-m` 才用了它。
+- stdin 必须接 `/dev/null`，否则 `codex exec` 会一直等输入（v1 的 pueue 任务 438 因此挂了 4 小时）。
+- 在 prompt 里明确禁止开 subagent。全局 `~/.codex/AGENTS.md` 要求 Codex 主动开 subagent，第三轮 7 个分片因此额外开了
+  20 个；`--disable multi_agent` 和 `agents.max_threads` 都去不掉这个工具（codex-cli 0.162.1）。
+- `tools/supervise.sh <输出前缀> <分片>…` 放在后台跑，监督整轮：等 pueue
+  任务结束，检查每个任务都成功、每片结论不缺不重、格式合法，然后汇总、构建候选 pack 并打分。只有全部通过才返回 0，主 agent 只需要等它结束。
+
+**版本**：
+
+- `_cache/tau2-areal-pack-<日期>-v<N>` 每个版本只读保留，里面带
+  `decisions.json`，记着每道题为什么保留、改了什么、为什么丢，供追溯和写 ADR 用。
+- `_cache/tau2-areal-pack-latest` 是指向当前版本的软链（现在指向 v2），脚本默认读它。出新版本只改这个软链。
+- Telecom 单独建 pack，不和 Airline / Retail 混在一起。
+
+**工作目录**
+`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/audits/areal-tau2-data-screen-20261010/`：`data/`（原始数据），四份
+rubric，`tools/`（上表的 7 个脚本），`shards/`，`out/`（各轮逐题结论和 decisions 文件），`scratch/`（Codex
+的验证文件和 Claude 抽审），`logs/`。旧的启动脚本和中间产物已经删掉。
 
 ## 13. step 0 评测
 
