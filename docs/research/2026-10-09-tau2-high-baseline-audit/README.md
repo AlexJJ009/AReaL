@@ -1385,8 +1385,70 @@ reward_basis），全部 gold 1 分、空轨迹 0 分。v1 只改了 50 题的�
 重评。
 
 **对后续实验的含义**：Telecom 对 Qwen3.5-4B 没有训练信号。Qwen3-4B-2507 在官方 Telecom 上约 0.37（15.1），所以
-Telecom 是否有用取决于 Qwen3 在这份数据上的分数，见 13.5。DeepSeek 费用要按 Telecom 的对话长度估算：一个模型跑 261 题 × 4 约
-150M prompt token。
+Telecom 是否有用取决于 Qwen3 在这份数据上的分数，见 13.5 表 B。DeepSeek 费用要按 Telecom 的对话长度估算：一个模型跑 261 题 × 4
+约 150M prompt token。
+
+### 13.5 训练前评测总表
+
+所有未训练模型的 step 0 评测汇总在这两张表里，新模型按同一口径评测后加一行。两张表分开放：表 A 是官方 τ² 题，用来和官方 / 论文比；表 B 是筛选后的
+AReaL 训练数据，用来判断这份数据对某个模型有没有训练信号。
+
+**共同口径**：policy temperature 0；DeepSeek-Flash 做用户模拟器和 NL judge（temperature 0）；每题 4
+次；Airline / Retail 用 `benchmark_variant=fixed`（fixed v2 数据，13.2）。"有对有错"的题，GRPO
+的组内才有分数差异；训练时按 temperature 1 采样，这类题会更多，但还没测过。
+
+**评测入口**：
+
+- 表
+  A：`scripts/qwen3-2507/launch_eval.sh NAME MODEL GPUS VARIANT DOMAINS THINKING PARSER`（Qwen3.5
+  的配置见 13.2，Qwen3-2507 的配置见 15.2）。
+- 表 B：同一个脚本，加环境变量 `TASK_PACK=_cache/tau2-areal-pack-latest`（或
+  `tau2-areal-telecom-pack-latest`）和 `TAU2_SRC=<不早于 1b17bc3f 的固定 worktree>`。产物在
+  `tau2-eval-20261012-qwen3-2507-packs/`。
+
+**表 A：官方 base 集**（Airline 50、Retail 114、Telecom 114 题，train + test）
+
+| 模型                   | 领域                       | 变体                | mean@4 | pass^4 | 4 次全对 | 有对有错 | 4 次全错 | 来源 |
+| ---------------------- | -------------------------- | ------------------- | -----: | -----: | -------: | -------: | -------: | ---- |
+| Qwen3.5-4B             | Airline                    | fixed v2            |  0.388 |  0.229 |       11 |       19 |       20 | 13.2 |
+| Qwen3.5-4B             | Retail                     | fixed v2            |  0.849 |  0.634 |       73 |       39 |        2 | 13.2 |
+| Qwen3.5-4B             | Telecom                    | official            |  1.000 |  1.000 |      114 |        0 |        0 | 15.3 |
+| Qwen3-4B-Instruct-2507 | Airline                    | fixed v2            |  0.225 |  0.060 |        3 |       21 |       26 | 15.3 |
+| Qwen3-4B-Instruct-2507 | Retail                     | fixed v2            |  0.410 |  0.096 |       11 |       72 |       31 | 15.3 |
+| Qwen3-4B-Instruct-2507 | Telecom                    | official            |  0.377 |  0.167 |       19 |       60 |       35 | 15.3 |
+| Qwen3-4B-Thinking-2507 | Airline                    | fixed v2            |  0.245 |  0.060 |        3 |       20 |       27 | 15.3 |
+| Qwen3-4B-Thinking-2507 | Retail                     | fixed v2            |  0.654 |  0.351 |       40 |       65 |        9 | 15.3 |
+| Qwen3-4B-Thinking-2507 | Telecom                    | official            |  0.373 |  0.246 |       28 |       25 |       61 | 15.3 |
+| （下一个模型）         | Airline / Retail / Telecom | fixed v2 / official |      — |      — |        — |        — |        — |      |
+
+Airline / Retail 在 official 变体下的分数见 15.3；official 与 fixed 的差别见 10.3、13.2。
+
+**表 B：筛选后的 AReaL-tau2-data**（Airline / Retail 用 pack v2，648 题，12.10；Telecom 用 pack v0 /
+v1，261 题，13.4）
+
+| 模型                   | 领域                       | pack        | 题数 | mean@4 | pass^4 | 4 次全对 | 有对有错 | 4 次全错 | 来源      |
+| ---------------------- | -------------------------- | ----------- | ---: | -----: | -----: | -------: | -------: | -------: | --------- |
+| Qwen3.5-4B             | Airline                    | v2          |  380 |  0.926 |  0.818 |      311 |       63 |        6 | 13.3      |
+| Qwen3.5-4B             | Retail                     | v2          |  268 |  0.976 |  0.922 |      247 |       21 |        0 | 13.3      |
+| Qwen3.5-4B             | Telecom                    | telecom v0  |  261 |  0.993 |  0.973 |      254 |        7 |        0 | 13.4      |
+| Qwen3-4B-Instruct-2507 | Airline                    | v2          |  380 |  0.593 |  0.289 |      110 |      211 |       59 | 本节      |
+| Qwen3-4B-Instruct-2507 | Retail                     | v2          |  268 |  0.787 |  0.459 |      123 |      138 |        7 | 本节      |
+| Qwen3-4B-Instruct-2507 | Telecom                    | telecom v1  |  261 |   待测 |        |          |          |          | pueue 460 |
+| Qwen3-4B-Thinking-2507 | Airline                    | v2          |  380 | 运行中 |        |          |          |          | pueue 459 |
+| Qwen3-4B-Thinking-2507 | Retail                     | v2          |  268 | 运行中 |        |          |          |          | pueue 459 |
+| Qwen3-4B-Thinking-2507 | Telecom                    | telecom v1  |  261 |   待测 |        |          |          |          | pueue 460 |
+| （下一个模型）         | Airline / Retail / Telecom | 当前 latest |      |        |        |          |          |          |           |
+
+Qwen3.5 的 Telecom 用的是 v0。v1 只在 50 题里改了一句"要恰好 2 GB"，Qwen3.5 在 v0 上已经 0.993，所以没有重评。
+
+**读表**（2026-10-12，Thinking 和 Telecom 跑完后补）：
+
+- **Qwen3.5-4B 在 AReaL 数据上没有训练信号**：648 题里只有 84 题有对有错（13%）。
+- **Qwen3-4B-Instruct-2507 的难度合适**：349 题有对有错（54%），4 次全错的只有 66 题。
+- **Instruct 全错的题集中在修过的 Airline 题**：Airline fix 189 题 mean@4 0.463、全错 47 题；keep 191 题是
+  0.721、全错 12 题。这些题的 gold 是多步改签、降舱，Qwen3.5 能做对（13.3），所以是模型能力不够，不是题错。
+- **AReaL 数据比官方题容易**：Instruct 在官方 Airline / Retail 是 0.225 / 0.410，在 v2 上是 0.593 /
+  0.787。在 v2 上练出的提升能不能迁移到官方题，要训练后用表 A 的口径评测才知道。
 
 ## 14. 能力缺口与训练期问题的 case study（2026-10-11）
 
@@ -1576,13 +1638,7 @@ mean@4 = pass^1。
 - **成本。** 每轮生成的中位数：Thinking 956 token，Instruct 85，Qwen3.5 200。Thinking 单轮最长 7.5K
   token，没有截断，也没有超出上下文。
 
-temperature 0 下各题 4 次的结果分布（全对 / 全错 / 有对有错）：
-
-| 模型          | Airline（fixed） | Retail（fixed） | Telecom      |
-| ------------- | ---------------- | --------------- | ------------ |
-| Qwen3.5-4B    | 11 / 20 / 19     | 73 / 2 / 39     | 114 / 0 / 0  |
-| Instruct-2507 | 3 / 26 / 21      | 11 / 31 / 72    | 19 / 35 / 60 |
-| Thinking-2507 | 3 / 27 / 20      | 40 / 9 / 65     | 28 / 61 / 25 |
+temperature 0 下各题 4 次的结果分布（全对 / 有对有错 / 全错）汇总在 13.5 表 A。
 
 ### 15.4 题目与评测因素
 
@@ -1708,8 +1764,8 @@ Qwen3.5-4B 是 24 层 Gated DeltaNet 加 8 层 full attention；Qwen3-4B 是 36 
 **依据。** 12.9 的 813 题对 Qwen3.5-4B 太容易：mean@4 0.912，temperature 0 下 78% 的题 4 次全对。两个 Qwen3
 模型在 fixed 上比 Qwen3.5 低 15–44pp，这份数据的难度对它们可能正合适。这是一个候选方向，还没有测。
 
-**要先测的。** 用 13.2 的口径，在 813 题上评测两个 Qwen3 模型，看全对、有对有错、全错各多少。这一步需要 DeepSeek 费用：Qwen3.5
-跑一轮用户侧用了 33M prompt token；Thinking 对话更长，会更多。
+**已测（2026-10-12）。** 改为在筛选后的 v2（648 题）和 Telecom v1 上评测，结果在 13.5 表 B。Instruct 在 v2 上 54%
+的题有对有错，难度合适。
 
 **训练前要处理的两点：**
 
