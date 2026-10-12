@@ -1084,6 +1084,10 @@ airline_654 一道违规。其余被标出的都是误报：gold 里先订再改
 - **每次修改都要重放验证**：gold 1 分、空轨迹 0 分、去掉任一 gold 写操作得 0
   分。检查本身也要能失败：`check_task_pack.py --default-db` 和单元测试里有意破坏的检查都能变红。
 - **用户模拟器提前 `###STOP###` 不算题错**，除非是场景本身诱发的。
+- **先拿官方题校准"什么算错"**。官方题本来就有的写法（通用模板的 ticket、persona 年龄、工具名的叫法），不能当作题错。Telecom 第一轮因为
+  rubric 没写这一条，97 道 drop 里绝大多数是这类误判（13.4）。写 rubric 前先在官方题里数一数：某个特征官方题里有多少。
+- **rubric 不能跨领域照搬**。Airline 的"gold 没有转人工、用户却要求转人工就丢"搬到 Telecom 就错了：Telecom 的 policy
+  规定问题解决不了时要转。
 
 **步骤与脚本**：
 
@@ -1113,12 +1117,14 @@ airline_654 一道违规。其余被标出的都是误报：gold 里先订再改
 - `_cache/tau2-areal-pack-<日期>-v<N>` 每个版本只读保留，里面带
   `decisions.json`，记着每道题为什么保留、改了什么、为什么丢，供追溯和写 ADR 用。
 - `_cache/tau2-areal-pack-latest` 是指向当前版本的软链（现在指向 v2），脚本默认读它。出新版本只改这个软链。
-- Telecom 单独建 pack，不和 Airline / Retail 混在一起。
+- Telecom 单独建 pack：`_cache/tau2-areal-telecom-pack-<日期>-v<N>`，当前版本的软链是
+  `tau2-areal-telecom-pack-latest`（现在指向 v1）。
 
 **工作目录**
 `/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/audits/areal-tau2-data-screen-20261010/`：`data/`（原始数据），四份
-rubric，`tools/`（上表的 7 个脚本），`shards/`，`out/`（各轮逐题结论和 decisions 文件），`scratch/`（Codex
-的验证文件和 Claude 抽审），`logs/`。旧的启动脚本和中间产物已经删掉。
+rubric 加 Telecom 的 `TELECOM_REVIEW.md`、`TELECOM_REVIEW2.md`，`tools/`（上表的 7 个脚本，加 Telecom
+的 `telecom_mech.py`、`score_telecom.py`、`decisions_telecom.py`），`shards/`，`out/`（各轮逐题结论和
+decisions 文件），`scratch/`（Codex 的验证文件和 Claude 抽审），`logs/`。旧的启动脚本和中间产物已经删掉。
 
 ## 13. step 0 评测
 
@@ -1331,8 +1337,56 @@ pass^k，以及转人工规则清零的条数。
 1. **训练模型的候选是更弱的 Qwen3-4B-2507**（15.7）。它在官方 fixed 上 Airline / Retail 只有 0.225–0.245 /
    0.410–0.654，v2 的难度对它可能正合适。下一步先用本节口径在 v2 上评测 Instruct 和 Thinking
    两个版本，看有对有错的题有多少。DeepSeek 费用参照本节：Qwen3.5 跑 648 题约 26M prompt token，Thinking 的对话更长，会更多。
-1. **Telecom**：Qwen3.5-4B 在官方 Telecom 上 456/456 全对（15.1），AReaL Telecom 预计同样容易，结果见
-   13.4。按上一条，Telecom 只对更弱的模型有用。
+1. **Telecom**：Qwen3.5-4B 在官方 Telecom 上 456/456 全对（15.1），AReaL Telecom 也一样容易（0.993，见
+   13.4）。按上一条，Telecom 只对更弱的模型有用。
+
+### 13.4 AReaL Telecom pack（2026-10-11）
+
+**为什么现在要 Telecom**（用户，2026-10-11）：12.1 没用 Telecom 是因为它对 Qwen3.5-4B 太简单；换更弱的 agent
+模型后，它就有训练价值。筛选按 12.11 的流程走，pack 与 Airline / Retail 分开。
+
+**机械过滤**（`tools/telecom_mech.py`，271 → 261）：
+
+- AReaL 的 Telecom 数据（271 题）用的 DB 和官方 `db.toml` 逐字节相同。题目不与官方 test 集的初始状态重合；有 251 题与官方
+  `telecom_full`（2285 题）同一个初始状态，只是 persona 文本不同。我们评测用的是 base 集，不用 `telecom_full`，所以保留，并在
+  `out/telecom_mech.json` 里标出。
+- **reward 设置有问题**：205 题没写 `reward_basis`，默认是 DB + COMMUNICATE。没有一题有
+  `communicate_info`，所以 reward 实际只比较 agent 侧 DB 和用户设备状态的 hash。官方评测器重放 gold 后不调用
+  `sync_tools`，而真实对话里每次工具调用都会同步，设备状态（比如 `mobile_data_usage_exceeded`）因此永远对不上：其中 136 题的
+  gold 本身就得不了 1 分。官方 Telecom 题都用 ENV_ASSERTION。
+- **处理**：195 题改用 ENV_ASSERTION，改完后 gold 1 分、空轨迹 0 分。剩下 10 题改了也区分不开 gold 和空轨迹，丢掉。为此 pack
+  的 fix 加了 `reward_basis` 这一种改法（`6d477635`）。
+- 代码：`check_task_pack.py` 按 tau2 的 `verify_task` 先应用 `initial_state`，再把每个 gold
+  动作放在对应的一方（agent 或用户）重放（`0634cfe6`）。
+
+**评测 v0**（Qwen3.5-4B，口径同 13.3，代码 `6d477635`，261 题 × 4）：mean@4 0.993，pass^2 0.987，pass^4
+0.973；254 题 4 次全对，7 题有对有错，没有 4 次全错的题。DeepSeek 用户侧用了 157M prompt token，是 v2 的 6
+倍：排障对话轮数多，每轮都带完整历史。
+
+**Codex 审题**：
+
+- **第一轮**（`TELECOM_REVIEW.md`）：keep 79、fix 85、drop 97。我抽查后发现 drop 多半不对，这些"题错"官方题里也普遍存在：
+
+  | 第一轮判为题错的特征                                     |    第一轮引用它的条数 | 官方 2285 题中                             |
+  | -------------------------------------------------------- | --------------------: | ------------------------------------------ |
+  | ticket 写 "No Service"，手机其实有信号                   |            57 道 drop | 132 题同样如此（ticket 只有 5 个通用模板） |
+  | persona 年龄与客户生日对不上                             | 49 道 drop、60 道 fix | 全部用同一个客户，760 题写 41 岁           |
+  | 指令里写 `get_status_bar`（工具名是 `check_status_bar`） |             50 道 fix | 2285 题全都这么写                          |
+  | 有一条断言初始就成立                                     |             4 道 drop | 15 题有                                    |
+
+  另外 6 道 drop 是 rubric 照搬了 Airline 的转人工规则。97 道 drop 里 95 道在 v0 评测中 4 次全对。
+
+- **第二轮**（`TELECOM_REVIEW2.md`，复核第一轮的 182 道 drop 和 fix）：rubric 写明上面这些不算题错。结果没有 drop，132
+  题 keep，50 题 fix。50 道 fix 都是同一个改法：原指令说"愿意充 2 GB"，reward 却要求恰好 2
+  GB，用户若少充也能解决问题，却拿不到分。改成"要恰好 2 GB"。
+
+**v1 pack**：`_cache/tau2-areal-telecom-pack-20261011-v1`，261 题（50 题改了指令，195 题改了
+reward_basis），全部 gold 1 分、空轨迹 0 分。v1 只改了 50 题的一句话，Qwen3.5 在 v0 上已经 0.993，所以没有用 Qwen3.5
+重评。
+
+**对后续实验的含义**：Telecom 对 Qwen3.5-4B 没有训练信号。Qwen3-4B-2507 在官方 Telecom 上约 0.37（15.1），所以
+Telecom 是否有用取决于 Qwen3 在这份数据上的分数，见 13.5。DeepSeek 费用要按 Telecom 的对话长度估算：一个模型跑 261 题 × 4 约
+150M prompt token。
 
 ## 14. 能力缺口与训练期问题的 case study（2026-10-11）
 
