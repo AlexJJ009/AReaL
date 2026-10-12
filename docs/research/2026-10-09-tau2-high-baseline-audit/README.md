@@ -3026,3 +3026,56 @@ token）估算，约 16M prompt 和 2.2M completion token。上一次每步约 3
 
 **启动**：`tau2-critic-20261012-pack/launch_critic.sh <name>`（副本在
 `scripts/critic-pack/`）。结果在 `<name>/tau2-critic-fit-evidence/validation-step-*.json`。
+
+### 16.15 用户模拟器评测总表（2026-10-12 起维护）
+
+**口径。** actor 固定为训练前的 Qwen3.5-4B（non-thinking，policy temperature 0）；fixed v2 变体；官方 test
+60 题（Airline 20、Retail 40）× 4 次；用户 temperature 0；NL judge 固定为 DeepSeek-Flash、temperature
+0（`9e7082dc` 起与用户解耦，见 16.12）。表中 mean@4 等于
+pass^1。脚本：`_artifacts/AReaL/codex-sao-math/user-sim-20261012/test60_table.py`，按 test
+题号从各次运行的 `episodes.jsonl` 里取。
+
+| 用户模拟器             | 档位 | Airline mean@4 | Airline pass^4 | Retail mean@4 | Retail pass^4 | 合计 mean@4 | 合计 pass^4 | 运行（代码）                                       |
+| ---------------------- | ---- | -------------: | -------------: | ------------: | ------------: | ----------: | ----------: | -------------------------------------------------- |
+| DeepSeek-Flash         | 中上 |          0.438 |          0.300 |         0.812 |         0.575 |       0.688 |       0.483 | `step0-base-t0-deepseek-fixed-v2`（`b31e8eb5`）\*  |
+| Doubao 2.1 Turbo       | 中下 |           待跑 |                |               |               |             |             | pueue 476                                          |
+| Qwen3.5-4B（自己部署） | 弱   |          0.450 |          0.250 |         0.669 |         0.400 |       0.596 |       0.350 | `full-qwen35user-v2`（`9e7082dc`，pueue 472）      |
+| GLM 5.3 / Haiku / Luna |      |           待跑 |                |               |               |             |             | endpoint 待接入；Luna 等 DeepSeek 半价窗口结束后跑 |
+
+\* 旧运行里 judge 和用户都是 DeepSeek-Flash，与解耦后的配置等价；同代码重跑见 pueue 473，两次的差异也就是同配置下的运行间噪声。
+
+第 8 节的 Doubao 结果（official 变体、judge 也是 Doubao）按同样的 test 题号算是 Airline 0.787、Retail
+0.588，**不能放进上表**：official 的 Airline 有"只说 Done 也得分"的评分盲区（第 7 节），Airline 因此偏高约 0.35。
+
+**目前的读数。** 用户变弱时掉分集中在 Retail（DeepSeek → Qwen3.5-4B：0.812 → 0.669，19 题变差、8 题变好），Airline
+基本不变（5 题变差、7 题变好），和第 9.1 节 Doubao 的规律一致。原因要靠下面的 case study 确定。
+
+**只报 test，不报 base。** 论文和训练中评测只用 test 60 题，主表就只报 test。base 运行（test + train 99
+题）只在两种情况下需要：看用户模拟器对 train 题的影响（训练时 agent 实际面对的是 train 题和这个模拟器，这决定 16.12
+里"现象要出在训练上"能不能成立），以及给 case study 多一倍样本。所以 API 便宜时跑 base，主表仍取 test 子集。
+
+**已挂的运行（2026-10-12，pueue `gpu8`，代码 `9e7082dc`，启动脚本
+`user-sim-20261012/api-user/launch.sh`）：**
+
+| pueue | 用户     | 题集 | policy T | 用户 T | 目的                                                                     |
+| ----- | -------- | ---- | -------: | -----: | ------------------------------------------------------------------------ |
+| 473   | DeepSeek | base |        0 |      0 | 同代码的 DeepSeek 基线；和旧运行对比得到运行间噪声                       |
+| 474   | DeepSeek | test |        0 |    1.0 | agent 固定、只让用户随机：4 次之间的差异全部来自用户（16.3 问题 A 的量） |
+| 475   | DeepSeek | test |      1.0 |      0 | 用户固定、只让 agent 随机，对照 474；也是训练时的采样设定                |
+| 476   | Doubao   | base |        0 |      0 | 填上表的 Doubao 行（judge 为 DeepSeek）                                  |
+
+DeepSeek 用量大的 473–475 排在前面，赶 DeepSeek 的半价时段。
+
+**Case study 计划。** 对象是上表的三个模拟器（DeepSeek、Doubao 476、Qwen3.5-4B）。actor 固定且 policy
+temperature 0，同一题同一 trial 在不同模拟器下的差异只能来自用户，所以按（题、trial）配对比较，重点看"一个模拟器下成功、另一个下失败"的配对。每条失败
+episode 标一个首要原因：
+
+- **agent 侧**：沿用第 14 节和 15.5 的 M1–M17、T 编码，能细分时再加子类。目的是列出 agent 还能提升的能力。
+- **用户侧（新增 U 编码，标注时可以修订）**：U1 确认的同一句里结束（9.1 的主要机制）；U2 不给或给错必要信息；U3
+  偏离任务说明（换目标、换颜色/型号、编造信息）；U4 无理由要求转人工或放弃；U5 角色错乱（像 agent 一样说话、替 agent 做决定）；U6 过度帮忙，替
+  agent 补上该由 agent 推出的信息（成功被用户"救回来"，16.11 的 $\eta$）；U7 格式或协议错误（漏掉或误用
+  `###STOP###`/`###TRANSFER###`）。
+- **benchmark 侧**：题目本身的问题，沿用第 7 节的分类。
+
+产出是"模拟器 × 失败原因"矩阵，以及每类 2–3 个代表轨迹，作为论文开头那张图的候选（16.12）。U6 要从成功的 episode 里找，只看失败会漏掉。 Doubao
+的 476 跑完后三个模拟器一起标；标注沿用 14 节的做法（Codex 分片标注，我抽查）。
