@@ -90,6 +90,8 @@ from areal.engine.fsdp_utils import (
 )
 from areal.engine.fsdp_utils.checkpoint import DCPState
 from areal.engine.fsdp_utils.critic_freeze import (
+    DENSE_ATTENTION_MODULE_NAMES,
+    HYBRID_ATTENTION_MODULE_NAMES,
     apply_critic_attention_freeze,
     validate_critic_freeze_manifest,
 )
@@ -616,6 +618,11 @@ class FSDPEngine(TrainEngine):
             self.model,
             enabled=self.config.freeze_critic_attention,
             is_critic=self.config.is_critic,
+            attention_modules=(
+                HYBRID_ATTENTION_MODULE_NAMES
+                if is_qwen3_5_model(self.model_config.model_type)
+                else DENSE_ATTENTION_MODULE_NAMES
+            ),
         )
         if self.config.freeze_critic_attention:
             self.logger.info(

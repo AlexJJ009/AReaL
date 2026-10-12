@@ -6,6 +6,7 @@ import torch.nn as nn
 
 from areal.api.cli_args import PPOCriticConfig, TrainEngineConfig
 from areal.engine.fsdp_utils.critic_freeze import (
+    DENSE_ATTENTION_MODULE_NAMES,
     apply_critic_attention_freeze,
     validate_critic_freeze_manifest,
 )
@@ -213,3 +214,29 @@ def test_ppo_critic_config_accepts_fsdp_critic_attention_freeze():
     )
 
     assert config.freeze_critic_attention is True
+
+
+def test_apply_critic_attention_freeze_dense_backbone_freezes_self_attn_only():
+    model = _OnlySelfAttentionModel()
+    manifest = apply_critic_attention_freeze(
+        model,
+        enabled=True,
+        is_critic=True,
+        attention_modules=DENSE_ATTENTION_MODULE_NAMES,
+    )
+
+    assert manifest["frozen_parameters"] == ["self_attn.bias", "self_attn.weight"]
+    assert not model.self_attn.weight.requires_grad
+    assert model.output.weight.requires_grad
+
+
+def test_apply_critic_attention_freeze_dense_rejects_model_without_attention():
+    model = nn.Sequential(nn.Linear(3, 3))
+    with pytest.raises(ValueError, match="requires self_attn"):
+        apply_critic_attention_freeze(
+            model,
+            enabled=True,
+            is_critic=True,
+            attention_modules=DENSE_ATTENTION_MODULE_NAMES,
+        )
+    assert model[0].weight.requires_grad

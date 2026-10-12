@@ -8,7 +8,9 @@ from typing import Any
 import torch.nn as nn
 
 _MANIFEST_VERSION = 1
-_ATTENTION_MODULE_NAMES = ("self_attn", "linear_attn")
+HYBRID_ATTENTION_MODULE_NAMES = ("self_attn", "linear_attn")
+# Dense backbones (e.g. Qwen3) have only full attention.
+DENSE_ATTENTION_MODULE_NAMES = ("self_attn",)
 
 
 def _module_path_matches(name: str, target: str) -> bool:
@@ -38,9 +40,17 @@ def _trainable_numel(model: nn.Module) -> int:
 
 
 def apply_critic_attention_freeze(
-    model: nn.Module, *, enabled: bool, is_critic: bool
+    model: nn.Module,
+    *,
+    enabled: bool,
+    is_critic: bool,
+    attention_modules: tuple[str, ...] = HYBRID_ATTENTION_MODULE_NAMES,
 ) -> dict[str, Any]:
-    """Freeze Qwen3.5 hybrid attention modules for critic training."""
+    """Freeze critic attention modules; every listed module type must be present.
+
+    The default is the Qwen3.5 hybrid layout; pass
+    ``DENSE_ATTENTION_MODULE_NAMES`` for a dense backbone.
+    """
     if not enabled:
         return {
             "version": _MANIFEST_VERSION,
@@ -53,9 +63,7 @@ def apply_critic_attention_freeze(
     if not is_critic:
         raise ValueError("critic attention freeze can only be enabled for critics")
 
-    names_by_type, frozen_names = _matched_parameter_names(
-        model, _ATTENTION_MODULE_NAMES
-    )
+    names_by_type, frozen_names = _matched_parameter_names(model, attention_modules)
     missing = [
         module_name
         for module_name, param_names in names_by_type.items()
@@ -63,7 +71,7 @@ def apply_critic_attention_freeze(
     ]
     if missing:
         raise ValueError(
-            "critic attention freeze requires both self_attn and linear_attn "
+            f"critic attention freeze requires {', '.join(attention_modules)} "
             f"parameters; missing {', '.join(missing)}"
         )
 
