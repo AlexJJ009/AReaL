@@ -10,7 +10,8 @@ from ``inclusionAI/AReaL-tau2-data``. ``<decisions.json>`` maps a task id to
 directory composes it from every review round (``tools/decisions.py``). Only
 ``keep`` tasks enter the pack, with their fixes applied in order. A fix edits the
 user's ``task_instructions`` (``instruction_replace``, then
-``instruction_append``) and may replace the gold actions, exactly as the
+``instruction_append``), may replace the gold actions and may set the
+``reward_basis``, exactly as the
 screening replay (``tools/score.py``) did. The decisions file is copied into the
 pack, so every pack version records how it was made. Only domains with kept
 tasks get a directory, so a Telecom pack can be built on its own.
@@ -77,6 +78,8 @@ def apply_fix(task: dict[str, Any], fix: dict[str, Any]) -> dict[str, Any]:
             }
             for i, action in enumerate(fix["gold_actions"])
         ]
+    if "reward_basis" in fix:
+        task["evaluation_criteria"]["reward_basis"] = fix["reward_basis"]
     return task
 
 
