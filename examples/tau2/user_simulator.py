@@ -4,6 +4,7 @@ import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from tau2.data_model.message import UserMessage
@@ -32,16 +33,25 @@ class RecordingUserSimulator(UserSimulator):
         self.debug_dir = debug_dir
         self.task_id = task_id
         self.domain = domain
+        self.calls: list[dict] = []
 
     def _generate_next_message(
         self, message: ValidUserInputMessage, state: UserState
     ) -> UserMessage:
+        call = {
+            "model": self.llm,
+            "base_url_host": urlsplit(self.llm_args.get("api_base") or "").hostname,
+            "status": "started",
+        }
+        self.calls.append(call)
         try:
             response = super()._generate_next_message(message, state)
         except Exception as exc:
+            call.update(status="error", error_type=type(exc).__name__)
             self._record(state, error=exc)
             raise
         if not (response.has_content() or response.is_tool_call()):
+            call.update(status="error", error_type="EmptyUserResponseError")
             path = self._record(state, response=response)
             # Official `UserMessage.validate()` rejects the same message one step
             # later; failing here keeps the raw provider response with the error.
@@ -49,6 +59,7 @@ class RecordingUserSimulator(UserSimulator):
                 f"Empty user response for {self.domain}/{self.task_id}; "
                 f"evidence: {path}"
             )
+        call["status"] = "completed"
         return response
 
     def _record(

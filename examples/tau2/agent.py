@@ -8,10 +8,13 @@ import asyncio
 import json
 import os
 import time
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from threading import RLock
 from typing import Any, TypeVar
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 import litellm
@@ -35,7 +38,12 @@ from tau2.user.user_simulator_base import HalfDuplexUser
 from examples.tau2 import benchmark_variant, task_pack
 from examples.tau2.contracts import bind_policy_request, strip_policy_reasoning
 from examples.tau2.user_simulator import RecordingUserSimulator
-from examples.tau2.utils import Tau2EnvConfig, Tau2RunInfo, trajectory_record_dir
+from examples.tau2.utils import (
+    Tau2EnvConfig,
+    Tau2RunInfo,
+    nl_judge_metadata,
+    trajectory_record_dir,
+)
 
 from areal.experimental.openai.types import (
     CONTEXT_LENGTH_EXCEEDED_MARKER,
@@ -46,6 +54,8 @@ from areal.utils import logging
 
 logger = logging.getLogger("Tau2Agent")
 _T = TypeVar("_T")
+_NL_JUDGE_LOCK = RLock()
+_WARNED_USER_JUDGE_FALLBACK = False
 
 
 class Tau2InfrastructureError(RuntimeError):
@@ -259,6 +269,19 @@ class Tau2Runner:
         self.agent_base_url = agent_base_url
         self.agent_api_key = agent_api_key
         self.user_api_key = user_api_key
+        self.nl_judge_api_key = None
+        if econfig.nl_judge_llm:
+            if not econfig.nl_judge_llm_base_url:
+                raise ValueError("nl_judge_llm_base_url is required for NL evaluation")
+            self.nl_judge_api_key = os.getenv(econfig.nl_judge_llm_api_key_env)
+            if not self.nl_judge_api_key:
+                raise ValueError(
+                    "Missing NL judge credential environment variable "
+                    f"{econfig.nl_judge_llm_api_key_env}"
+                )
+        elif econfig.solo_mode and not self.user_api_key:
+            # Solo has no simulator, but legacy judge routing still uses its key.
+            self.user_api_key = os.getenv(econfig.user_llm_api_key_env)
         self.timeout = timeout
         # Evaluation reproduces `tau2 run` outcomes; training keeps ADR 0002/0007.
         self.evaluation = evaluation
@@ -269,6 +292,8 @@ class Tau2Runner:
         self._env_kwargs = {} if task_db is None else {"task_db": task_db}
         # Kept on the runner so a failed episode's partial trajectory survives.
         self.messages: list[Message] = []
+        self.nl_judge_calls: list[dict[str, Any]] = []
+        self.user_llm_requests: list[dict[str, Any]] = []
 
     def _get_environment(self) -> Environment:
         benchmark_variant.activate(self.econfig.benchmark_variant, [self.domain])
@@ -308,14 +333,84 @@ class Tau2Runner:
         return args
 
     def _bind_nl_assertion_evaluator(self) -> None:
-        """Use the qualified DeepSeek route for official NL-assertion checks."""
+        """Bind the independent judge, or warn once about the legacy user route."""
 
-        if not self.econfig.user_llm:
-            raise ValueError("User simulator model is required for NL evaluation")
-        tau2_nl_evaluator.DEFAULT_LLM_NL_ASSERTIONS = _litellm_user_model(
-            self.econfig.user_llm
-        )
-        tau2_nl_evaluator.DEFAULT_LLM_NL_ASSERTIONS_ARGS = self._user_llm_args()
+        global _WARNED_USER_JUDGE_FALLBACK
+        if self.econfig.nl_judge_llm:
+            model = self.econfig.nl_judge_llm
+            args = dict(self.econfig.nl_judge_llm_args or {})
+            args.setdefault("temperature", 0.0)
+            args.setdefault("top_p", 1.0)
+            args.update(
+                api_base=self.econfig.nl_judge_llm_base_url,
+                api_key=self.nl_judge_api_key,
+                timeout=min(self.timeout, 120.0),
+                num_retries=self.econfig.nl_judge_llm_num_retries,
+            )
+        else:
+            if not _WARNED_USER_JUDGE_FALLBACK:
+                logger.warning(
+                    "nl_judge_llm is unset: NL-assertion judge falls back to the "
+                    "user simulator model, endpoint, and credential. Set "
+                    "nl_judge_llm fields to keep the judge fixed across user sweeps."
+                )
+                _WARNED_USER_JUDGE_FALLBACK = True
+            model = self.econfig.user_llm
+            if not model:
+                raise ValueError("User simulator model is required for NL evaluation")
+            args = self._user_llm_args()
+        tau2_nl_evaluator.DEFAULT_LLM_NL_ASSERTIONS = _litellm_user_model(model)
+        tau2_nl_evaluator.DEFAULT_LLM_NL_ASSERTIONS_ARGS = args
+
+    @contextmanager
+    def _nl_assertion_evaluation(self) -> Iterator[None]:
+        """Scope tau2's process globals and attribute actual judge invocations.
+
+        Count logical generate calls, including failures; provider transport
+        retries stay within that call and use the same route. Serialize scoring
+        so two runner threads cannot exchange routes or call records.
+        """
+
+        with _NL_JUDGE_LOCK:
+            model = tau2_nl_evaluator.DEFAULT_LLM_NL_ASSERTIONS
+            args = tau2_nl_evaluator.DEFAULT_LLM_NL_ASSERTIONS_ARGS
+            generate = tau2_nl_evaluator.generate
+
+            def recorded_generate(*positional, **kwargs):
+                call = {
+                    "model": kwargs["model"],
+                    "base_url_host": urlsplit(kwargs.get("api_base") or "").hostname,
+                    "temperature": kwargs.get("temperature"),
+                    "num_retries": kwargs.get("num_retries"),
+                    "status": "started",
+                }
+                self.nl_judge_calls.append(call)
+                try:
+                    response = generate(*positional, **kwargs)
+                except BaseException as exc:
+                    call.update(status="error", error_type=type(exc).__name__)
+                    raise
+                call["status"] = "completed"
+                return response
+
+            try:
+                self._bind_nl_assertion_evaluator()
+                tau2_nl_evaluator.generate = recorded_generate
+                yield
+            finally:
+                tau2_nl_evaluator.DEFAULT_LLM_NL_ASSERTIONS = model
+                tau2_nl_evaluator.DEFAULT_LLM_NL_ASSERTIONS_ARGS = args
+                tau2_nl_evaluator.generate = generate
+
+    def llm_route_evidence(self) -> dict[str, Any]:
+        """Per-attempt routes and calls, retained even if evaluation fails."""
+
+        return {
+            "nl_judge": nl_judge_metadata(self.econfig),
+            "nl_judge_llm_calls": len(self.nl_judge_calls),
+            "nl_judge_calls": self.nl_judge_calls,
+            "user_llm_requests": self.user_llm_requests,
+        }
 
     def _get_agent_and_user(self, task: Task, env: Environment, run_info: Tau2RunInfo):
         agent_policy_doc = env.get_policy()
@@ -356,6 +451,7 @@ class Tau2Runner:
                 llm=_litellm_user_model(self.econfig.user_llm),
                 llm_args=self._user_llm_args(),
             )
+            self.user_llm_requests = user.calls
         return agent, user
 
     def _get_orchestrator(
@@ -453,15 +549,15 @@ class Tau2Runner:
             return run_info
 
         try:
-            self._bind_nl_assertion_evaluator()
-            reward_info = evaluate_simulation(
-                domain=domain,
-                task=task,
-                simulation=simulation,
-                evaluation_type=EvaluationType.ALL,
-                solo_mode=solo_mode,
-                env_kwargs=dict(self._env_kwargs),
-            )
+            with self._nl_assertion_evaluation():
+                reward_info = evaluate_simulation(
+                    domain=domain,
+                    task=task,
+                    simulation=simulation,
+                    evaluation_type=EvaluationType.ALL,
+                    solo_mode=solo_mode,
+                    env_kwargs=dict(self._env_kwargs),
+                )
             if self.econfig.benchmark_variant == "fixed":
                 reward_info = benchmark_variant.apply_transfer_rule(
                     task, simulation.messages, reward_info, domain
@@ -702,6 +798,7 @@ class Tau2AgentWorkflow:
                         **record,
                         "recorded_at": time.time(),
                         "status": "error",
+                        **runner.llm_route_evidence(),
                         "error_type": type(exc).__name__,
                         "error": str(exc),
                         "policy_turns": policy_turns(runner.messages),
@@ -718,6 +815,7 @@ class Tau2AgentWorkflow:
                     **record,
                     "recorded_at": time.time(),
                     "status": "completed",
+                    **runner.llm_route_evidence(),
                     "stop_reason": run_info.stop_reason,
                     "official_score": float(run_info.reward),
                     "task_budget_failure": run_info.error_type == "task_budget",
@@ -740,6 +838,7 @@ class Tau2AgentWorkflow:
                     "user_llm": econfig.user_llm,
                     "official_score": float(run_info.reward),
                     **user_llm_usage(run_info.messages),
+                    **runner.llm_route_evidence(),
                     "stop_reason": run_info.stop_reason,
                 },
             )
@@ -761,5 +860,6 @@ class Tau2AgentWorkflow:
                 "official_score": float(run_info.reward),
                 "reward_info": reward_info,
                 "failure_class": run_info.error_type,
+                **runner.llm_route_evidence(),
             },
         )

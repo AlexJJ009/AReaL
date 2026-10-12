@@ -31,7 +31,7 @@ from examples.tau2.official_runner import (
     official_metrics,
 )
 from examples.tau2.train import get_tau2_dataset, validate_tau2_recipe
-from examples.tau2.utils import Tau2PPOConfig
+from examples.tau2.utils import Tau2PPOConfig, nl_judge_metadata
 
 from areal.api.alloc_mode import ModelAllocation
 from areal.api.cli_args import SGLangConfig, load_expr_config
@@ -501,6 +501,7 @@ def run(argv: list[str]) -> dict[str, Any]:
         "user_llm": config.econfig.user_llm,
         "user_llm_base_url": config.econfig.user_llm_base_url,
         "user_llm_args": dict(config.econfig.user_llm_args or {}),
+        "nl_judge": nl_judge_metadata(config.econfig),
     }
     write_json(output_root / "manifest.json", manifest)
     write_json(

@@ -4,6 +4,7 @@ import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import tau2.utils.llm_utils
 import yaml
@@ -83,6 +84,24 @@ class Tau2EnvConfig:
         default=3,
         metadata={"help": "Maximum retries for one user-simulator request."},
     )
+    nl_judge_llm: str | None = field(
+        default=None,
+        metadata={"help": "NL-assertion judge model; unset reuses the user LLM."},
+    )
+    nl_judge_llm_base_url: str | None = field(
+        default=None, metadata={"help": "Base URL of the independent NL judge."}
+    )
+    nl_judge_llm_api_key_env: str = field(
+        default="DEEPSEEK_API_KEY",
+        metadata={"help": "Environment variable containing the NL judge API key."},
+    )
+    nl_judge_llm_args: dict | None = field(
+        default=None,
+        metadata={"help": "NL judge arguments; temperature defaults to zero."},
+    )
+    nl_judge_llm_num_retries: int = field(
+        default=3, metadata={"help": "Maximum retries for one NL judge request."}
+    )
     benchmark_variant: str = field(
         default="official",
         metadata={
@@ -114,6 +133,27 @@ class Tau2EnvConfig:
             raise ValueError(f"Unknown benchmark_variant: {self.benchmark_variant}")
         if self.user_llm_num_retries < 0:
             raise ValueError("user_llm_num_retries must be non-negative")
+        if self.nl_judge_llm_api_key_env in _POLICY_SESSION_KEY_ENV_NAMES:
+            raise ValueError(
+                "nl_judge_llm_api_key_env must not alias a policy proxy session key"
+            )
+        if self.nl_judge_llm_num_retries < 0:
+            raise ValueError("nl_judge_llm_num_retries must be non-negative")
+
+
+def nl_judge_metadata(econfig: Tau2EnvConfig) -> dict:
+    """Effective judge route for manifests and episodes, without credentials."""
+
+    configured = bool(econfig.nl_judge_llm)
+    model = econfig.nl_judge_llm if configured else econfig.user_llm
+    base_url = (
+        econfig.nl_judge_llm_base_url if configured else econfig.user_llm_base_url
+    )
+    return {
+        "model": model if not model or "/" in model else f"openai/{model}",
+        "base_url_host": urlsplit(base_url or "").hostname,
+        "source": "configured" if configured else "user_fallback",
+    }
 
 
 @dataclass

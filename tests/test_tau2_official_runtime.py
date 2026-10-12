@@ -840,6 +840,18 @@ def _workflow_with_fake_runner(monkeypatch, tmp_path, run):
         def __init__(self, **kwargs):
             self.messages = []
 
+        def llm_route_evidence(self):
+            return {
+                "nl_judge": {
+                    "model": "openai/test-judge",
+                    "base_url_host": "judge.invalid",
+                },
+                "nl_judge_llm_calls": 1,
+                "nl_judge_calls": [
+                    {"model": "openai/test-judge", "status": "completed"}
+                ],
+            }
+
         async def run(self, task):
             return await run(self, task)
 
@@ -897,6 +909,9 @@ def test_workflow_records_policy_free_episode_trajectory(monkeypatch, tmp_path):
     assert record["status"] == "completed"
     assert record["policy_turns"] == 0
     assert record["official_score"] == 0.0
+    assert record["nl_judge_llm_calls"] == 1
+    assert record["nl_judge"]["base_url_host"] == "judge.invalid"
+    assert result.metadata["nl_judge_calls"] == record["nl_judge_calls"]
     assert record["messages"][-1]["content"] == f"bye {STOP}"
     # The fixed greeting is not a policy call; a generated reply is.
     assert isinstance(DEFAULT_FIRST_AGENT_MESSAGE, AssistantMessage)
@@ -959,6 +974,8 @@ def test_workflow_records_failed_attempt_with_partial_trajectory(monkeypatch, tm
     (record,) = _read_records(tmp_path, "retail:7:trial1")
     assert record["status"] == "error"
     assert record["error_type"] == "Tau2InfrastructureError"
+    assert record["nl_judge_llm_calls"] == 1
+    assert record["nl_judge_calls"][0]["model"] == "openai/test-judge"
     assert record["policy_turns"] == 1
     assert [m["content"] for m in record["messages"]] == ["hello", "hi"]
     raw = (next((tmp_path / "retail:7:trial1").glob("*.json"))).read_text()
