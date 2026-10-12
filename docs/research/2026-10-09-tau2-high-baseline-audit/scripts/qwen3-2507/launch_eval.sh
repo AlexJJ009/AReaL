@@ -3,10 +3,13 @@
 # Usage: launch_eval.sh NAME MODEL_DIR GPUS VARIANT DOMAINS THINKING PARSER
 #   DOMAINS: comma list (airline,retail[,telecom]); THINKING: 0|1; PARSER: qwen25|qwen3_coder
 # Runs from a worktree pinned at a6abe781 so edits in the main checkout cannot reach workers.
+# Optional env: TAU2_SRC = another pinned worktree (task packs need >= 1b17bc3f);
+# TASK_PACK = evaluate a task pack (README 12.11) instead of the base set; a *-latest
+# symlink is resolved and recorded in pack.txt.
 set -euo pipefail
 NAME=$1 MODEL=$2 GPUS=$3 VARIANT=$4 DOMAINS=$5 THINKING=$6 PARSER=$7
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-SRC="$ROOT/src-a6abe781"
+SRC="${TAU2_SRC:-$ROOT/src-a6abe781}"
 OUT="$ROOT/$NAME"
 test ! -e "$OUT/summary.json" || { echo "refusing to overwrite $OUT"; exit 2; }
 mkdir -p "$OUT"
@@ -41,11 +44,12 @@ done
 git rev-parse HEAD > "$OUT/git-head.txt"
 git status --short > "$OUT/git-status.txt"
 echo "$@" > "$OUT/args.txt"
+if [ -n "${TASK_PACK:-}" ]; then TASKS=(--task-pack "$(readlink -f "$TASK_PACK")"); readlink -f "$TASK_PACK" > "$OUT/pack.txt"; else TASKS=(--task-set base); fi
 set +e
 .venv/bin/python scripts/tau2/evaluate.py \
   --config examples/tau2/config_grpo.yaml \
   --model-path "$MODEL" \
-  --output-root "$OUT" --task-set base --repeats ${REPEATS:-4} --temperature 0 ${SMOKE_TASKS:+--tasks "$SMOKE_TASKS"} \
+  --output-root "$OUT" "${TASKS[@]}" --repeats ${REPEATS:-4} --temperature 0 ${SMOKE_TASKS:+--tasks "$SMOKE_TASKS"} \
   econfig.benchmark_variant=$VARIANT \
   "domains=[$DOMAINS]" econfig.domain=$EDOMAIN \
   econfig.enable_thinking=$THINK \
