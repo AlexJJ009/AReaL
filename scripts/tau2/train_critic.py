@@ -11,15 +11,17 @@ import hashlib
 import json
 import math
 import os
+import random
 import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 import torch
+from datasets import Dataset
 from omegaconf import OmegaConf
 
-from examples.tau2 import benchmark_variant
+from examples.tau2 import benchmark_variant, task_pack
 from examples.tau2.contracts import (
     MAX_ASSISTANT_TOKENS,
     OFFICIAL_SPLIT_SNAPSHOTS,
@@ -433,6 +435,31 @@ def resolve_training_snapshots(config: Tau2PPOConfig, *, snapshot_resolver=None)
     return actor_snapshot
 
 
+def _task_pack_rows(
+    pack: str, domains: tuple[str, ...], *, provenance: dict[str, Any], seed: int
+) -> list[dict[str, Any]]:
+    """One train row per pack task, shuffled with the seed, domains interleaved."""
+
+    pack = str(Path(pack).absolute())
+    rows = []
+    for domain in domains:
+        if domain not in task_pack.domains(pack):
+            raise ValueError(f"Task pack {pack} has no {domain} tasks")
+        rows.extend(
+            {
+                "domain": domain,
+                "task_id": task_id,
+                "split": "train",
+                "source_id": f"pack:{domain}:{task_id}",
+                "task_pack": pack,
+                **provenance,
+            }
+            for task_id in task_pack.task_ids(pack, domain)
+        )
+    random.Random(f"{seed}:task_pack").shuffle(rows)
+    return rows
+
+
 def build_tau2_critic_datasets(
     config: Tau2PPOConfig,
 ) -> tuple[Any, Any, dict[str, Any]]:
@@ -453,6 +480,18 @@ def build_tau2_critic_datasets(
     )
     train_dataset = get_tau2_dataset(**dataset_kwargs, split="train")
     validation_dataset = get_tau2_dataset(**dataset_kwargs, split=validation_split)
+    pack_rows = 0
+    if config.critic_task_pack is not None:
+        if config.econfig.benchmark_variant != "fixed":
+            raise ValueError(
+                "Task pack critic training requires benchmark_variant=fixed"
+            )
+        rows = _task_pack_rows(
+            config.critic_task_pack, domains, provenance=provenance, seed=config.seed
+        )
+        pack_rows = len(rows)
+        official = [{**row, "task_pack": None} for row in train_dataset]
+        train_dataset = Dataset.from_list(rows + official)
     train_ids = {(str(row["domain"]), str(row["task_id"])) for row in train_dataset}
     validation_ids = {
         (str(row["domain"]), str(row["task_id"])) for row in validation_dataset
@@ -461,7 +500,20 @@ def build_tau2_critic_datasets(
         raise ValueError("Tau2 critic train/validation task split is not disjoint")
     summary = {
         "status": "checked",
-        "source": "official_tau2_train_tasks",
+        "source": (
+            "official_tau2_train_tasks"
+            if config.critic_task_pack is None
+            else "task_pack_then_official_tau2_train_tasks"
+        ),
+        "task_pack": (
+            None
+            if config.critic_task_pack is None
+            else {
+                "path": config.critic_task_pack,
+                "name": task_pack.load_manifest(config.critic_task_pack)["name"],
+                "train_rows": pack_rows,
+            }
+        ),
         "experiment_mode": config.experiment_mode,
         "validation_split": validation_split,
         "split_seed": config.seed,

@@ -177,6 +177,9 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
     critic_dev_fraction: float = 0.2
     critic_tasks_per_domain: int | None = None
     critic_rollouts_per_task: int = 1
+    # Critic fitting only: a task pack (examples/tau2/task_pack.py) whose tasks
+    # are trained before the official train split in every epoch.
+    critic_task_pack: str | None = None
     # Episode attempts after the first, as `tau2 run --max-retries` (default 3).
     infra_retries: int = 3
     # A group that lost members after retries trains on the survivors when at

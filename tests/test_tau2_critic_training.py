@@ -1069,3 +1069,63 @@ def test_strict_train_batch_replays_a_rejected_episode_once(failures, budget, ou
     assert [g["task_id"] for g in groups] == outcome
     assert trainer.rollout.attempts["b"] == 2
     assert len(trainer._tau2_skipped.get(0, [])) == 2 - len(outcome)
+
+
+def test_task_pack_rows_precede_official_train_rows(monkeypatch, tmp_path):
+    _patched_tau2_datasets(monkeypatch)
+    monkeypatch.setenv("TAU2_RUN_ROOT", str(tmp_path / "run"))
+    pack = str(tmp_path / "pack")
+    pack_ids = {"airline": ["a1", "a2", "a3"], "retail": ["r1", "r2"]}
+    monkeypatch.setattr(train_critic.task_pack, "domains", lambda p: sorted(pack_ids))
+    monkeypatch.setattr(
+        train_critic.task_pack, "task_ids", lambda p, domain: pack_ids[domain]
+    )
+    monkeypatch.setattr(
+        train_critic.task_pack, "load_manifest", lambda p: {"name": "fake-pack"}
+    )
+    # The fixed task files are checked against TAU2_DATA_DIR elsewhere.
+    monkeypatch.setattr(
+        train_critic.benchmark_variant, "validate_task_files", lambda *a: None
+    )
+    config, _ = load_expr_config(
+        [
+            "--config",
+            "examples/tau2/config_critic_production.yaml",
+            f"critic_task_pack={pack}",
+            "econfig.benchmark_variant=fixed",
+        ],
+        train_critic.Tau2PPOConfig,
+    )
+
+    train_dataset, validation_dataset, summary = (
+        train_critic.build_tau2_critic_datasets(config)
+    )
+
+    rows = list(train_dataset)
+    assert len(rows) == 5 + 104
+    assert all(row["task_pack"] == pack for row in rows[:5])
+    assert all(row["task_pack"] is None for row in rows[5:])
+    assert sorted(row["task_id"] for row in rows[:5]) == ["a1", "a2", "a3", "r1", "r2"]
+    assert {row["domain"] for row in rows[:5]} == {"airline", "retail"}
+    assert len(validation_dataset) == 60
+    assert summary["source"] == "task_pack_then_official_tau2_train_tasks"
+    assert summary["task_pack"]["train_rows"] == 5
+    assert summary["train_rows"] == 109
+
+    train_critic.fill_derived_train_steps(config, train_rows=len(train_dataset))
+    assert config.total_train_steps == 2 * 7
+
+
+def test_task_pack_requires_fixed_variant(monkeypatch, tmp_path):
+    _patched_tau2_datasets(monkeypatch)
+    monkeypatch.setenv("TAU2_RUN_ROOT", str(tmp_path / "run"))
+    config, _ = load_expr_config(
+        [
+            "--config",
+            "examples/tau2/config_critic_production.yaml",
+            f"critic_task_pack={tmp_path / 'pack'}",
+        ],
+        train_critic.Tau2PPOConfig,
+    )
+    with pytest.raises(ValueError, match="benchmark_variant=fixed"):
+        train_critic.build_tau2_critic_datasets(config)
