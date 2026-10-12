@@ -12,7 +12,8 @@ directory composes it from every review round (``tools/decisions.py``). Only
 user's ``task_instructions`` (``instruction_replace``, then
 ``instruction_append``) and may replace the gold actions, exactly as the
 screening replay (``tools/score.py``) did. The decisions file is copied into the
-pack, so every pack version records how it was made.
+pack, so every pack version records how it was made. Only domains with kept
+tasks get a directory, so a Telecom pack can be built on its own.
 
 The source files are parsed as data, never executed.
 """
@@ -27,7 +28,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-DOMAINS = ("airline", "retail")
+DOMAINS = ("airline", "retail", "telecom")
 
 
 def _parse(value: Any) -> Any:
@@ -37,6 +38,23 @@ def _parse(value: Any) -> Any:
         return json.loads(value)
     except json.JSONDecodeError:
         return ast.literal_eval(value)
+
+
+def task_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    """The τ² task of one ``tau2_rl_train.jsonl`` row, before any fix."""
+
+    task = {
+        "id": row["id"],
+        "description": _parse(row.get("description")),
+        "user_scenario": _parse(row["user_scenario"]),
+        "evaluation_criteria": _parse(row["evaluation_criteria"]),
+    }
+    # Telecom rows also set up the user's device and carry a plain-text ticket.
+    if "initial_state" in row:
+        task["initial_state"] = _parse(row["initial_state"])
+    if "ticket" in row:
+        task["ticket"] = row["ticket"]
+    return task
 
 
 def apply_fix(task: dict[str, Any], fix: dict[str, Any]) -> dict[str, Any]:
@@ -53,7 +71,7 @@ def apply_fix(task: dict[str, Any], fix: dict[str, Any]) -> dict[str, Any]:
         task["evaluation_criteria"]["actions"] = [
             {
                 "action_id": f"{task['id']}_fix_{i}",
-                "requestor": "assistant",
+                "requestor": action.get("requestor", "assistant"),
                 "name": action["name"],
                 "arguments": action["arguments"],
             }
@@ -83,12 +101,7 @@ def build(source: Path, decisions_path: Path, out: Path) -> dict[str, Any]:
             continue
         domain = tid.split("_")[0]
         row = raw[tid]
-        task = {
-            "id": tid,
-            "description": _parse(row.get("description")),
-            "user_scenario": _parse(row["user_scenario"]),
-            "evaluation_criteria": _parse(row["evaluation_criteria"]),
-        }
+        task = task_from_row(row)
         for fix in decision["fixes"]:
             task = apply_fix(task, fix)
         Task.model_validate(task)
@@ -96,7 +109,8 @@ def build(source: Path, decisions_path: Path, out: Path) -> dict[str, Any]:
         task_db[domain][tid] = row["db_path"]
         splits[f"{domain}:{tid}"] = "fix" if decision["fixes"] else "keep"
     files = {}
-    for domain in DOMAINS:
+    present = [d for d in DOMAINS if tasks[d]]
+    for domain in present:
         (out / domain).mkdir(parents=True)
         for name, payload in (
             ("tasks.json", tasks[domain]),
@@ -119,7 +133,7 @@ def build(source: Path, decisions_path: Path, out: Path) -> dict[str, Any]:
     manifest = {
         "name": out.name,
         "source": "inclusionAI/AReaL-tau2-data tau2_rl_train.jsonl, screened",
-        "counts": {d: len(tasks[d]) for d in DOMAINS},
+        "counts": {d: len(tasks[d]) for d in present},
         "task_splits": splits,
         "files": files,
     }

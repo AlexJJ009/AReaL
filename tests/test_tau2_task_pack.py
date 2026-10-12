@@ -138,3 +138,67 @@ def test_pack_rows_carry_the_pack_and_the_screening_split(tmp_path):
     assert [r["source_id"] for r in rows] == [f"retail:t1:trial{i}" for i in range(4)]
     assert {r["split"] for r in rows} == {"fix"}
     assert {r["task_pack"] for r in rows} == {str(tmp_path.absolute())}
+
+
+def _write_telecom_pack(root):
+    """A one-task Telecom pack whose customer exists only in the pack's TOML DB.
+
+    The task is an official one with a user-side and an assistant-side gold
+    action: the user turns mobile data on, the agent refuels data.
+    """
+
+    from tau2.domains.telecom.utils import TELECOM_DB_PATH
+    from tau2.registry import registry
+
+    name = "[mobile_data_issue]data_mode_off|data_usage_exceeded[PERSONA:None]"
+    official = next(
+        t for t in registry.get_tasks_loader("telecom")("base") if t.id == name
+    )
+    task = json.loads(
+        json.dumps(official.model_dump(mode="json")).replace("C1001", "C_PACK")
+    )
+    task["id"] = "t1"
+    db = open(TELECOM_DB_PATH, encoding="utf-8").read().replace("C1001", "C_PACK")
+    (root / "telecom").mkdir(parents=True)
+    (root / "db.toml").write_text(db)
+    (root / "telecom" / "tasks.json").write_text(json.dumps([task]))
+    (root / "telecom" / "task_db.json").write_text(json.dumps({"t1": "db.toml"}))
+    files = {
+        rel: hashlib.sha256((root / rel).read_bytes()).hexdigest()
+        for rel in ("db.toml", "telecom/tasks.json", "telecom/task_db.json")
+    }
+    (root / "manifest.json").write_text(json.dumps({"name": "p", "files": files}))
+
+
+def test_telecom_gold_replays_user_actions_on_the_task_database(tmp_path):
+    from tau2.registry import registry
+
+    from scripts.tau2 import check_task_pack
+
+    _write_telecom_pack(tmp_path)
+    pack = str(tmp_path)
+    task_pack.install("telecom")
+    task = task_pack.get_task(pack, "telecom", "t1")
+    path = task_pack.task_db(pack, "telecom", "t1")
+    gold = task.evaluation_criteria.actions
+    assert {a.requestor for a in gold} == {"user", "assistant"}
+
+    env = registry.get_env_constructor("telecom")(task_db=path)
+    assert [c.customer_id for c in env.tools.db.customers][0] == "C_PACK"
+
+    def reward(actions):
+        messages, errors = check_task_pack.replay("telecom", task, actions, path)
+        assert errors == 0
+        return check_task_pack.evaluate("telecom", task, messages, path).reward
+
+    assert reward(gold) == 1.0
+    assert reward([]) == 0.0
+    # The user's own fix is part of the gold: without it the task stays broken.
+    assert reward([a for a in gold if a.requestor == "assistant"]) == 0.0
+    # The initial state names the pack-only customer, so the default database
+    # cannot even set the task up.
+    state = task.initial_state
+    with pytest.raises(ValueError, match="C_PACK not found"):
+        registry.get_env_constructor("telecom")().set_state(
+            state.initialization_data, state.initialization_actions, []
+        )

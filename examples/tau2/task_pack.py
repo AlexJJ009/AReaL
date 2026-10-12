@@ -14,7 +14,9 @@ Every file is checked against the manifest when the pack is first loaded. The
 agent and the evaluator both build environments through the registry, so
 :func:`install` wraps each domain's constructor to accept ``task_db``: every
 call gets a fresh copy of that database, and the evaluator's gold replay and
-the episode never share state.
+the episode never share state. A Telecom task's database is the agent-side
+``TelecomDB`` (TOML, as tau2 ships it); the user's device database stays the
+domain default, and the task's ``initial_state`` sets it up.
 """
 
 from __future__ import annotations
@@ -89,16 +91,22 @@ def task_db(pack: str, domain: str, task_id: str) -> str:
 
 @functools.cache
 def _raw_db(path: str) -> dict[str, Any]:
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    if path.endswith(".json"):
+        return json.loads(Path(path).read_text(encoding="utf-8"))
+    from tau2.utils import load_file
+
+    # Telecom databases are TOML; tau2's own loader parses them.
+    return load_file(path)
 
 
 def _fresh_db(domain: str, path: str) -> Any:
     from tau2.domains.airline.data_model import FlightDB
     from tau2.domains.retail.data_model import RetailDB
+    from tau2.domains.telecom.data_model import TelecomDB
 
     # Validation builds new objects, so each environment gets its own state;
     # it is several times faster than deep-copying a parsed database.
-    model = {"airline": FlightDB, "retail": RetailDB}[domain]
+    model = {"airline": FlightDB, "retail": RetailDB, "telecom": TelecomDB}[domain]
     return model.model_validate(_raw_db(path))
 
 

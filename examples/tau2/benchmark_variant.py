@@ -13,6 +13,9 @@ leaderboard. ``fixed`` applies open upstream fixes that are not merged yet:
   allowed on tasks with gold writes, where it follows the finished task;
 - training: train tasks that duplicate a test task are left out.
 
+Telecom tasks are not patched: the fixed data directory links the official
+Telecom ``tasks.json``, and only the transfer rule applies.
+
 The variant is a property of the process: the data directory is fixed when
 ``tau2`` is imported, and the environment patch is global. Each variant checks
 that the loaded ``tasks.json`` files are the ones it was built from.
@@ -44,6 +47,8 @@ TASK_FILE_SHA256: dict[str, dict[str, str]] = {
     "fixed": {
         "airline": "ec04aec07306c8fe640b40905e1e7b9b7c88e55132cdcf9cc5448daa1798c5a4",
         "retail": "03a79539bff56afefcad29eece5bcf55884a3bda67bd60b862134e64ea4c005d",
+        # Unpatched, linked to the official file.
+        "telecom": "37e562e1ae3242577407e1303b1548bc64e7ea68e37d36173e6747990ceaf8a4",
     },
 }
 
@@ -157,6 +162,8 @@ def build_fixed_data(official_dir: str | Path, out_dir: str | Path) -> dict[str,
         tasks = apply_task_fixes(json.loads(source.read_text()), domain, fixes)
         target.write_text(json.dumps(tasks, indent=4, ensure_ascii=False) + "\n")
         digests[domain] = file_sha256(target)
+    for domain in TASK_FILE_SHA256["fixed"].keys() - set(FIXED_DOMAINS):
+        digests[domain] = file_sha256(out_dir / "tau2/domains" / domain / "tasks.json")
     return digests
 
 
