@@ -5,7 +5,7 @@
 leaderboard. ``fixed`` applies open upstream fixes that are not merged yet:
 
 - data (``benchmark_fixes.json``): PR #411 reward bases, PR #571 tasks 64/105,
-  then our own Retail patches;
+  then our own Airline and Retail patches;
 - environment: PR #322, ``modify_pending_order_items`` prices every item from
   its own new variant instead of the last one in the loop;
 - scoring: an episode scores 0 when it transfers to a human agent and the gold
@@ -45,8 +45,8 @@ TASK_FILE_SHA256: dict[str, dict[str, str]] = {
         "telecom": "37e562e1ae3242577407e1303b1548bc64e7ea68e37d36173e6747990ceaf8a4",
     },
     "fixed": {
-        "airline": "ec04aec07306c8fe640b40905e1e7b9b7c88e55132cdcf9cc5448daa1798c5a4",
-        "retail": "03a79539bff56afefcad29eece5bcf55884a3bda67bd60b862134e64ea4c005d",
+        "airline": "84d1fdfa52e03cf6d3bb992ea5ba804e2dcde0ab60626932b19e45e558f85f5c",
+        "retail": "d197d2e5f283f977c2059b8219d491b03a22b952784f6e6aa1b604a3bf78f69a",
         # Unpatched, linked to the official file.
         "telecom": "37e562e1ae3242577407e1303b1548bc64e7ea68e37d36173e6747990ceaf8a4",
     },

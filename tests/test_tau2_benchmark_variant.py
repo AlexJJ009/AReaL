@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -131,7 +132,10 @@ def test_patch_ops_edit_a_copy_and_reject_stale_targets():
 def test_committed_fixes_match_the_pinned_fixed_digests(tmp_path):
     from tau2.utils.utils import DATA_DIR
 
-    digests = benchmark_variant.build_fixed_data(DATA_DIR, tmp_path / "data")
+    # Fixed data links its database to the pinned official tree. This also works
+    # when the suite runs with TAU2_DATA_DIR pointing at the fixed variant.
+    official_dir = (Path(DATA_DIR) / "tau2/domains/retail/db.json").resolve().parents[3]
+    digests = benchmark_variant.build_fixed_data(official_dir, tmp_path / "data")
 
     assert digests == benchmark_variant.TASK_FILE_SHA256["fixed"]
     db = tmp_path / "data/tau2/domains/retail/db.json"
@@ -142,7 +146,16 @@ def test_committed_fixes_match_the_pinned_fixed_digests(tmp_path):
         "retail": 105,
     }
     assert sorted(fixes["domains"]["retail"]["replace_tasks"]) == ["105", "64"]
-    assert len(fixes["domains"]["retail"]["patches"]) == 20
+    assert len(fixes["domains"]["retail"]["patches"]) == 26
+    assert set(fixes["domains"]["airline"]["patches"]) == {
+        "13",
+        "26",
+        "29",
+        "31",
+        "32",
+        "37",
+        "48",
+    }
     assert benchmark_variant.train_excluded_task_ids("fixed", "retail") == {
         "37",
         "41",
@@ -153,10 +166,39 @@ def test_committed_fixes_match_the_pinned_fixed_digests(tmp_path):
     assert benchmark_variant.train_excluded_task_ids("official", "retail") == set()
 
 
-def test_official_data_is_rejected_by_the_fixed_variant():
+def test_official_data_is_rejected_by_the_fixed_variant(monkeypatch):
+    from tau2.utils import utils
+
+    official_dir = (
+        (Path(utils.DATA_DIR) / "tau2/domains/retail/db.json").resolve().parents[3]
+    )
+    monkeypatch.setattr(utils, "DATA_DIR", official_dir)
     benchmark_variant.validate_task_files("official", ["airline", "retail"])
     with pytest.raises(ValueError, match="does not hold the fixed airline tasks"):
         benchmark_variant.validate_task_files("fixed", ["airline"])
+
+
+@pytest.mark.parametrize("transferred,expected", [(False, 0.0), (True, 1.0)])
+def test_flown_cancellation_gold_requires_transfer_after_upgrade(transferred, expected):
+    """The task-37 gold fixes both a rejected hand-off and a skipped one."""
+    from tau2.data_model.tasks import Task
+    from tau2.utils.utils import DATA_DIR
+
+    official_dir = (Path(DATA_DIR) / "tau2/domains/retail/db.json").resolve().parents[3]
+    tasks = json.loads((official_dir / "tau2/domains/airline/tasks.json").read_text())
+    fixed = benchmark_variant.apply_task_fixes(
+        tasks, "airline", benchmark_variant.load_fixes()
+    )
+    task = Task.model_validate(next(t for t in fixed if t["id"] == "37"))
+    messages = [_assistant("update_reservation_flights")]
+    if transferred:
+        messages.append(_assistant(benchmark_variant.TRANSFER_TOOL))
+    else:
+        messages.append(SimpleNamespace(role="user", content="###TRANSFER###"))
+
+    scored = benchmark_variant.apply_transfer_rule(task, messages, _reward(), "airline")
+
+    assert scored.reward == expected
 
 
 def test_fixed_modify_prices_each_item_from_its_own_variant(monkeypatch):
