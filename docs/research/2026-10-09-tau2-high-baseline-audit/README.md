@@ -3283,17 +3283,21 @@ thinking，此时 temperature 不生效；Qwen3.5-4B 用户关 thinking、temper
 DeepSeek-Flash（`9e7082dc` 起与用户解耦，见 16.12）。mean@4 等于 pass^1。计分脚本
 `scripts/user-sim/test60_table.py`。
 
-| 用户模拟器             | 档位 | 模式            | Airline mean@4 | Airline pass^4 | Retail mean@4 | Retail pass^4 | 合计 mean@4 | 合计 pass^4 |
-| ---------------------- | ---- | --------------- | -------------: | -------------: | ------------: | ------------: | ----------: | ----------: |
-| DeepSeek-Flash         | 中上 | thinking        |          0.512 |          0.300 |         0.825 |         0.525 |       0.721 |       0.450 |
-| Doubao 2.1 Turbo       | 中下 | thinking medium |          0.438 |          0.250 |         0.606 |         0.250 |       0.550 |       0.250 |
-| Qwen3.5-4B（自己部署） | 弱   | non-thinking T0 |          0.450 |          0.250 |         0.669 |         0.400 |       0.596 |       0.350 |
-| GLM 5.3 / Haiku / Luna |      |                 |           待跑 |                |               |               |             |             |
+| 用户模拟器             | 档位 | 模式            | 数据 | Airline mean@4 | Airline pass^4 | Retail mean@4 | Retail pass^4 | 合计 mean@4 | 合计 pass^4 |
+| ---------------------- | ---- | --------------- | ---- | -------------: | -------------: | ------------: | ------------: | ----------: | ----------: |
+| DeepSeek-Flash         | 中上 | thinking        | v3   |          0.550 |          0.350 |         0.806 |         0.600 |       0.721 |       0.517 |
+| Doubao 2.1 Turbo       | 中下 | thinking medium | v2   |          0.438 |          0.250 |         0.606 |         0.250 |       0.550 |       0.250 |
+| Qwen3.5-4B（自己部署） | 弱   | non-thinking T0 | v3   |          0.438 |          0.150 |         0.656 |         0.500 |       0.583 |       0.383 |
+| GLM 5.3 / Haiku / Luna |      |                 |      |           待跑 |                |               |               |             |             |
+
+数据列：v3 是 2026-10-12 修过 7 道题的 fixed-v3（11.2.1）。Doubao 的 v3 重跑（pueue 486）因火山方舟账户欠费有 2 个
+episode 失败，充值后重跑，暂列 v2。同模拟器 v2 → v3 的合计：DeepSeek 0.721 → 0.721，Qwen 0.596 →
+0.583，变化在运行间噪声内。
 
 **读数。**
 
-- 换弱用户时掉分集中在 Retail：DeepSeek 0.825 → Doubao 0.606 / Qwen 0.669。按（题、trial）配对，DeepSeek 成功而
-  Doubao 失败 41 例、反向 6 例。
+- 换弱用户时掉分集中在 Retail（v2 数据，即 case study 所用的运行）：DeepSeek 0.825 → Doubao 0.606 / Qwen
+  0.669。按（题、trial）配对，DeepSeek 成功而 Doubao 失败 41 例、反向 6 例。
 - Airline 三者在 0.44–0.51，落在运行间噪声内：同配置的 DeepSeek 旧运行为 Airline 0.438、Retail 0.812，与上表分别差
   0.075 和 0.013。
 - 第 8 节的 Doubao 结果（official 变体，Airline 0.787）不可比：official 的 Airline 有"只说 Done
