@@ -16,6 +16,13 @@ from areal.utils.save_load import get_state_dict_from_repo_id_or_path
 
 # Head parameters are never in a pretrained backbone checkpoint.
 _SCORE_KEYS = ("score.weight", "score.bias")
+# Model-config flag for a value head with a bias term. It is saved in the critic's
+# config.json, so every loader rebuilds the head that the checkpoint holds.
+VALUE_HEAD_BIAS_FLAG = "areal_value_head_bias"
+
+
+def value_head_has_bias(config: PretrainedConfig) -> bool:
+    return bool(getattr(config, VALUE_HEAD_BIAS_FLAG, False))
 
 
 @dataclass
@@ -41,8 +48,6 @@ class Qwen35TokenCriticForCausalBackbone(PreTrainedModel):
 
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
-    # Subclasses set True to give the value head a bias term.
-    score_bias = False
 
     def __init__(self, config: PretrainedConfig, language_model: nn.Module):
         super().__init__(config)
@@ -51,7 +56,7 @@ class Qwen35TokenCriticForCausalBackbone(PreTrainedModel):
         self.score = nn.Linear(
             _hidden_size(config),
             1,
-            bias=self.score_bias,
+            bias=value_head_has_bias(config),
             dtype=backbone_parameter.dtype,
             device=backbone_parameter.device,
         )

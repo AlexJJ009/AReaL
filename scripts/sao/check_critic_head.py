@@ -50,13 +50,14 @@ def _hidden_size(config: dict[str, Any]) -> int:
     return hidden
 
 
-def _scalar_head_keys(keys: list[str]) -> list[str]:
-    candidates = {
-        "score.weight",
-        "classifier.weight",
-        "value_head.weight",
-        "v_head.weight",
-    }
+_HEAD_NAMES = ("score", "classifier", "value_head", "v_head")
+# Matches areal.models.transformers.token_critic.VALUE_HEAD_BIAS_FLAG; this
+# preflight stays importable without the model packages.
+VALUE_HEAD_BIAS_FLAG = "areal_value_head_bias"
+
+
+def _scalar_head_keys(keys: list[str], suffix: str) -> list[str]:
+    candidates = {f"{name}.{suffix}" for name in _HEAD_NAMES}
     return sorted(key for key in keys if key in candidates)
 
 
@@ -76,15 +77,27 @@ def check_critic_head(checkpoint: str | Path) -> dict[str, Any]:
     hidden_size = _hidden_size(config)
     has_value_manifest = (root / "value_manifest.json").is_file()
     sealed_by_config = bool(config.get("areal_scalar_value_artifact"))
+    bias_by_config = bool(config.get(VALUE_HEAD_BIAS_FLAG))
 
     with safe_open(weights_path, framework="pt", device="cpu") as shard:
         keys = sorted(shard.keys())
-        scalar_keys = _scalar_head_keys(keys)
+        scalar_keys = _scalar_head_keys(keys, "weight")
         if scalar_keys != ["score.weight"]:
             raise CriticHeadPreflightError(
                 "critic checkpoint must contain exactly one scalar head key: "
                 f"score.weight; observed={scalar_keys or 'none'}"
             )
+        # The loader builds the head bias from the config flag alone, so a bias
+        # without the flag would be rejected and a flag without a bias left at 0.
+        bias_keys = _scalar_head_keys(keys, "bias")
+        expected_bias_keys = ["score.bias"] if bias_by_config else []
+        if bias_keys != expected_bias_keys:
+            raise CriticHeadPreflightError(
+                f"critic head bias keys must match config {VALUE_HEAD_BIAS_FLAG}="
+                f"{bias_by_config}: expected={expected_bias_keys or 'none'} "
+                f"observed={bias_keys or 'none'}"
+            )
+        bias = shard.get_tensor("score.bias") if bias_by_config else None
         shape = tuple(shard.get_slice("score.weight").get_shape())
         expected_shape = (1, hidden_size)
         if shape != expected_shape:
@@ -99,6 +112,13 @@ def check_critic_head(checkpoint: str | Path) -> dict[str, Any]:
         raise CriticHeadPreflightError("score.weight contains non-finite values")
     if nonzero_count == 0:
         raise CriticHeadPreflightError("score.weight is all zeros")
+    if bias is not None:
+        if tuple(bias.shape) != (1,):
+            raise CriticHeadPreflightError(
+                f"score.bias shape mismatch: expected=(1,) observed={tuple(bias.shape)}"
+            )
+        if not bool(torch.isfinite(bias).all().item()):
+            raise CriticHeadPreflightError("score.bias contains non-finite values")
 
     tokenizer_hashes = {
         name: _json_sha256(root / name)
@@ -138,6 +158,7 @@ def check_critic_head(checkpoint: str | Path) -> dict[str, Any]:
             "hidden_size": hidden_size,
             "architectures": config.get("architectures"),
             "areal_scalar_value_artifact": sealed_by_config,
+            VALUE_HEAD_BIAS_FLAG: bias_by_config,
             "has_value_manifest": has_value_manifest,
         },
         "head": {
@@ -148,6 +169,14 @@ def check_critic_head(checkpoint: str | Path) -> dict[str, Any]:
             "finite": finite,
             "nonzero_count": nonzero_count,
             "numel": int(head.numel()),
+            "bias": None
+            if bias is None
+            else {
+                "key": "score.bias",
+                "value": float(bias.float().item()),
+                "dtype": str(bias.dtype).removeprefix("torch."),
+                "sha256": _sha256_tensor(bias),
+            },
         },
         "loader_status": loader_status,
         "loader_note": loader_note,

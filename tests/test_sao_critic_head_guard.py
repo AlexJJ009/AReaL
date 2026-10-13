@@ -23,6 +23,7 @@ def _write_checkpoint(
     state: dict[str, torch.Tensor],
     hidden_size=4,
     nested_text_config=True,
+    head_bias=False,
 ):
     checkpoint = tmp_path / "critic"
     checkpoint.mkdir(parents=True)
@@ -30,6 +31,8 @@ def _write_checkpoint(
         "architectures": ["Qwen3_5ForConditionalGeneration"],
         "model_type": "qwen3_5",
     }
+    if head_bias:
+        config["areal_value_head_bias"] = True
     if nested_text_config:
         config["text_config"] = {"hidden_size": hidden_size, "vocab_size": 8}
     else:
@@ -152,6 +155,84 @@ def test_check_critic_head_rejects_nonfinite_or_zero(tmp_path):
         check_critic_head(nonfinite)
     with pytest.raises(CriticHeadPreflightError, match="all zeros"):
         check_critic_head(zeros)
+
+
+def _biased_state(bias):
+    return {
+        "model.language_model.embed_tokens.weight": torch.ones(8, 4),
+        "score.weight": torch.ones(1, 4),
+        "score.bias": bias,
+    }
+
+
+def test_check_critic_head_accepts_bias_with_config_flag(tmp_path):
+    bias = torch.tensor([0.9], dtype=torch.bfloat16)
+    checkpoint = _write_checkpoint(tmp_path, state=_biased_state(bias), head_bias=True)
+
+    report = check_critic_head(checkpoint)
+
+    assert report["config"]["areal_value_head_bias"] is True
+    assert report["head"]["bias"]["value"] == pytest.approx(0.9, abs=1e-2)
+    assert report["head"]["bias"]["sha256"] == _tensor_digest(bias)
+
+
+def test_check_critic_head_reports_no_bias_for_plain_head(tmp_path):
+    checkpoint = _write_checkpoint(
+        tmp_path,
+        state={
+            "model.language_model.embed_tokens.weight": torch.ones(8, 4),
+            "score.weight": torch.ones(1, 4),
+        },
+    )
+
+    report = check_critic_head(checkpoint)
+
+    assert report["head"]["bias"] is None
+    assert report["config"]["areal_value_head_bias"] is False
+
+
+def test_check_critic_head_rejects_bias_without_config_flag(tmp_path):
+    checkpoint = _write_checkpoint(tmp_path, state=_biased_state(torch.zeros(1)))
+
+    with pytest.raises(CriticHeadPreflightError, match="areal_value_head_bias=False"):
+        check_critic_head(checkpoint)
+
+
+def test_check_critic_head_rejects_config_flag_without_bias(tmp_path):
+    checkpoint = _write_checkpoint(
+        tmp_path,
+        state={
+            "model.language_model.embed_tokens.weight": torch.ones(8, 4),
+            "score.weight": torch.ones(1, 4),
+        },
+        head_bias=True,
+    )
+
+    with pytest.raises(CriticHeadPreflightError, match="areal_value_head_bias=True"):
+        check_critic_head(checkpoint)
+
+
+def test_check_critic_head_rejects_foreign_head_bias(tmp_path):
+    state = _biased_state(torch.zeros(1))
+    state["classifier.bias"] = torch.zeros(1)
+    checkpoint = _write_checkpoint(tmp_path, state=state, head_bias=True)
+
+    with pytest.raises(CriticHeadPreflightError, match="classifier.bias"):
+        check_critic_head(checkpoint)
+
+
+@pytest.mark.parametrize(
+    ("bias", "message"),
+    [
+        (torch.zeros(2), "score.bias shape"),
+        (torch.tensor([float("nan")]), "non-finite"),
+    ],
+)
+def test_check_critic_head_rejects_bad_bias(tmp_path, bias, message):
+    checkpoint = _write_checkpoint(tmp_path, state=_biased_state(bias), head_bias=True)
+
+    with pytest.raises(CriticHeadPreflightError, match=message):
+        check_critic_head(checkpoint)
 
 
 def test_check_critic_head_cli_writes_failure_report(tmp_path):

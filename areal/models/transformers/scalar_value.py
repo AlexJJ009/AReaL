@@ -11,6 +11,8 @@ from torch import nn
 from transformers import AutoModel, PretrainedConfig, PreTrainedModel
 from transformers.utils import ModelOutput
 
+from areal.models.transformers.token_critic import value_head_has_bias
+
 
 @dataclass
 class TokenCriticOutput(ModelOutput):
@@ -40,7 +42,7 @@ class Qwen35ScalarValueModel(PreTrainedModel):
         self.score = nn.Linear(
             config.text_config.hidden_size,
             1,
-            bias=False,
+            bias=value_head_has_bias(config),
             dtype=parameter.dtype,
             device=parameter.device,
         )

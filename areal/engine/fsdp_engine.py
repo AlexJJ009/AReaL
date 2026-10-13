@@ -323,9 +323,6 @@ def _compare_score_evidence(
 
 
 class FSDPEngine(TrainEngine):
-    # Model class for Qwen3.5 critics; subclasses may swap in a variant head.
-    qwen35_critic_class: type = Qwen35TokenCriticForCausalBackbone
-
     def __init__(self, config: TrainEngineConfig):
         self.config = config
         self.optimizer_config = config.optimizer
@@ -1335,7 +1332,7 @@ class FSDPEngine(TrainEngine):
                 attn_implementation=self.config.attn_impl,
             )
         if _use_qwen35_token_critic_adapter(self.config, self.model_config):
-            model_class = self.qwen35_critic_class
+            model_class = Qwen35TokenCriticForCausalBackbone
             model_kwargs = {}
         elif self.config.is_critic:
             model_class = AutoModelForTokenClassification
@@ -1356,6 +1353,9 @@ class FSDPEngine(TrainEngine):
                 **model_kwargs,
             )
         else:
+            if model_class is Qwen35TokenCriticForCausalBackbone:
+                # The config the adapter would reload from path, plus any head flag.
+                model_kwargs["config"] = self.model_config
             model = model_class.from_pretrained(
                 pretrained_model_name_or_path=self.config.path,
                 trust_remote_code=True,

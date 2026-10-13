@@ -6,6 +6,10 @@ are about ±3 for 0/1 targets, and every Adam step moves each parameter by about
 learning rate: a head bias at the backbone lr of 5e-6 never moves. This variant
 gives the head a bias set to the expected success rate, a zero weight (every token
 starts at that rate), and an optional learning rate of its own (README 16.14.3).
+
+The bias is switched on through ``VALUE_HEAD_BIAS_FLAG`` on the model config, which
+the engine writes into the checkpoint's config.json; the plain critic loaders read
+it, so SAO loads the biased head without this module.
 """
 
 from __future__ import annotations
@@ -16,7 +20,10 @@ import torch
 
 from areal.api.cli_args import PPOCriticConfig
 from areal.engine import FSDPPPOCritic
-from areal.models.transformers.token_critic import Qwen35TokenCriticForCausalBackbone
+from areal.models.transformers.token_critic import (
+    VALUE_HEAD_BIAS_FLAG,
+    value_head_has_bias,
+)
 from areal.utils import logging
 
 logger = logging.getLogger("Tau2Train")
@@ -37,15 +44,11 @@ class Tau2HeadCriticConfig(PPOCriticConfig):
         return cls(**values, head_bias_init=head_bias_init, head_lr=head_lr)
 
 
-class Qwen35BiasedTokenCritic(Qwen35TokenCriticForCausalBackbone):
-    score_bias = True
-
-
 def init_value_head(model: torch.nn.Module, bias_init: float) -> None:
     """Zero the head weight and set its bias so every token predicts ``bias_init``."""
     score = model.score
     if score.bias is None:
-        raise ValueError("value head has no bias; build it with a biased head class")
+        raise ValueError(f"value head has no bias; set {VALUE_HEAD_BIAS_FLAG}")
     with torch.no_grad():
         score.weight.zero_()
         score.bias.fill_(bias_init)
@@ -56,13 +59,13 @@ def is_head_parameter(name: str) -> bool:
 
 
 class Tau2HeadFSDPPPOCritic(FSDPPPOCritic):
-    qwen35_critic_class = Qwen35BiasedTokenCritic
-
     def _create_llm_actor_or_critic(self):
+        # A sealed artifact or a saved biased critic already carries a trained head.
+        if self._scalar_value_artifact or value_head_has_bias(self.model_config):
+            return super()._create_llm_actor_or_critic()
+        setattr(self.model_config, VALUE_HEAD_BIAS_FLAG, True)
         model = super()._create_llm_actor_or_critic()
-        # A restored critic artifact already carries a trained head.
-        if not self._scalar_value_artifact:
-            init_value_head(model, self.config.head_bias_init)
+        init_value_head(model, self.config.head_bias_init)
         return model
 
     def _optimizer_param_groups(self) -> list:
