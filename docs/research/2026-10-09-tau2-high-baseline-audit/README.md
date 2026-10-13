@@ -3352,10 +3352,20 @@ DeepSeek-Flash（`9e7082dc` 起与用户解耦，见 16.12）。mean@4 等于 pa
 | DeepSeek-Flash         | 中上 | thinking        | v3   |          0.550 |          0.350 |         0.806 |         0.600 |       0.721 |       0.517 |
 | Doubao 2.1 Turbo       | 中下 | thinking medium | v3   |          0.588 |          0.300 |         0.656 |         0.325 |       0.633 |       0.317 |
 | Qwen3.5-4B（自己部署） | 弱   | non-thinking T0 | v3   |          0.438 |          0.150 |         0.656 |         0.500 |       0.583 |       0.383 |
-| GLM 5.3 / Haiku / Luna |      |                 |      |           待跑 |                |               |               |             |             |
+| Doubao 2.1 Lite        |      | thinking medium | v3   |          0.575 |          0.400 |         0.762 |         0.475 |       0.700 |       0.450 |
+| GLM 5.3                |      | thinking        | v3   |          0.575 |          0.400 |         0.850 |         0.725 |       0.758 |       0.617 |
+| Haiku / Luna           |      |                 |      |           待跑 |                |               |               |             |             |
 
 数据列：v3 是 2026-10-12 修过 7 道题的 fixed-v3（11.2.1）。同模拟器 v2 → v3 的合计：DeepSeek 0.721 →
 0.721，Qwen 0.596 → 0.583，变化在运行间噪声内；Doubao 0.550 → 0.633，变化大，原因见下一段。
+
+**Doubao Lite 和 GLM 5.3（2026-10-13）。** 两者都走火山订阅接口（`/api/plan/v3`，key 在
+`~/.config/tau2-doubao/ark-plan.env`），默认开 thinking，用户 temperature 0。GLM 关不掉 thinking（接口对
+`thinking.type=disabled` 返回 400），但 temperature 0 在短 prompt 上能让输出固定；Lite 能关 thinking，但
+temperature 0 不起作用。订阅接口会静默映射模型名（请求 `doubao-seed-2-1-lite-260628` 返回 260915），所以以轨迹里
+`raw_data.model` 为准：两组分别是 `doubao-seed-2-1-lite-260915` 和 `glm-5.3`。GLM 第一次用 256 并发跑，约 5
+分钟后被限流（"Requests are too frequent"），203 个 episode 失败作废；改用 32 并发重跑（pueue 495）后 0
+次限流。单次同时发 128 个请求时两个模型都不限流，所以限的是持续请求量，不是瞬时并发；并发只影响 actor 推理的批次组合，不改变评测参数。
 
 **Doubao 的"开场就结束"很可能是方舟服务端的问题，不是模型行为。** 开场第一句用户消息就是 `###OUT-OF-SCOPE###` 之类控制符的 episode
 数：v2 运行（476，base 656 个）20 个，v3 第一次（486，账户临近欠费时跑，240 个）10 个，其中 1 个回复是无关的"电商商品信息提取结果"，同时有
