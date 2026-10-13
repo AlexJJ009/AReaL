@@ -513,7 +513,7 @@ Retail 4 题（10、12、26、50）。Airline 有 23 题、Retail 有 7 题没�
 | 层           | 内容                                                             | 来源                                                                        |
 | ------------ | ---------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | 数据（上游） | Airline 44 题、Retail 105 题的 reward_basis；替换 retail 64、105 | PR #411、#571，pin 的 head commit 记在 `examples/tau2/benchmark_fixes.json` |
-| 数据（我们） | 33 道题的补丁（Airline 7、Retail 26），见 11.2                   | 2026-10-10 Retail 核查及 2026-10-12 用户模拟器轨迹核查                      |
+| 数据（我们） | 27 道题的补丁（Airline 5、Retail 22），见 11.2                   | 2026-10-10 Retail 核查及 2026-10-12 用户模拟器轨迹核查                      |
 | 环境         | `modify_pending_order_items` 按每个 item 自己的 variant 定价     | PR #322                                                                     |
 | 评分         | 两条转人工规则，见 11.3                                          | 我们                                                                        |
 | 训练集       | Retail train 去掉与 test 重复的 5 题，见 11.4                    | 我们                                                                        |
@@ -560,30 +560,31 @@ Retail 4 题（10、12、26、50）。Airline 有 23 题、Retail 有 7 题没�
 - 40（test）和 99（train）的指令只说"信用卡"，用户却有两张。两次运行中没有因此失败的 episode。
 - airline:7 的金额有歧义（#495），Airline `payment_history` 的 hash 对列表顺序敏感（#514）。
 
-### 11.2.1 fixed-v3：用户模拟器轨迹确认的修补
+### 11.2.1 fixed-v3：用户模拟器轨迹确认的修补（2026-10-12）
 
-v3 从 v2 的补丁继续构建，任务说明只补缺失信息或一句停止协议，原目标和 policy 不变。依据
-[user simulator case study 第 4.5、6 节](user-sim-case-study-20261012/REPORT.md)，逐条核查了
-`user-sim-20261012/fixed-v3/evidence.json` 的 39 条轨迹。补丁清单逐题记录 JSON 路径和从 0 开始的消息编号。
+依据 [user simulator case study 第 6 节](user-sim-case-study-20261012/REPORT.md)，逐条核查了
+`user-sim-20261012/fixed-v3/evidence.json` 的 39 条轨迹。补丁清单逐题记录轨迹路径和消息编号（从 0
+开始）。原则：任务说明只补缺失的一两句，原目标和 policy 不变；一个按 policy 正确行事的 agent 在修改前后都应该能通过。
 
-| 题号                                    | 改动                                                                      | 层                  |
-| --------------------------------------- | ------------------------------------------------------------------------- | ------------------- |
-| airline:29                              | 新预订不买保险，使用旧预订的 Visa 尾号 6521；旧预订保险不变               | 用户说明            |
-| retail:5                                | known_info 补上 Mei Kovacs，保留账号和邮编                                | 用户说明            |
-| retail:55                               | 被问到取消原因时选 no longer needed                                       | 用户说明            |
-| retail:45                               | 只给一个 canister 选项时先询问其他选项；仍只在多选时透露 bagless 偏好     | 用户说明            |
-| airline:37                              | gold 在升舱后加转人工：NQNU5R 已飞，policy 要求 hand-off                  | gold                |
-| airline:13                              | 请求转人工后等待实际转接，随后才发 TRANSFER                               | 用户说明            |
-| airline:26/31/32/48、retail:27/32/65/94 | 同一句停止协议；不改变是否应拒绝、是否接受额外请求                        | 用户说明            |
-| airline:26/31/48                        | ACTION 要求查询目标 reservation；26/31 补 gold lookup，48 复用既有 lookup | gold / reward_basis |
+| 题号             | 问题                                                  | 改动                                                     | 层                  |
+| ---------------- | ----------------------------------------------------- | -------------------------------------------------------- | ------------------- |
+| airline:29       | 新预订是否买保险、用哪张卡没写，gold 只认一种         | 用户说明补：新预订不买保险，用原预订的 Visa 尾号 6521    | 用户说明            |
+| retail:5         | known_info 没给姓名，gold 认证要求姓名                | known_info 补 Mei Kovacs                                 | 用户说明            |
+| retail:55        | 取消原因没写，gold 只认 no longer needed              | 被问到原因时说 no longer needed（同 11.2 的 38、59、66） | 用户说明            |
+| airline:37       | NQNU5R 已飞，policy 第 141 行要求转人工，gold 没有    | gold 在升舱后加转人工                                    | gold                |
+| airline:26/31/48 | 拒绝类题 DB 不变，空轨迹也能得分（同 11.2 的 57、65） | ACTION 要求查询目标预订；所有引用轨迹都已有这一步        | gold / reward_basis |
 
-19 条提前 TRANSFER 的成功样本，逐条均有尚未接通的人工请求（b），没有只拒绝后离开的 a；airline:13 的 5 条失败受“ask to be
-transferred”诱发（c）。airline:37 用遗漏的 mandatory gold hand-off 直接修；其余题在说明中
-重申请求与转接完成的区别，不用文本关键词判断 agent 是否想转人工。26/31/48 的查询检查使空轨迹无法靠 DB 不变过关；
-所有引用轨迹已有这一步，不加任何写操作或无条件 hand-off。
+**审查后没有采纳的修改**（Codex 初版 `fab5e7b9` 提出，Claude review 后回退）：
 
-`apply_transfer_rule` 没有改。只改用户说明的旧轨迹不能验证新说明是否有效，须在 v3 重新采样；离线重打分只是旧对话的机械得分。 airline:37
-不改用户说明，8 条完成升舱和转接的旧轨迹从 0 变 1，1 条提前终止、没有转接的旧轨迹从 1 变 0。 完整逐题原文对照、19 条判定表、39 条得分及校验日志见
+- **9 道题追加"请求转人工后要等真正转接再发 ###TRANSFER###"**（airline 13/26/31/32/48，retail
+  27/32/65/94）。tau2 的全局用户规则 `simulation_guidelines.md` 第 15 行已经规定被转接后才发
+  TRANSFER，用户提前发是模拟器违反协议（case study 的 U7a），不是题目问题。只在 9 道题里重复这条规则，其余题不受约束，等于针对一批题打补丁。提前
+  TRANSFER 的影响记在 16.15 节的已知偏差里。
+- **retail:45 让用户在只有一个选项时追问其他选项**。数据库里有 3 款可用的 canister 吸尘器，agent
+  只列一款属于枚举不全（M7），这道题本来就在考这一点；case study 里的 B1 标注应改为 agent 失败。
+
+`apply_transfer_rule` 没有改。只改用户说明的题，旧轨迹不能验证新说明，需要在 v3 上重新采样。airline:37 不改用户说明，离线重打分时 8
+条完成升舱和转接的旧轨迹从 0 变 1，1 条没有转接的从 1 变 0。Codex 的逐题报告（含被回退的部分）见
 `_artifacts/AReaL/codex-sao-math/user-sim-20261012/fixed-v3/REPORT.md`。
 
 ### 11.3 转人工规则
@@ -619,8 +620,8 @@ Retail train 的 72、96、37、41、67 与 test 的 71、97、36、42、68 是�
 
    - 当前目录：`_cache/tau2-bench-b7ea9074c1cba482b30687fecdb5c8425fd6f619-fixed-v3/data`。
      Airline digest 为
-     `84d1fdfa52e03cf6d3bb992ea5ba804e2dcde0ab60626932b19e45e558f85f5c`； Retail 为
-     `d197d2e5f283f977c2059b8219d491b03a22b952784f6e6aa1b604a3bf78f69a`。
+     `25086da158eedb97aee3bce2bc131d6acea094267bee6fd1c71933f74d90ef74`； Retail 为
+     `5b7a8fa30a7615b4e8f8d1fc21a66fb85ba6d337a06ce50f4a9565258098301f`。
    - v2 目录 `…-fixed-v2/data` 保留且未改写。使用历史代码 `eb09aa24`，设置 `TAU2_DATA_DIR`
      为该目录、`benchmark_variant=fixed` 即可复现原实验；当前 v3 代码会拒绝 v2 digest。 v2 Airline digest 为
      `ec04aec07306c8fe640b40905e1e7b9b7c88e55132cdcf9cc5448daa1798c5a4`； Retail 为
@@ -636,7 +637,7 @@ Retail train 的 72、96、37、41、67 与 test 的 71、97、36、42、68 是�
 
 1. **补丁题打分检查**：运行本目录的 `scripts/official-runner/check_patched_scoring.py`。
 
-   - 做法：对 33 道补丁题（Airline 7、Retail 26）各构造三条合成轨迹（空轨迹、gold、去掉转人工的 gold），用真实 evaluator
+   - 做法：对 27 道补丁题（Airline 5、Retail 22）各构造三条合成轨迹（空轨迹、gold、去掉转人工的 gold），用真实 evaluator
      打分，NL 断言打桩为通过。
    - 要求：gold 得 1 分，空轨迹得 0 分。v3 全部满足；airline:37 的 gold 去掉转人工得 0。
    - 这个检查能失败：换到上一版数据上运行，会报出 25、57、65。

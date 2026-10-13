@@ -146,13 +146,11 @@ def test_committed_fixes_match_the_pinned_fixed_digests(tmp_path):
         "retail": 105,
     }
     assert sorted(fixes["domains"]["retail"]["replace_tasks"]) == ["105", "64"]
-    assert len(fixes["domains"]["retail"]["patches"]) == 26
+    assert len(fixes["domains"]["retail"]["patches"]) == 22
     assert set(fixes["domains"]["airline"]["patches"]) == {
-        "13",
         "26",
         "29",
         "31",
-        "32",
         "37",
         "48",
     }

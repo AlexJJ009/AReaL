@@ -45,8 +45,8 @@ TASK_FILE_SHA256: dict[str, dict[str, str]] = {
         "telecom": "37e562e1ae3242577407e1303b1548bc64e7ea68e37d36173e6747990ceaf8a4",
     },
     "fixed": {
-        "airline": "84d1fdfa52e03cf6d3bb992ea5ba804e2dcde0ab60626932b19e45e558f85f5c",
-        "retail": "d197d2e5f283f977c2059b8219d491b03a22b952784f6e6aa1b604a3bf78f69a",
+        "airline": "25086da158eedb97aee3bce2bc131d6acea094267bee6fd1c71933f74d90ef74",
+        "retail": "5b7a8fa30a7615b4e8f8d1fc21a66fb85ba6d337a06ce50f4a9565258098301f",
         # Unpatched, linked to the official file.
         "telecom": "37e562e1ae3242577407e1303b1548bc64e7ea68e37d36173e6747990ceaf8a4",
     },
