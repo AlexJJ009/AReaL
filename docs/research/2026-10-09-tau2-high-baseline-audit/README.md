@@ -587,6 +587,12 @@ Retail 4 题（10、12、26、50）。Airline 有 23 题、Retail 有 7 题没�
 条完成升舱和转接的旧轨迹从 0 变 1，1 条没有转接的从 1 变 0。Codex 的逐题报告（含被回退的部分）见
 `_artifacts/AReaL/codex-sao-math/user-sim-20261012/fixed-v3/REPORT.md`。
 
+**待修：airline:44（2026-10-13 v3 case study 发现，未改）。** 任务说"含中转 ≤3 小时的航班才升舱"，KC18K6 是 HAT300
+MSP 06:00 → HAT215 CLT 13:00，含中转 7 小时，gold 却升舱 KC18K6；NL 断言 "Agent updates KC18K6 to
+business" 和总价 1380–1390 也按升舱算。GLM t2 按任务正确排除 KC18K6 后得
+0（`user-sim-case-study-v3/REPORT.md` 6.1）。最小改法是删掉 KC18K6 的升舱 action 和对应断言、重算总价区间，需要用
+gold replay 验证。
+
 ### 11.3 转人工规则
 
 两条规则都在官方 evaluator 之后执行（`benchmark_variant.apply_transfer_rule`）：
@@ -3433,20 +3439,26 @@ reasoning（0/994 条），不一致的题从 27 降到 17，但 180 对重复�
 在 T=0、关 thinking 时也不完全确定，前面短 prompt 的"逐字相同"推广不到这里。所以"只有 policy
 随机"一组做不出来，用户侧的随机性只能减小、不能消除。Qwen 用户两侧都是 T=0 仍有 29 题不一致，来自 SGLang 批量推理的数值不确定性。
 
-**Case study：失败是谁造成的。**
-完整报告：[user-sim-case-study-20261012/REPORT.md](user-sim-case-study-20261012/REPORT.md)。三个模拟器共
-272 个失败，每个只记一个致败原因（之后 reward 不可能再是 1 的那一步由谁造成）：
+**Case study：失败是谁造成的（v3，五个模拟器）。**
+完整报告：[user-sim-case-study-v3/REPORT.md](user-sim-case-study-v3/REPORT.md)（Codex 标注，第 13
+节是我的复核）。1,200 个 episode 里 385 个失败，每个只记一个致败原因（之后 reward 不可能再是 1 的那一步由谁造成）：
 
-| 用户模拟器 | 成功 / 240 | agent | 用户 | benchmark | 用户侧主要问题                                           |
-| ---------- | ---------: | ----: | ---: | --------: | -------------------------------------------------------- |
-| DeepSeek   |        173 |    46 |   13 |         8 | 同意操作的同一句里结束对话（U1）13                       |
-| Doubao     |        132 |    49 |   55 |         4 | U1 31、开场第一句就结束 10、缩小目标后结束 3             |
-| Qwen3.5-4B |        143 |    38 |   56 |         3 | 偏离任务说明 50：编造事实 19、放弃目标 12、不按条件走 11 |
+| 用户模拟器       | 成功 / 240 | agent | 用户 | benchmark | 用户侧主要问题                         |
+| ---------------- | ---------: | ----: | ---: | --------: | -------------------------------------- |
+| DeepSeek-Flash   |        173 |    48 |   16 |         3 | 同意操作的同一句里结束对话（U1）13     |
+| Doubao 2.1 Turbo |        152 |    36 |   51 |         1 | U1 41                                  |
+| Doubao 2.1 Lite  |        168 |    37 |   35 |         0 | U1 23、偏离任务 6、转接前发 TRANSFER 5 |
+| GLM 5.3          |        182 |    43 |    9 |         6 | 偏离任务 4、提前结束 4；没有 U1        |
+| Qwen3.5-4B       |        140 |    40 |   57 |         3 | 偏离任务说明（U3）51                   |
 
-- Retail 的 agent 失败在三个模拟器下几乎相同（13、14、12），Retail 掉分来自用户。
-- Airline 主要是 agent 问题，头号仍是"资格判断正确却用转人工代替拒绝"（M2a，59 个），6 道题在三个模拟器下都失败在这里。没有发现 14.2 节以外的新
-  agent 缺口。
-- 用户也会让分数偏高：5 个成功是用户把 agent 从死路拉回来的（U6）。
+- 研究的问题存在：actor 不变，用户致败的失败从 9（GLM）到 57（Qwen），占全部失败的 44%。Retail 的 agent 失败在五者间是
+  9–14，Retail 的分差基本来自用户。把用户致败的失败和用户帮忙的成功（U6）从样本里删掉，五者成功率差距从 17.5 个百分点缩到 5.6。
+- 各模拟器的毛病不同：Doubao 两个版本主要是 U1，Qwen 主要是不按任务条件走，GLM 最接近任务说明但不是零噪声。换模拟器不只是换噪声大小，也换了噪声种类。
+- Airline 仍以 agent 为主，M2a 共 97 个，airline:6/26/35/45/48 在五个模拟器下都出现。
+- "开场第一句就结束"在五组 v3 运行里都是 0，确认 v2 的 U4a 来自方舟服务异常。
+- 没有新增分类代码。新发现一处 gold 错误：airline:44（见 11.2.1）。
+- v2 三模拟器版（Doubao
+  用按量付费的旧运行）：[user-sim-case-study-20261012/REPORT.md](user-sim-case-study-20261012/REPORT.md)。
 
 **证据。** 运行目录
 `_artifacts/AReaL/codex-sao-math/user-sim-20261012/`：`api-user/deepseek-base-u0p0`（pueue

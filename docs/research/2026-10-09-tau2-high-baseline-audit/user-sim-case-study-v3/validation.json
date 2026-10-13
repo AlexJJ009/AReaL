@@ -1,0 +1,24 @@
+{
+  "completed": 1200,
+  "failure_labels": 385,
+  "success_flags": 43,
+  "hashes_quotes_instructions_counts_pairs": "pass",
+  "report_checked": true,
+  "negative_controls": [
+    {
+      "case": "corrupted_quote",
+      "rejected": true,
+      "reason": "quote mismatch"
+    },
+    {
+      "case": "missing_failure",
+      "rejected": true,
+      "reason": "failure coverage"
+    },
+    {
+      "case": "wrong_score",
+      "rejected": true,
+      "reason": "failure coverage"
+    }
+  ]
+}

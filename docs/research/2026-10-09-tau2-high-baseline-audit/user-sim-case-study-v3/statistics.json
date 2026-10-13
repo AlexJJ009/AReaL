@@ -1,0 +1,1113 @@
+{
+  "total": 1200,
+  "failures": 385,
+  "by_sim": {
+    "deepseek": {
+      "success": 173,
+      "failure_sides": {
+        "agent": 48,
+        "用户": 16,
+        "benchmark": 3
+      },
+      "codes": {
+        "M1": 8,
+        "M2a": 25,
+        "M12": 1,
+        "U7a": 1,
+        "M5": 1,
+        "M3": 1,
+        "M11": 2,
+        "M14": 7,
+        "B1": 3,
+        "U3": 2,
+        "U1": 13,
+        "M15": 2,
+        "M7": 1
+      },
+      "u6_success": 3,
+      "u7_success": 5,
+      "raw_rate": 0.7208333333333333,
+      "filtered_numerator": 170,
+      "filtered_denominator": 221,
+      "filtered_rate": 0.7692307692307693,
+      "strict_numerator": 165,
+      "strict_denominator": 216,
+      "strict_rate": 0.7638888888888888,
+      "domains": {
+        "airline": {
+          "success": 44,
+          "total": 80,
+          "side": {
+            "agent": 35,
+            "用户": 1
+          },
+          "codes": {
+            "M1": 5,
+            "M2a": 22,
+            "M12": 1,
+            "U7a": 1,
+            "M5": 1,
+            "M3": 1,
+            "M11": 2,
+            "M14": 3
+          },
+          "pass4": 0.35
+        },
+        "retail": {
+          "success": 129,
+          "total": 160,
+          "side": {
+            "benchmark": 3,
+            "用户": 15,
+            "agent": 13
+          },
+          "codes": {
+            "B1": 3,
+            "U3": 2,
+            "U1": 13,
+            "M15": 2,
+            "M1": 3,
+            "M14": 4,
+            "M7": 1,
+            "M2a": 3
+          },
+          "pass4": 0.6
+        }
+      }
+    },
+    "turbo": {
+      "success": 152,
+      "failure_sides": {
+        "agent": 36,
+        "用户": 51,
+        "benchmark": 1
+      },
+      "codes": {
+        "M8": 3,
+        "M2a": 17,
+        "U1": 41,
+        "U7a": 3,
+        "M5": 3,
+        "U4b": 4,
+        "M1": 2,
+        "M11": 2,
+        "M14": 4,
+        "M15": 5,
+        "U3": 3,
+        "B1": 1
+      },
+      "u6_success": 6,
+      "u7_success": 8,
+      "raw_rate": 0.6333333333333333,
+      "filtered_numerator": 146,
+      "filtered_denominator": 183,
+      "filtered_rate": 0.7978142076502732,
+      "strict_numerator": 138,
+      "strict_denominator": 175,
+      "strict_rate": 0.7885714285714286,
+      "domains": {
+        "airline": {
+          "success": 47,
+          "total": 80,
+          "side": {
+            "agent": 27,
+            "用户": 6
+          },
+          "codes": {
+            "M8": 1,
+            "M2a": 16,
+            "U1": 2,
+            "U7a": 3,
+            "M5": 3,
+            "U4b": 1,
+            "M1": 1,
+            "M11": 2,
+            "M14": 4
+          },
+          "pass4": 0.3
+        },
+        "retail": {
+          "success": 105,
+          "total": 160,
+          "side": {
+            "用户": 45,
+            "agent": 9,
+            "benchmark": 1
+          },
+          "codes": {
+            "U1": 39,
+            "M15": 5,
+            "M1": 1,
+            "U3": 3,
+            "B1": 1,
+            "M8": 2,
+            "M2a": 1,
+            "U4b": 3
+          },
+          "pass4": 0.325
+        }
+      }
+    },
+    "lite": {
+      "success": 168,
+      "failure_sides": {
+        "agent": 37,
+        "用户": 35
+      },
+      "codes": {
+        "M8": 3,
+        "M1": 2,
+        "M2a": 15,
+        "U7a": 5,
+        "M10": 2,
+        "M11": 2,
+        "U4b": 1,
+        "M7": 2,
+        "M14": 9,
+        "U1": 23,
+        "M16": 2,
+        "U3": 6
+      },
+      "u6_success": 1,
+      "u7_success": 11,
+      "raw_rate": 0.7,
+      "filtered_numerator": 167,
+      "filtered_denominator": 204,
+      "filtered_rate": 0.8186274509803921,
+      "strict_numerator": 156,
+      "strict_denominator": 193,
+      "strict_rate": 0.8082901554404145,
+      "domains": {
+        "airline": {
+          "success": 46,
+          "total": 80,
+          "side": {
+            "agent": 28,
+            "用户": 6
+          },
+          "codes": {
+            "M8": 2,
+            "M1": 1,
+            "M2a": 15,
+            "U7a": 5,
+            "M10": 2,
+            "M11": 2,
+            "U4b": 1,
+            "M7": 2,
+            "M14": 4
+          },
+          "pass4": 0.4
+        },
+        "retail": {
+          "success": 122,
+          "total": 160,
+          "side": {
+            "用户": 29,
+            "agent": 9
+          },
+          "codes": {
+            "U1": 23,
+            "M1": 1,
+            "M14": 5,
+            "M16": 2,
+            "U3": 6,
+            "M8": 1
+          },
+          "pass4": 0.475
+        }
+      }
+    },
+    "glm": {
+      "success": 182,
+      "failure_sides": {
+        "agent": 43,
+        "用户": 9,
+        "benchmark": 6
+      },
+      "codes": {
+        "M1": 7,
+        "M2a": 21,
+        "M8": 1,
+        "M5": 2,
+        "M10": 2,
+        "U3": 4,
+        "U7a": 1,
+        "B1": 4,
+        "M15": 5,
+        "M14": 4,
+        "U4b": 4,
+        "B2": 2,
+        "M4": 1
+      },
+      "u6_success": 2,
+      "u7_success": 2,
+      "raw_rate": 0.7583333333333333,
+      "filtered_numerator": 180,
+      "filtered_denominator": 229,
+      "filtered_rate": 0.7860262008733624,
+      "strict_numerator": 178,
+      "strict_denominator": 227,
+      "strict_rate": 0.7841409691629956,
+      "domains": {
+        "airline": {
+          "success": 46,
+          "total": 80,
+          "side": {
+            "agent": 31,
+            "用户": 2,
+            "benchmark": 1
+          },
+          "codes": {
+            "M1": 5,
+            "M2a": 21,
+            "M8": 1,
+            "M5": 2,
+            "M10": 2,
+            "U3": 1,
+            "U7a": 1,
+            "B1": 1
+          },
+          "pass4": 0.4
+        },
+        "retail": {
+          "success": 136,
+          "total": 160,
+          "side": {
+            "agent": 12,
+            "用户": 7,
+            "benchmark": 5
+          },
+          "codes": {
+            "M15": 5,
+            "U3": 3,
+            "M1": 2,
+            "M14": 4,
+            "B1": 3,
+            "U4b": 4,
+            "B2": 2,
+            "M4": 1
+          },
+          "pass4": 0.725
+        }
+      }
+    },
+    "qwen": {
+      "success": 140,
+      "failure_sides": {
+        "用户": 57,
+        "agent": 40,
+        "benchmark": 3
+      },
+      "codes": {
+        "U3": 51,
+        "M2a": 19,
+        "M1": 2,
+        "U7a": 1,
+        "M7": 2,
+        "M5": 3,
+        "U4b": 3,
+        "U5": 1,
+        "M14": 11,
+        "M15": 2,
+        "M12": 1,
+        "B2": 1,
+        "B1": 2,
+        "U4": 1
+      },
+      "u6_success": 2,
+      "u7_success": 3,
+      "raw_rate": 0.5833333333333334,
+      "filtered_numerator": 138,
+      "filtered_denominator": 181,
+      "filtered_rate": 0.7624309392265194,
+      "strict_numerator": 135,
+      "strict_denominator": 178,
+      "strict_rate": 0.7584269662921348,
+      "domains": {
+        "airline": {
+          "success": 35,
+          "total": 80,
+          "side": {
+            "用户": 19,
+            "agent": 26
+          },
+          "codes": {
+            "U3": 14,
+            "M2a": 18,
+            "M1": 2,
+            "U7a": 1,
+            "M7": 1,
+            "M5": 3,
+            "U4b": 3,
+            "U5": 1,
+            "M14": 2
+          },
+          "pass4": 0.15
+        },
+        "retail": {
+          "success": 105,
+          "total": 160,
+          "side": {
+            "用户": 38,
+            "agent": 14,
+            "benchmark": 3
+          },
+          "codes": {
+            "U3": 37,
+            "M15": 2,
+            "M12": 1,
+            "M14": 9,
+            "M7": 1,
+            "B2": 1,
+            "M2a": 1,
+            "B1": 2,
+            "U4": 1
+          },
+          "pass4": 0.5
+        }
+      }
+    }
+  },
+  "pairs": {
+    "airline": {
+      "pairs": [
+        {
+          "A": "deepseek",
+          "B": "turbo",
+          "A_success_B_failure": 11,
+          "A_failure_B_success": 14,
+          "discordant": 25,
+          "both_success": 33,
+          "both_failure": 22
+        },
+        {
+          "A": "deepseek",
+          "B": "lite",
+          "A_success_B_failure": 6,
+          "A_failure_B_success": 8,
+          "discordant": 14,
+          "both_success": 38,
+          "both_failure": 28
+        },
+        {
+          "A": "deepseek",
+          "B": "glm",
+          "A_success_B_failure": 8,
+          "A_failure_B_success": 10,
+          "discordant": 18,
+          "both_success": 36,
+          "both_failure": 26
+        },
+        {
+          "A": "deepseek",
+          "B": "qwen",
+          "A_success_B_failure": 20,
+          "A_failure_B_success": 11,
+          "discordant": 31,
+          "both_success": 24,
+          "both_failure": 25
+        },
+        {
+          "A": "turbo",
+          "B": "lite",
+          "A_success_B_failure": 13,
+          "A_failure_B_success": 12,
+          "discordant": 25,
+          "both_success": 34,
+          "both_failure": 21
+        },
+        {
+          "A": "turbo",
+          "B": "glm",
+          "A_success_B_failure": 14,
+          "A_failure_B_success": 13,
+          "discordant": 27,
+          "both_success": 33,
+          "both_failure": 20
+        },
+        {
+          "A": "turbo",
+          "B": "qwen",
+          "A_success_B_failure": 25,
+          "A_failure_B_success": 13,
+          "discordant": 38,
+          "both_success": 22,
+          "both_failure": 20
+        },
+        {
+          "A": "lite",
+          "B": "glm",
+          "A_success_B_failure": 9,
+          "A_failure_B_success": 9,
+          "discordant": 18,
+          "both_success": 37,
+          "both_failure": 25
+        },
+        {
+          "A": "lite",
+          "B": "qwen",
+          "A_success_B_failure": 22,
+          "A_failure_B_success": 11,
+          "discordant": 33,
+          "both_success": 24,
+          "both_failure": 23
+        },
+        {
+          "A": "glm",
+          "B": "qwen",
+          "A_success_B_failure": 18,
+          "A_failure_B_success": 7,
+          "discordant": 25,
+          "both_success": 28,
+          "both_failure": 27
+        }
+      ],
+      "mixed_unique": 52,
+      "all_success": 15,
+      "all_failure": 13
+    },
+    "retail": {
+      "pairs": [
+        {
+          "A": "deepseek",
+          "B": "turbo",
+          "A_success_B_failure": 38,
+          "A_failure_B_success": 14,
+          "discordant": 52,
+          "both_success": 91,
+          "both_failure": 17
+        },
+        {
+          "A": "deepseek",
+          "B": "lite",
+          "A_success_B_failure": 22,
+          "A_failure_B_success": 15,
+          "discordant": 37,
+          "both_success": 107,
+          "both_failure": 16
+        },
+        {
+          "A": "deepseek",
+          "B": "glm",
+          "A_success_B_failure": 14,
+          "A_failure_B_success": 21,
+          "discordant": 35,
+          "both_success": 115,
+          "both_failure": 10
+        },
+        {
+          "A": "deepseek",
+          "B": "qwen",
+          "A_success_B_failure": 44,
+          "A_failure_B_success": 20,
+          "discordant": 64,
+          "both_success": 85,
+          "both_failure": 11
+        },
+        {
+          "A": "turbo",
+          "B": "lite",
+          "A_success_B_failure": 17,
+          "A_failure_B_success": 34,
+          "discordant": 51,
+          "both_success": 88,
+          "both_failure": 21
+        },
+        {
+          "A": "turbo",
+          "B": "glm",
+          "A_success_B_failure": 14,
+          "A_failure_B_success": 45,
+          "discordant": 59,
+          "both_success": 91,
+          "both_failure": 10
+        },
+        {
+          "A": "turbo",
+          "B": "qwen",
+          "A_success_B_failure": 33,
+          "A_failure_B_success": 33,
+          "discordant": 66,
+          "both_success": 72,
+          "both_failure": 22
+        },
+        {
+          "A": "lite",
+          "B": "glm",
+          "A_success_B_failure": 18,
+          "A_failure_B_success": 32,
+          "discordant": 50,
+          "both_success": 104,
+          "both_failure": 6
+        },
+        {
+          "A": "lite",
+          "B": "qwen",
+          "A_success_B_failure": 41,
+          "A_failure_B_success": 24,
+          "discordant": 65,
+          "both_success": 81,
+          "both_failure": 14
+        },
+        {
+          "A": "glm",
+          "B": "qwen",
+          "A_success_B_failure": 42,
+          "A_failure_B_success": 11,
+          "discordant": 53,
+          "both_success": 94,
+          "both_failure": 13
+        }
+      ],
+      "mixed_unique": 108,
+      "all_success": 50,
+      "all_failure": 2
+    },
+    "all": {
+      "pairs": [
+        {
+          "A": "deepseek",
+          "B": "turbo",
+          "A_success_B_failure": 49,
+          "A_failure_B_success": 28,
+          "discordant": 77,
+          "both_success": 124,
+          "both_failure": 39
+        },
+        {
+          "A": "deepseek",
+          "B": "lite",
+          "A_success_B_failure": 28,
+          "A_failure_B_success": 23,
+          "discordant": 51,
+          "both_success": 145,
+          "both_failure": 44
+        },
+        {
+          "A": "deepseek",
+          "B": "glm",
+          "A_success_B_failure": 22,
+          "A_failure_B_success": 31,
+          "discordant": 53,
+          "both_success": 151,
+          "both_failure": 36
+        },
+        {
+          "A": "deepseek",
+          "B": "qwen",
+          "A_success_B_failure": 64,
+          "A_failure_B_success": 31,
+          "discordant": 95,
+          "both_success": 109,
+          "both_failure": 36
+        },
+        {
+          "A": "turbo",
+          "B": "lite",
+          "A_success_B_failure": 30,
+          "A_failure_B_success": 46,
+          "discordant": 76,
+          "both_success": 122,
+          "both_failure": 42
+        },
+        {
+          "A": "turbo",
+          "B": "glm",
+          "A_success_B_failure": 28,
+          "A_failure_B_success": 58,
+          "discordant": 86,
+          "both_success": 124,
+          "both_failure": 30
+        },
+        {
+          "A": "turbo",
+          "B": "qwen",
+          "A_success_B_failure": 58,
+          "A_failure_B_success": 46,
+          "discordant": 104,
+          "both_success": 94,
+          "both_failure": 42
+        },
+        {
+          "A": "lite",
+          "B": "glm",
+          "A_success_B_failure": 27,
+          "A_failure_B_success": 41,
+          "discordant": 68,
+          "both_success": 141,
+          "both_failure": 31
+        },
+        {
+          "A": "lite",
+          "B": "qwen",
+          "A_success_B_failure": 63,
+          "A_failure_B_success": 35,
+          "discordant": 98,
+          "both_success": 105,
+          "both_failure": 37
+        },
+        {
+          "A": "glm",
+          "B": "qwen",
+          "A_success_B_failure": 60,
+          "A_failure_B_success": 18,
+          "discordant": 78,
+          "both_success": 122,
+          "both_failure": 40
+        }
+      ],
+      "mixed_unique": 160,
+      "all_success": 65,
+      "all_failure": 15
+    }
+  },
+  "stable": [
+    {
+      "domain": "airline",
+      "task_id": "26",
+      "code": "M2a",
+      "n_simulators": 5,
+      "counts": {
+        "deepseek": 3,
+        "turbo": 1,
+        "lite": 1,
+        "glm": 4,
+        "qwen": 4
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "35",
+      "code": "M2a",
+      "n_simulators": 5,
+      "counts": {
+        "deepseek": 4,
+        "turbo": 3,
+        "lite": 1,
+        "glm": 4,
+        "qwen": 4
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "45",
+      "code": "M2a",
+      "n_simulators": 5,
+      "counts": {
+        "deepseek": 4,
+        "turbo": 4,
+        "lite": 4,
+        "glm": 4,
+        "qwen": 2
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "48",
+      "code": "M2a",
+      "n_simulators": 5,
+      "counts": {
+        "deepseek": 4,
+        "turbo": 2,
+        "lite": 4,
+        "glm": 3,
+        "qwen": 3
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "6",
+      "code": "M2a",
+      "n_simulators": 5,
+      "counts": {
+        "deepseek": 4,
+        "turbo": 4,
+        "lite": 4,
+        "glm": 4,
+        "qwen": 2
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "18",
+      "code": "M5",
+      "n_simulators": 4,
+      "counts": {
+        "deepseek": 1,
+        "turbo": 3,
+        "glm": 2,
+        "qwen": 3
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "2",
+      "code": "M1",
+      "n_simulators": 4,
+      "counts": {
+        "deepseek": 4,
+        "lite": 1,
+        "glm": 2,
+        "qwen": 1
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "31",
+      "code": "M2a",
+      "n_simulators": 4,
+      "counts": {
+        "deepseek": 2,
+        "turbo": 2,
+        "lite": 1,
+        "qwen": 1
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "44",
+      "code": "M14",
+      "n_simulators": 4,
+      "counts": {
+        "deepseek": 3,
+        "turbo": 4,
+        "lite": 4,
+        "qwen": 2
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "18",
+      "code": "M1",
+      "n_simulators": 4,
+      "counts": {
+        "deepseek": 3,
+        "turbo": 1,
+        "lite": 1,
+        "glm": 2
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "2",
+      "code": "M8",
+      "n_simulators": 3,
+      "counts": {
+        "turbo": 1,
+        "lite": 2,
+        "glm": 1
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "32",
+      "code": "M11",
+      "n_simulators": 3,
+      "counts": {
+        "deepseek": 2,
+        "turbo": 2,
+        "lite": 2
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "44",
+      "code": "M1",
+      "n_simulators": 3,
+      "counts": {
+        "deepseek": 1,
+        "glm": 2,
+        "qwen": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "102",
+      "code": "M14",
+      "n_simulators": 3,
+      "counts": {
+        "deepseek": 1,
+        "lite": 1,
+        "qwen": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "12",
+      "code": "M15",
+      "n_simulators": 3,
+      "counts": {
+        "deepseek": 2,
+        "turbo": 1,
+        "glm": 2
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "27",
+      "code": "M14",
+      "n_simulators": 3,
+      "counts": {
+        "deepseek": 2,
+        "lite": 1,
+        "glm": 3
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "36",
+      "code": "M14",
+      "n_simulators": 3,
+      "counts": {
+        "deepseek": 1,
+        "lite": 2,
+        "glm": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "36",
+      "code": "M15",
+      "n_simulators": 3,
+      "counts": {
+        "turbo": 4,
+        "glm": 3,
+        "qwen": 2
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "65",
+      "code": "M2a",
+      "n_simulators": 3,
+      "counts": {
+        "deepseek": 3,
+        "turbo": 1,
+        "qwen": 1
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "2",
+      "code": "M2a",
+      "n_simulators": 2,
+      "counts": {
+        "glm": 1,
+        "qwen": 1
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "22",
+      "code": "M10",
+      "n_simulators": 2,
+      "counts": {
+        "lite": 2,
+        "glm": 2
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "24",
+      "code": "M2a",
+      "n_simulators": 2,
+      "counts": {
+        "deepseek": 1,
+        "qwen": 1
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "31",
+      "code": "M1",
+      "n_simulators": 2,
+      "counts": {
+        "turbo": 1,
+        "glm": 1
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "13",
+      "code": "M12",
+      "n_simulators": 1,
+      "counts": {
+        "deepseek": 1
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "16",
+      "code": "M7",
+      "n_simulators": 1,
+      "counts": {
+        "qwen": 1
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "29",
+      "code": "M3",
+      "n_simulators": 1,
+      "counts": {
+        "deepseek": 1
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "35",
+      "code": "M7",
+      "n_simulators": 1,
+      "counts": {
+        "lite": 2
+      }
+    },
+    {
+      "domain": "airline",
+      "task_id": "44",
+      "code": "M2a",
+      "n_simulators": 1,
+      "counts": {
+        "glm": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "101",
+      "code": "M14",
+      "n_simulators": 1,
+      "counts": {
+        "qwen": 2
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "101",
+      "code": "M8",
+      "n_simulators": 1,
+      "counts": {
+        "turbo": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "111",
+      "code": "M14",
+      "n_simulators": 1,
+      "counts": {
+        "qwen": 3
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "32",
+      "code": "M16",
+      "n_simulators": 1,
+      "counts": {
+        "lite": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "36",
+      "code": "M12",
+      "n_simulators": 1,
+      "counts": {
+        "qwen": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "36",
+      "code": "M7",
+      "n_simulators": 1,
+      "counts": {
+        "deepseek": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "39",
+      "code": "M14",
+      "n_simulators": 1,
+      "counts": {
+        "qwen": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "42",
+      "code": "M8",
+      "n_simulators": 1,
+      "counts": {
+        "turbo": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "49",
+      "code": "M7",
+      "n_simulators": 1,
+      "counts": {
+        "qwen": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "55",
+      "code": "M16",
+      "n_simulators": 1,
+      "counts": {
+        "lite": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "71",
+      "code": "M8",
+      "n_simulators": 1,
+      "counts": {
+        "lite": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "74",
+      "code": "M14",
+      "n_simulators": 1,
+      "counts": {
+        "lite": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "86",
+      "code": "M14",
+      "n_simulators": 1,
+      "counts": {
+        "qwen": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "97",
+      "code": "M14",
+      "n_simulators": 1,
+      "counts": {
+        "qwen": 1
+      }
+    },
+    {
+      "domain": "retail",
+      "task_id": "97",
+      "code": "M4",
+      "n_simulators": 1,
+      "counts": {
+        "glm": 1
+      }
+    }
+  ],
+  "raw_spread": 0.17499999999999993,
+  "filtered_spread": 0.05619651175387275,
+  "strict_spread": 0.049863189148279696
+}

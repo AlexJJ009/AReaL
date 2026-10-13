@@ -1,0 +1,620 @@
+{
+  "status": "pass",
+  "concurrency_is_not_a_gate": true,
+  "runs": {
+    "deepseek": {
+      "run_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-deepseek-test-u0p0",
+      "completed": 240,
+      "success": {
+        "airline": 44,
+        "retail": 129
+      },
+      "manifest": {
+        "add_thinking_tool": false,
+        "benchmark_variant": "fixed",
+        "config_file": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/pinned-worktrees-v3/AReaL/tau2-v3-e0fdf4a3/examples/tau2/config_grpo.yaml",
+        "dispatch_mode": "rolling",
+        "domains": [
+          "airline",
+          "retail"
+        ],
+        "enable_thinking": false,
+        "episode_timeout_seconds": 1800.0,
+        "global_seed": 42,
+        "infra_retries": 3,
+        "max_concurrent_episodes": 256,
+        "max_new_tokens": null,
+        "max_total_tokens": 32768,
+        "model_path": "/data_storage/yl_test/lgx/data-1/.cache/huggingface/hub/models--Qwen--Qwen3.5-4B/snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+        "nl_judge": {
+          "base_url_host": "api.deepseek.com",
+          "model": "openai/deepseek-flash",
+          "source": "configured"
+        },
+        "output_root": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-deepseek-test-u0p0",
+        "overrides": [
+          "econfig.benchmark_variant=fixed",
+          "domains=[airline,retail]",
+          "econfig.domain=mixed",
+          "econfig.enable_thinking=false",
+          "evaluation_rollout.backend=sglang:d8p1t1",
+          "evaluation_rollout.max_concurrent_rollouts=256",
+          "econfig.user_llm=deepseek-flash",
+          "econfig.user_llm_base_url=https://api.deepseek.com",
+          "econfig.user_llm_api_key_env=DEEPSEEK_API_KEY",
+          "econfig.user_llm_num_retries=3",
+          "econfig.user_llm_args.temperature=0",
+          "econfig.nl_judge_llm=deepseek-flash",
+          "econfig.nl_judge_llm_base_url=https://api.deepseek.com",
+          "econfig.nl_judge_llm_api_key_env=DEEPSEEK_API_KEY",
+          "econfig.nl_judge_llm_args.temperature=0.0"
+        ],
+        "planned_episodes": 240,
+        "repeats": 4,
+        "request_seed": null,
+        "schema_version": 1,
+        "task_file_sha256": {
+          "airline": "25086da158eedb97aee3bce2bc131d6acea094267bee6fd1c71933f74d90ef74",
+          "retail": "5b7a8fa30a7615b4e8f8d1fc21a66fb85ba6d337a06ce50f4a9565258098301f"
+        },
+        "task_pack": null,
+        "task_set": "test",
+        "tasks": null,
+        "tau2_revision": "b7ea9074c1cba482b30687fecdb5c8425fd6f619",
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "user_llm": "deepseek-flash",
+        "user_llm_args": {
+          "temperature": 0
+        },
+        "user_llm_base_url": "https://api.deepseek.com"
+      },
+      "manifest_sha256": "904d31daa6c0fe4f177abeb879afdf1396807585b880d7730e421890002dd720",
+      "config_sha256": "77801510a1cd521aa4ba14dc8977e080b0d5303a65dd7af5cc0910991870cdac",
+      "eval_temperature": 0.0,
+      "git": "e0fdf4a318453e6915d33f2cc30cd864666b8b50",
+      "actual_task_sha256": {
+        "airline": "25086da158eedb97aee3bce2bc131d6acea094267bee6fd1c71933f74d90ef74",
+        "retail": "5b7a8fa30a7615b4e8f8d1fc21a66fb85ba6d337a06ce50f4a9565258098301f"
+      },
+      "actual_user_models": {
+        "deepseek-flash": 1384
+      },
+      "opening_anomalies": [],
+      "error_attempts": [
+        {
+          "source_id": "airline:13:trial0",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-deepseek-test-u0p0/trajectories/airline:13:trial0/4b58819be7a44212808ab6a0d5d1c205.json",
+          "error": "τ² simulation failed for airline/13: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32854 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        },
+        {
+          "source_id": "airline:13:trial3",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-deepseek-test-u0p0/trajectories/airline:13:trial3/b005aa8a1f644e6db3ef1ac0c34023ce.json",
+          "error": "τ² simulation failed for airline/13: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32832 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        },
+        {
+          "source_id": "airline:24:trial3",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-deepseek-test-u0p0/trajectories/airline:24:trial3/8a10dba7a4fc44e6b01e9a2135910f70.json",
+          "error": "τ² simulation failed for airline/24: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32882 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        },
+        {
+          "source_id": "airline:31:trial2",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-deepseek-test-u0p0/trajectories/airline:31:trial2/2742bbaa78e9494586b79b2b84fd6e7a.json",
+          "error": "τ² simulation failed for airline/31: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32905 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        },
+        {
+          "source_id": "airline:32:trial2",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-deepseek-test-u0p0/trajectories/airline:32:trial2/481c5d12045c4963b893ba6b9fbbeb8c.json",
+          "error": "τ² simulation failed for airline/32: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=33015 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        },
+        {
+          "source_id": "retail:27:trial3",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-deepseek-test-u0p0/trajectories/retail:27:trial3/16b0fcc7940a40c28102e1473aa1d44d.json",
+          "error": "τ² simulation failed for retail/27: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32859 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        },
+        {
+          "source_id": "retail:27:trial3",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-deepseek-test-u0p0/trajectories/retail:27:trial3/c0d3a91ca07a4c03b048f5f43033082a.json",
+          "error": "τ² simulation failed for retail/27: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32856 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        }
+      ],
+      "error_attempt_counts": {
+        "context_length": 7
+      },
+      "log_occurrences": {
+        "EmptyUserResponseError": 0,
+        "Requests are too frequent": 0,
+        "RateLimitError": 0,
+        "InternalServerError": 0,
+        "BadRequestError": 63
+      },
+      "run_log_sha256": "1617a18e292922ff7a7193b900c9bd85c12b93d182a55c367d50f90747ca2326",
+      "run_log_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-deepseek-test-u0p0/run.log"
+    },
+    "turbo": {
+      "run_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-doubao-test-u0p0-r2",
+      "completed": 240,
+      "success": {
+        "airline": 47,
+        "retail": 105
+      },
+      "manifest": {
+        "add_thinking_tool": false,
+        "benchmark_variant": "fixed",
+        "config_file": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/pinned-worktrees-v3/AReaL/tau2-v3-e0fdf4a3/examples/tau2/config_grpo.yaml",
+        "dispatch_mode": "rolling",
+        "domains": [
+          "airline",
+          "retail"
+        ],
+        "enable_thinking": false,
+        "episode_timeout_seconds": 1800.0,
+        "global_seed": 42,
+        "infra_retries": 3,
+        "max_concurrent_episodes": 256,
+        "max_new_tokens": null,
+        "max_total_tokens": 32768,
+        "model_path": "/data_storage/yl_test/lgx/data-1/.cache/huggingface/hub/models--Qwen--Qwen3.5-4B/snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+        "nl_judge": {
+          "base_url_host": "api.deepseek.com",
+          "model": "openai/deepseek-flash",
+          "source": "configured"
+        },
+        "output_root": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-doubao-test-u0p0-r2",
+        "overrides": [
+          "econfig.benchmark_variant=fixed",
+          "domains=[airline,retail]",
+          "econfig.domain=mixed",
+          "econfig.enable_thinking=false",
+          "evaluation_rollout.backend=sglang:d8p1t1",
+          "evaluation_rollout.max_concurrent_rollouts=256",
+          "econfig.user_llm=doubao-seed-2-1-turbo-260628",
+          "econfig.user_llm_base_url=https://ark.cn-beijing.volces.com/api/v3",
+          "econfig.user_llm_api_key_env=ARK_API_KEY",
+          "econfig.user_llm_num_retries=2",
+          "+econfig.user_llm_args.reasoning_effort=medium",
+          "+econfig.user_llm_args.allowed_openai_params=[reasoning_effort]",
+          "econfig.user_llm_args.temperature=0",
+          "econfig.nl_judge_llm=deepseek-flash",
+          "econfig.nl_judge_llm_base_url=https://api.deepseek.com",
+          "econfig.nl_judge_llm_api_key_env=DEEPSEEK_API_KEY",
+          "econfig.nl_judge_llm_args.temperature=0.0"
+        ],
+        "planned_episodes": 240,
+        "repeats": 4,
+        "request_seed": null,
+        "schema_version": 1,
+        "task_file_sha256": {
+          "airline": "25086da158eedb97aee3bce2bc131d6acea094267bee6fd1c71933f74d90ef74",
+          "retail": "5b7a8fa30a7615b4e8f8d1fc21a66fb85ba6d337a06ce50f4a9565258098301f"
+        },
+        "task_pack": null,
+        "task_set": "test",
+        "tasks": null,
+        "tau2_revision": "b7ea9074c1cba482b30687fecdb5c8425fd6f619",
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "user_llm": "doubao-seed-2-1-turbo-260628",
+        "user_llm_args": {
+          "allowed_openai_params": [
+            "reasoning_effort"
+          ],
+          "reasoning_effort": "medium",
+          "temperature": 0
+        },
+        "user_llm_base_url": "https://ark.cn-beijing.volces.com/api/v3"
+      },
+      "manifest_sha256": "988401f2535a67a57f861abc4dd173df7514ee211cba4e9ef95485321b74bc54",
+      "config_sha256": "3e262a8fe53ba3fa42ce058bf4e3eb39bfad9845094fa40ddd9efc55ead73d8c",
+      "eval_temperature": 0.0,
+      "git": "e0fdf4a318453e6915d33f2cc30cd864666b8b50",
+      "actual_task_sha256": {
+        "airline": "25086da158eedb97aee3bce2bc131d6acea094267bee6fd1c71933f74d90ef74",
+        "retail": "5b7a8fa30a7615b4e8f8d1fc21a66fb85ba6d337a06ce50f4a9565258098301f"
+      },
+      "actual_user_models": {
+        "doubao-seed-2-1-turbo-260628": 1375
+      },
+      "opening_anomalies": [],
+      "error_attempts": [
+        {
+          "source_id": "airline:24:trial0",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-doubao-test-u0p0-r2/trajectories/airline:24:trial0/7849ea60d4fb4f9baa1beda9ed5eefdb.json",
+          "error": "τ² simulation failed for airline/24: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32797 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        },
+        {
+          "source_id": "airline:32:trial3",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-doubao-test-u0p0-r2/trajectories/airline:32:trial3/69e9c039f67a4fbbb139817562f1883d.json",
+          "error": "τ² simulation failed for airline/32: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32898 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        },
+        {
+          "source_id": "retail:102:trial3",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-doubao-test-u0p0-r2/trajectories/retail:102:trial3/47f00e2e4493480e891488e0d997c4d5.json",
+          "error": "τ² simulation failed for retail/102: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32904 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        },
+        {
+          "source_id": "retail:111:trial0",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-doubao-test-u0p0-r2/trajectories/retail:111:trial0/82cb1d5919e34267a640faa5147f24c0.json",
+          "error": "τ² simulation failed for retail/111: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32891 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        }
+      ],
+      "error_attempt_counts": {
+        "context_length": 4
+      },
+      "log_occurrences": {
+        "EmptyUserResponseError": 0,
+        "Requests are too frequent": 0,
+        "RateLimitError": 0,
+        "InternalServerError": 0,
+        "BadRequestError": 36
+      },
+      "run_log_sha256": "8525d14eb800d924e138fcda89e93e5a83c28ccd458588afb5cff9c5abb75cf8",
+      "run_log_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-doubao-test-u0p0-r2/run.log"
+    },
+    "lite": {
+      "run_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-doubao-lite-test-u0p0",
+      "completed": 240,
+      "success": {
+        "airline": 46,
+        "retail": 122
+      },
+      "manifest": {
+        "add_thinking_tool": false,
+        "benchmark_variant": "fixed",
+        "config_file": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/pinned-worktrees-v3/AReaL/tau2-v3-e0fdf4a3/examples/tau2/config_grpo.yaml",
+        "dispatch_mode": "rolling",
+        "domains": [
+          "airline",
+          "retail"
+        ],
+        "enable_thinking": false,
+        "episode_timeout_seconds": 1800.0,
+        "global_seed": 42,
+        "infra_retries": 3,
+        "max_concurrent_episodes": 256,
+        "max_new_tokens": null,
+        "max_total_tokens": 32768,
+        "model_path": "/data_storage/yl_test/lgx/data-1/.cache/huggingface/hub/models--Qwen--Qwen3.5-4B/snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+        "nl_judge": {
+          "base_url_host": "api.deepseek.com",
+          "model": "openai/deepseek-flash",
+          "source": "configured"
+        },
+        "output_root": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-doubao-lite-test-u0p0",
+        "overrides": [
+          "econfig.benchmark_variant=fixed",
+          "domains=[airline,retail]",
+          "econfig.domain=mixed",
+          "econfig.enable_thinking=false",
+          "evaluation_rollout.backend=sglang:d8p1t1",
+          "evaluation_rollout.max_concurrent_rollouts=256",
+          "econfig.user_llm=doubao-seed-2-1-lite-260915",
+          "econfig.user_llm_base_url=https://ark.cn-beijing.volces.com/api/plan/v3",
+          "econfig.user_llm_api_key_env=ARK_PLAN_API_KEY",
+          "econfig.user_llm_num_retries=2",
+          "+econfig.user_llm_args.reasoning_effort=medium",
+          "+econfig.user_llm_args.allowed_openai_params=[reasoning_effort]",
+          "econfig.user_llm_args.temperature=0",
+          "econfig.nl_judge_llm=deepseek-flash",
+          "econfig.nl_judge_llm_base_url=https://api.deepseek.com",
+          "econfig.nl_judge_llm_api_key_env=DEEPSEEK_API_KEY",
+          "econfig.nl_judge_llm_args.temperature=0.0"
+        ],
+        "planned_episodes": 240,
+        "repeats": 4,
+        "request_seed": null,
+        "schema_version": 1,
+        "task_file_sha256": {
+          "airline": "25086da158eedb97aee3bce2bc131d6acea094267bee6fd1c71933f74d90ef74",
+          "retail": "5b7a8fa30a7615b4e8f8d1fc21a66fb85ba6d337a06ce50f4a9565258098301f"
+        },
+        "task_pack": null,
+        "task_set": "test",
+        "tasks": null,
+        "tau2_revision": "b7ea9074c1cba482b30687fecdb5c8425fd6f619",
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "user_llm": "doubao-seed-2-1-lite-260915",
+        "user_llm_args": {
+          "allowed_openai_params": [
+            "reasoning_effort"
+          ],
+          "reasoning_effort": "medium",
+          "temperature": 0
+        },
+        "user_llm_base_url": "https://ark.cn-beijing.volces.com/api/plan/v3"
+      },
+      "manifest_sha256": "ccf7df2c330a63a70f95388ba8a0e820cb3d0506cb73f2e0108989315bedc9c5",
+      "config_sha256": "26d8203afab5015ae06e7ae7a6b714b7fbfeb63fa7cf6847294b8fadfdb02c1e",
+      "eval_temperature": 0.0,
+      "git": "e0fdf4a318453e6915d33f2cc30cd864666b8b50",
+      "actual_task_sha256": {
+        "airline": "25086da158eedb97aee3bce2bc131d6acea094267bee6fd1c71933f74d90ef74",
+        "retail": "5b7a8fa30a7615b4e8f8d1fc21a66fb85ba6d337a06ce50f4a9565258098301f"
+      },
+      "actual_user_models": {
+        "doubao-seed-2-1-lite-260915": 1288
+      },
+      "opening_anomalies": [],
+      "error_attempts": [
+        {
+          "source_id": "airline:44:trial1",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-doubao-lite-test-u0p0/trajectories/airline:44:trial1/8fb6e8a1aa364d2cb0159cea2546c909.json",
+          "error": "τ² simulation failed for airline/44: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32991 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        },
+        {
+          "source_id": "airline:6:trial3",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-doubao-lite-test-u0p0/trajectories/airline:6:trial3/b6ab3fa1a4f94016810fd1365c91c1cf.json",
+          "error": "τ² simulation failed for airline/6: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32951 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        },
+        {
+          "source_id": "retail:36:trial3",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-doubao-lite-test-u0p0/trajectories/retail:36:trial3/5d707d252cfa4625996b4548bebd8acd.json",
+          "error": "τ² simulation failed for retail/36: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32803 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        }
+      ],
+      "error_attempt_counts": {
+        "context_length": 3
+      },
+      "log_occurrences": {
+        "EmptyUserResponseError": 0,
+        "Requests are too frequent": 0,
+        "RateLimitError": 0,
+        "InternalServerError": 0,
+        "BadRequestError": 27
+      },
+      "run_log_sha256": "4a427f45492f2b678e4d5450a6435396b5b368b5387ab76b969ce01787244211",
+      "run_log_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-doubao-lite-test-u0p0/run.log"
+    },
+    "glm": {
+      "run_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-glm53-test-u0p0-r2",
+      "completed": 240,
+      "success": {
+        "airline": 46,
+        "retail": 136
+      },
+      "manifest": {
+        "add_thinking_tool": false,
+        "benchmark_variant": "fixed",
+        "config_file": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/pinned-worktrees-v3/AReaL/tau2-v3-e0fdf4a3/examples/tau2/config_grpo.yaml",
+        "dispatch_mode": "rolling",
+        "domains": [
+          "airline",
+          "retail"
+        ],
+        "enable_thinking": false,
+        "episode_timeout_seconds": 1800.0,
+        "global_seed": 42,
+        "infra_retries": 3,
+        "max_concurrent_episodes": 32,
+        "max_new_tokens": null,
+        "max_total_tokens": 32768,
+        "model_path": "/data_storage/yl_test/lgx/data-1/.cache/huggingface/hub/models--Qwen--Qwen3.5-4B/snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+        "nl_judge": {
+          "base_url_host": "api.deepseek.com",
+          "model": "openai/deepseek-flash",
+          "source": "configured"
+        },
+        "output_root": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-glm53-test-u0p0-r2",
+        "overrides": [
+          "econfig.benchmark_variant=fixed",
+          "domains=[airline,retail]",
+          "econfig.domain=mixed",
+          "econfig.enable_thinking=false",
+          "evaluation_rollout.backend=sglang:d8p1t1",
+          "evaluation_rollout.max_concurrent_rollouts=32",
+          "econfig.user_llm=glm-5.3",
+          "econfig.user_llm_base_url=https://ark.cn-beijing.volces.com/api/plan/v3",
+          "econfig.user_llm_api_key_env=ARK_PLAN_API_KEY",
+          "econfig.user_llm_num_retries=6",
+          "econfig.user_llm_args.temperature=0",
+          "econfig.nl_judge_llm=deepseek-flash",
+          "econfig.nl_judge_llm_base_url=https://api.deepseek.com",
+          "econfig.nl_judge_llm_api_key_env=DEEPSEEK_API_KEY",
+          "econfig.nl_judge_llm_args.temperature=0.0"
+        ],
+        "planned_episodes": 240,
+        "repeats": 4,
+        "request_seed": null,
+        "schema_version": 1,
+        "task_file_sha256": {
+          "airline": "25086da158eedb97aee3bce2bc131d6acea094267bee6fd1c71933f74d90ef74",
+          "retail": "5b7a8fa30a7615b4e8f8d1fc21a66fb85ba6d337a06ce50f4a9565258098301f"
+        },
+        "task_pack": null,
+        "task_set": "test",
+        "tasks": null,
+        "tau2_revision": "b7ea9074c1cba482b30687fecdb5c8425fd6f619",
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "user_llm": "glm-5.3",
+        "user_llm_args": {
+          "temperature": 0
+        },
+        "user_llm_base_url": "https://ark.cn-beijing.volces.com/api/plan/v3"
+      },
+      "manifest_sha256": "b0de746798f0fbf95dc54c56eed81cf4666dc54485e803aeab2c20a6ec00858d",
+      "config_sha256": "133a97af1d67526d1bf97d31164a7abf7b09a9ce890fa95c0f0249f9d8cfc6c6",
+      "eval_temperature": 0.0,
+      "git": "e0fdf4a318453e6915d33f2cc30cd864666b8b50",
+      "actual_task_sha256": {
+        "airline": "25086da158eedb97aee3bce2bc131d6acea094267bee6fd1c71933f74d90ef74",
+        "retail": "5b7a8fa30a7615b4e8f8d1fc21a66fb85ba6d337a06ce50f4a9565258098301f"
+      },
+      "actual_user_models": {
+        "glm-5.3": 1741
+      },
+      "opening_anomalies": [],
+      "error_attempts": [
+        {
+          "source_id": "airline:44:trial0",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-glm53-test-u0p0-r2/trajectories/airline:44:trial0/804284d45b3a48bb8e9a01dd094f20e9.json",
+          "error": "τ² simulation failed for airline/44: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32931 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        }
+      ],
+      "error_attempt_counts": {
+        "context_length": 1
+      },
+      "log_occurrences": {
+        "EmptyUserResponseError": 0,
+        "Requests are too frequent": 0,
+        "RateLimitError": 0,
+        "InternalServerError": 0,
+        "BadRequestError": 9
+      },
+      "run_log_sha256": "5e29b31b534332587bf7880e41541dd4c12809ca0276981d276ec77a2b18e148",
+      "run_log_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-glm53-test-u0p0-r2/run.log"
+    },
+    "qwen": {
+      "run_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/step0-selfhost-user/full-qwen35user-v3data",
+      "completed": 240,
+      "success": {
+        "airline": 35,
+        "retail": 105
+      },
+      "manifest": {
+        "add_thinking_tool": false,
+        "benchmark_variant": "fixed",
+        "config_file": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/pinned-worktrees-v3/AReaL/tau2-v3-e0fdf4a3/examples/tau2/config_grpo.yaml",
+        "dispatch_mode": "rolling",
+        "domains": [
+          "airline",
+          "retail"
+        ],
+        "enable_thinking": false,
+        "episode_timeout_seconds": 1800.0,
+        "global_seed": 42,
+        "infra_retries": 3,
+        "max_concurrent_episodes": 224,
+        "max_new_tokens": null,
+        "max_total_tokens": 32768,
+        "model_path": "/data_storage/yl_test/lgx/data-1/.cache/huggingface/hub/models--Qwen--Qwen3.5-4B/snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a",
+        "nl_judge": {
+          "base_url_host": "api.deepseek.com",
+          "model": "openai/deepseek-flash",
+          "source": "configured"
+        },
+        "output_root": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/step0-selfhost-user/full-qwen35user-v3data",
+        "overrides": [
+          "econfig.benchmark_variant=fixed",
+          "domains=[airline,retail]",
+          "econfig.domain=mixed",
+          "econfig.enable_thinking=false",
+          "econfig.user_llm=qwen35-4b-user-step0",
+          "econfig.user_llm_base_url=http://127.0.0.1:40080/v1",
+          "econfig.user_llm_api_key_env=TAU2_LOCAL_USER_API_KEY",
+          "++econfig.user_llm_args={temperature:0,top_p:1.0,max_tokens:4096,extra_body:{chat_template_kwargs:{enable_thinking:false}}}",
+          "econfig.user_llm_num_retries=3",
+          "econfig.nl_judge_llm=deepseek-flash",
+          "econfig.nl_judge_llm_base_url=https://api.deepseek.com",
+          "econfig.nl_judge_llm_api_key_env=DEEPSEEK_API_KEY",
+          "++econfig.nl_judge_llm_args={temperature:0,top_p:1.0}",
+          "econfig.nl_judge_llm_num_retries=3",
+          "evaluation_rollout.backend=sglang:d7p1t1",
+          "evaluation_rollout.max_concurrent_rollouts=224",
+          "cluster.n_gpus_per_node=7",
+          "rollout.agent.chat_template_type=concat",
+          "rollout.agent.export_style=concat",
+          "rollout.agent.tool_call_parser=qwen3_coder",
+          "rollout.agent.reasoning_parser=qwen3",
+          "evaluation_rollout.agent.chat_template_type=concat",
+          "evaluation_rollout.agent.export_style=concat",
+          "evaluation_rollout.agent.tool_call_parser=qwen3_coder",
+          "evaluation_rollout.agent.reasoning_parser=qwen3"
+        ],
+        "planned_episodes": 240,
+        "repeats": 4,
+        "request_seed": null,
+        "schema_version": 1,
+        "task_file_sha256": {
+          "airline": "25086da158eedb97aee3bce2bc131d6acea094267bee6fd1c71933f74d90ef74",
+          "retail": "5b7a8fa30a7615b4e8f8d1fc21a66fb85ba6d337a06ce50f4a9565258098301f"
+        },
+        "task_pack": null,
+        "task_set": "test",
+        "tasks": null,
+        "tau2_revision": "b7ea9074c1cba482b30687fecdb5c8425fd6f619",
+        "temperature": 0.0,
+        "top_p": 1.0,
+        "user_llm": "qwen35-4b-user-step0",
+        "user_llm_args": {
+          "extra_body": {
+            "chat_template_kwargs": {
+              "enable_thinking": false
+            }
+          },
+          "max_tokens": 4096,
+          "temperature": 0,
+          "top_p": 1.0
+        },
+        "user_llm_base_url": "http://127.0.0.1:40080/v1"
+      },
+      "manifest_sha256": "20f03938bc07eb33e3920f9d50abfb742d7868c77c75a32c6db2cdc8269a189b",
+      "config_sha256": "f6ec62954e450081901bcc3eafcc49ca7f0829e0c4478bb09ba42565a5cff9b3",
+      "eval_temperature": 0.0,
+      "git": "e0fdf4a318453e6915d33f2cc30cd864666b8b50",
+      "actual_task_sha256": {
+        "airline": "25086da158eedb97aee3bce2bc131d6acea094267bee6fd1c71933f74d90ef74",
+        "retail": "5b7a8fa30a7615b4e8f8d1fc21a66fb85ba6d337a06ce50f4a9565258098301f"
+      },
+      "actual_user_models": {
+        "qwen35-4b-user-step0": 1680
+      },
+      "opening_anomalies": [],
+      "error_attempts": [
+        {
+          "source_id": "airline:2:trial1",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/step0-selfhost-user/full-qwen35user-v3data/trajectories/airline:2:trial1/bff47e743c934728af003ab608549ca6.json",
+          "error": "τ² simulation failed for airline/2: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32793 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        },
+        {
+          "source_id": "retail:100:trial2",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/step0-selfhost-user/full-qwen35user-v3data/trajectories/retail:100:trial2/9235cbc87fb8425c9d04491a62dc3328.json",
+          "error": "τ² simulation failed for retail/100: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=32910 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        },
+        {
+          "source_id": "retail:111:trial3",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/step0-selfhost-user/full-qwen35user-v3data/trajectories/retail:111:trial3/22ba9b1ec0fd4c4596d4f2f86d3f721c.json",
+          "error": "τ² simulation failed for retail/111: BadRequestError: litellm.BadRequestError: OpenAIException - Error code: 400 - {'detail': {'code': 'context_length_exceeded', 'message': 'areal_context_limit: prompt_tokens=36876 exceeds max_total_tokens=32768; max_new_tokens<=0 before generation'}}",
+          "error_type": "Tau2InfrastructureError"
+        },
+        {
+          "source_id": "retail:12:trial0",
+          "trajectory_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/step0-selfhost-user/full-qwen35user-v3data/trajectories/retail:12:trial0/071e4b46beed4de780ba111551419c36.json",
+          "error": "τ² simulation failed for retail/12: InternalServerError: litellm.InternalServerError: InternalServerError: OpenAIException - Connection error.",
+          "error_type": "Tau2InfrastructureError"
+        }
+      ],
+      "error_attempt_counts": {
+        "context_length": 3,
+        "connection": 1
+      },
+      "log_occurrences": {
+        "EmptyUserResponseError": 0,
+        "Requests are too frequent": 0,
+        "RateLimitError": 0,
+        "InternalServerError": 12,
+        "BadRequestError": 27
+      },
+      "run_log_sha256": "d1ef9e52012868f6b1b9cd0d43b077fccae5ff809c76d46c654bd190b8f0e1c5",
+      "run_log_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/step0-selfhost-user/full-qwen35user-v3data/run.log"
+    }
+  }
+}
