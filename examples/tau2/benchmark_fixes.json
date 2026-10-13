@@ -1,5 +1,5 @@
 {
- "_doc": "Per-task fixes applied on top of tau2-bench b7ea907 to build the 'fixed' benchmark variant: reward bases and task replacements from the PR head commits in 'sources', then our own 'patches' from the 2026-10-10 Retail audit, and the train tasks left out of training. Build with scripts/tau2/build_fixed_data.py.",
+ "_doc": "Per-task fixes applied on top of tau2-bench b7ea907 to build the 'fixed' benchmark variant: reward bases and task replacements from the PR head commits in 'sources', then our own 'patches' from the 2026-10-10 Retail audit, and the train tasks left out of training. Build with scripts/tau2/build_fixed_data.py. Fixed-v3 adds scenario clarifications for airline:29 and retail:5/55, the policy-required airline:37 hand-off, and reservation lookup checks on airline refusal tasks 26/31/48; apply_transfer_rule is unchanged.",
  "base_revision": "b7ea9074c1cba482b30687fecdb5c8425fd6f619",
  "sources": {
   "reward_basis": {
@@ -11,7 +11,9 @@
    "commit": "cc3103351cdbb9cbdee446cf46cd857ac1e10972"
   },
   "patches": {
-   "audit": "docs/research/2026-10-09-tau2-high-baseline-audit/README.md"
+   "audit": "docs/research/2026-10-09-tau2-high-baseline-audit/README.md",
+   "case_study": "docs/research/2026-10-09-tau2-high-baseline-audit/user-sim-case-study-20261012/REPORT.md",
+   "evidence_root": "user-sim-20261012/"
   }
  },
  "domains": {
@@ -177,7 +179,297 @@
     ]
    },
    "replace_tasks": {},
-   "patches": {},
+   "patches": {
+    "26": {
+     "reason": "Fixed-v3: the refusal task keeps an unchanged DB, so an empty trajectory passes. Require the reservation lookup that every cited episode already performs; no write or transfer is added.",
+     "evidence": [
+      {
+       "trajectory": "api-user/deepseek-base-u0p0/trajectories/airline:26:trial3/2de120743bd5432681a10146f7201a0b.json",
+       "messages": [
+        13
+       ]
+      },
+      {
+       "trajectory": "api-user/deepseek-base-u0p0/trajectories/airline:26:trial1/8b0ef107f6224d668b7742a460c48a33.json",
+       "messages": [
+        15
+       ]
+      },
+      {
+       "trajectory": "api-user/doubao-base-u0p0/trajectories/airline:26:trial2/d97244e2da3d42759c0dc952e11d6a0a.json",
+       "messages": [
+        13
+       ]
+      },
+      {
+       "trajectory": "step0-selfhost-user/full-qwen35user-v2/trajectories/airline:26:trial2/bc2b74cb91304f7a80936eb0296e7c0f.json",
+       "messages": [
+        13
+       ]
+      }
+     ],
+     "ops": [
+      {
+       "op": "set",
+       "path": "evaluation_criteria.actions",
+       "value": [
+        {
+         "action_id": "26_lookup",
+         "requestor": "assistant",
+         "name": "get_reservation_details",
+         "arguments": {
+          "reservation_id": "3FRNFB"
+         },
+         "info": null,
+         "compare_args": [
+          "reservation_id"
+         ]
+        }
+       ]
+      },
+      {
+       "op": "set",
+       "path": "evaluation_criteria.reward_basis",
+       "value": [
+        "DB",
+        "NL_ASSERTION",
+        "ACTION"
+       ]
+      }
+     ]
+    },
+    "29": {
+     "reason": "Fixed-v3 B1: insurance and payment for the replacement booking are unspecified; gold uses no insurance and the original Visa. DeepSeek trial 2 already declines insurance but chooses a different card.",
+     "evidence": [
+      {
+       "trajectory": "api-user/deepseek-base-u0p0/trajectories/airline:29:trial1/6bdd7a712d084bc185c248de713ad6fd.json",
+       "messages": [
+        1,
+        3,
+        9,
+        15,
+        21,
+        23
+       ]
+      },
+      {
+       "trajectory": "api-user/deepseek-base-u0p0/trajectories/airline:29:trial2/bc256c70e5b64726965157f7774cd8bf.json",
+       "messages": [
+        1,
+        3,
+        5,
+        9,
+        17,
+        21,
+        27
+       ]
+      },
+      {
+       "trajectory": "api-user/deepseek-base-u0p0/trajectories/airline:29:trial3/77f6090a6b034e58bfc9f6ca34d98964.json",
+       "messages": [
+        1,
+        3,
+        7,
+        11,
+        21,
+        27,
+        31,
+        35
+       ]
+      },
+      {
+       "trajectory": "step0-selfhost-user/full-qwen35user-v2/trajectories/airline:29:trial1/6bd8edb03d2b4248a39c5b666f4da18a.json",
+       "messages": [
+        1,
+        3,
+        7,
+        13,
+        19,
+        23
+       ]
+      }
+     ],
+     "ops": [
+      {
+       "op": "append_text",
+       "path": "user_scenario.instructions.task_instructions",
+       "text": "For the new reservation, decline travel insurance and use the same credit card as the original reservation (Visa ending in 6521)."
+      }
+     ]
+    },
+    "31": {
+     "reason": "Fixed-v3: the refusal task keeps an unchanged DB, so an empty trajectory passes. Require the reservation lookup that every cited episode already performs; no write or transfer is added.",
+     "evidence": [
+      {
+       "trajectory": "api-user/deepseek-base-u0p0/trajectories/airline:31:trial2/248610c64da04d3ea0c4fa6e5e74f5b3.json",
+       "messages": [
+        15
+       ]
+      },
+      {
+       "trajectory": "api-user/deepseek-base-u0p0/trajectories/airline:31:trial0/925d9768c7b549b79eb384cbaace9c46.json",
+       "messages": [
+        17
+       ]
+      },
+      {
+       "trajectory": "api-user/doubao-base-u0p0/trajectories/airline:31:trial1/074a2bb5b94b4fd1ad4d0766c07fa18d.json",
+       "messages": [
+        15
+       ]
+      },
+      {
+       "trajectory": "step0-selfhost-user/full-qwen35user-v2/trajectories/airline:31:trial3/4406b1b418fc4351a841525a391fc467.json",
+       "messages": [
+        23
+       ]
+      }
+     ],
+     "ops": [
+      {
+       "op": "set",
+       "path": "evaluation_criteria.actions",
+       "value": [
+        {
+         "action_id": "31_lookup",
+         "requestor": "assistant",
+         "name": "get_reservation_details",
+         "arguments": {
+          "reservation_id": "DF89BM"
+         },
+         "info": null,
+         "compare_args": [
+          "reservation_id"
+         ]
+        }
+       ]
+      },
+      {
+       "op": "set",
+       "path": "evaluation_criteria.reward_basis",
+       "value": [
+        "DB",
+        "NL_ASSERTION",
+        "ACTION"
+       ]
+      }
+     ]
+    },
+    "37": {
+     "reason": "Fixed-v3 B2 and early-transfer success: Airline cancellation policy requires a hand-off for already-flown NQNU5R. Gold omitted this mandatory transfer, rejecting eight completed hand-offs and accepting DeepSeek trial 1 without one.",
+     "evidence": [
+      {
+       "trajectory": "api-user/deepseek-base-u0p0/trajectories/airline:37:trial1/ae17d965083847baa76875e979744895.json",
+       "messages": [
+        18,
+        21
+       ]
+      },
+      {
+       "trajectory": "api-user/deepseek-base-u0p0/trajectories/airline:37:trial0/b6e56b32142e4a5f9f1677ea6d6a488d.json",
+       "messages": [
+        18,
+        20,
+        23
+       ]
+      },
+      {
+       "trajectory": "api-user/deepseek-base-u0p0/trajectories/airline:37:trial2/a5ca84726a734b9d80da8e02144f2dd7.json",
+       "messages": [
+        18,
+        20,
+        23
+       ]
+      },
+      {
+       "trajectory": "api-user/deepseek-base-u0p0/trajectories/airline:37:trial3/00930d9db8074044ae6300939647cfdc.json",
+       "messages": [
+        18,
+        20,
+        23
+       ]
+      },
+      {
+       "trajectory": "api-user/doubao-base-u0p0/trajectories/airline:37:trial0/e0663e9a105941d98702d9fd59f25375.json",
+       "messages": [
+        18,
+        20,
+        23
+       ]
+      },
+      {
+       "trajectory": "api-user/doubao-base-u0p0/trajectories/airline:37:trial1/125ff84a8dea4689be69c13ac9a6dfc0.json",
+       "messages": [
+        22,
+        26,
+        29
+       ]
+      },
+      {
+       "trajectory": "api-user/doubao-base-u0p0/trajectories/airline:37:trial2/089fbe113ff04d34b1ee775baf257305.json",
+       "messages": [
+        18,
+        20,
+        23
+       ]
+      },
+      {
+       "trajectory": "api-user/doubao-base-u0p0/trajectories/airline:37:trial3/675a21a8d0784f9997159dd6920784b5.json",
+       "messages": [
+        22,
+        24,
+        27
+       ]
+      },
+      {
+       "trajectory": "step0-selfhost-user/full-qwen35user-v2/trajectories/airline:37:trial1/8c8d7346633a49e381e301c053710cb7.json",
+       "messages": [
+        12,
+        14,
+        17
+       ]
+      }
+     ],
+     "ops": [
+      {
+       "op": "append",
+       "path": "evaluation_criteria.actions",
+       "value": {
+        "action_id": "37_transfer",
+        "requestor": "assistant",
+        "name": "transfer_to_human_agents",
+        "arguments": {
+         "summary": "NQNU5R has already-flown flight segments, so its cancellation request requires human assistance. M20IZO has been upgraded to business; IFOYYZ is not eligible for cancellation."
+        },
+        "info": null,
+        "compare_args": []
+       }
+      }
+     ]
+    },
+    "48": {
+     "reason": "Fixed-v3: the refusal task keeps an unchanged DB, so an empty trajectory passes. Require the reservation lookup that every cited episode already performs; no write or transfer is added.",
+     "evidence": [
+      {
+       "trajectory": "step0-selfhost-user/full-qwen35user-v2/trajectories/airline:48:trial2/97e38b7e126143b89fc9f21fdc37b826.json",
+       "messages": [
+        9
+       ]
+      }
+     ],
+     "ops": [
+      {
+       "op": "set",
+       "path": "evaluation_criteria.reward_basis",
+       "value": [
+        "DB",
+        "NL_ASSERTION",
+        "ACTION"
+       ]
+      }
+     ]
+    }
+   },
    "exclude_from_train": {
     "tasks": [],
     "reason": ""
@@ -718,6 +1010,28 @@
     }
    },
    "patches": {
+    "5": {
+     "reason": "Fixed-v3 B1: the scenario gives only an account ID and zip, while policy and gold authentication require a first and last name.",
+     "evidence": [
+      {
+       "trajectory": "api-user/deepseek-base-u0p0/trajectories/retail:5:trial3/9cba62ca68d0403eb1b63d1cd09c38b5.json",
+       "messages": [
+        1,
+        3,
+        5,
+        7,
+        9
+       ]
+      }
+     ],
+     "ops": [
+      {
+       "op": "append_text",
+       "path": "user_scenario.instructions.known_info",
+       "text": "Your name is Mei Kovacs."
+      }
+     ]
+    },
     "16": {
      "reason": "Refund method unspecified; gold refunds to PayPal.",
      "ops": [
@@ -776,6 +1090,29 @@
     },
     "38": {
      "reason": "Cancel reason unspecified; gold uses 'no longer needed'.",
+     "ops": [
+      {
+       "op": "append_text",
+       "path": "user_scenario.instructions.task_instructions",
+       "text": "If the agent asks for the reason for cancelling an order, say it is no longer needed."
+      }
+     ]
+    },
+    "55": {
+     "reason": "Fixed-v3 B1: the cancellation reason is unspecified; gold uses 'no longer needed', while the user legally chose 'ordered by mistake'.",
+     "evidence": [
+      {
+       "trajectory": "step0-selfhost-user/full-qwen35user-v2/trajectories/retail:55:trial3/ba46462c091e44dbba93f14a43cbc6ff.json",
+       "messages": [
+        1,
+        3,
+        23,
+        29,
+        35,
+        37
+       ]
+      }
+     ],
      "ops": [
       {
        "op": "append_text",

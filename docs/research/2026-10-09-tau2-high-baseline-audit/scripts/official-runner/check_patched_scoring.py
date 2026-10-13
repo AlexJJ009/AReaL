@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Score synthetic trajectories on the patched fixed Retail tasks.
+"""Score synthetic trajectories on the patched fixed Airline and Retail tasks.
 
 For each patched task: an empty trajectory, the gold trajectory (gold tool calls
 plus one assistant message that states every communicate_info string), and the
@@ -16,7 +16,7 @@ from examples.tau2 import benchmark_variant
 
 
 def main() -> int:
-    benchmark_variant.activate("fixed", ["retail"])
+    benchmark_variant.activate("fixed", benchmark_variant.FIXED_DOMAINS)
     from tau2.data_model.message import AssistantMessage, ToolCall, ToolMessage
     from tau2.data_model.simulation import RewardInfo, SimulationRun
     from tau2.evaluator import evaluator
@@ -26,11 +26,10 @@ def main() -> int:
     evaluator.NLAssertionsEvaluator.calculate_reward = staticmethod(
         lambda **_: RewardInfo(reward=1.0)
     )
-    patched = benchmark_variant.load_fixes()["domains"]["retail"]["patches"]
-    tasks = {t.id: t for t in registry.get_tasks_loader("retail")("base")}
+    fixes = benchmark_variant.load_fixes()["domains"]
 
-    def score(task, actions, say):
-        env = registry.get_env_constructor("retail")()
+    def score(domain, task, actions, say):
+        env = registry.get_env_constructor(domain)()
         messages = []
         for i, action in enumerate(actions):
             call = ToolCall(id=str(i), name=action.name, arguments=action.arguments)
@@ -51,27 +50,29 @@ def main() -> int:
             messages=messages,
         )
         info = evaluate_simulation(
-            domain="retail",
+            domain=domain,
             task=task,
             simulation=run,
             evaluation_type=EvaluationType.ALL,
             solo_mode=False,
         )
         return benchmark_variant.apply_transfer_rule(
-            task, messages, info, "retail"
+            task, messages, info, domain
         ).reward
 
     rows = {}
-    for task_id in patched:
-        task = tasks[task_id]
-        gold = task.evaluation_criteria.actions or []
-        say = task.evaluation_criteria.communicate_info or []
-        no_transfer = [a for a in gold if a.name != benchmark_variant.TRANSFER_TOOL]
-        rows[task_id] = {
-            "empty": score(task, [], []),
-            "gold": score(task, gold, say),
-            "gold_without_transfer": score(task, no_transfer, say),
-        }
+    for domain in benchmark_variant.FIXED_DOMAINS:
+        tasks = {t.id: t for t in registry.get_tasks_loader(domain)("base")}
+        for task_id in fixes[domain]["patches"]:
+            task = tasks[task_id]
+            gold = task.evaluation_criteria.actions or []
+            say = task.evaluation_criteria.communicate_info or []
+            no_transfer = [a for a in gold if a.name != benchmark_variant.TRANSFER_TOOL]
+            rows[f"{domain}:{task_id}"] = {
+                "empty": score(domain, task, [], []),
+                "gold": score(domain, task, gold, say),
+                "gold_without_transfer": score(domain, task, no_transfer, say),
+            }
     print(json.dumps(rows, indent=1))
     bad = [t for t, r in rows.items() if r["gold"] != 1.0 or r["empty"] != 0.0]
     print("gold<1 or empty>0:", bad)
