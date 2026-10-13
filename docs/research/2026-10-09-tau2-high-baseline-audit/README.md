@@ -2980,7 +2980,7 @@ $\beta$ 不改变梯度的期望，只降低方差。这与 Mao et al.（16.3）
 **汇合点**：case study 出来后，看主要的用户侧失败是"给定 agent
 的说法仍然随机"（本方法管得到），还是"系统性偏离"（管不到）。后者占主导时改方法；代码改动小，返工成本低。
 
-### 16.14 critic₀ 扩数据实验（2026-10-12，待启动）
+### 16.14 critic₀ 扩数据实验（2026-10-12；479 完成，480 运行中）
 
 **要回答的问题**：训练集从官方 train 扩到"AReaL pack v2 + 官方 fixed train"之后，Qwen3.5-4B 的 critic₀ 在官方
 fixed test 上的 explained variance 能否变成正的。16.13 的方法线和 SAO 都以此为前提。
@@ -3060,12 +3060,117 @@ token）估算，约 16M prompt 和 2.2M completion token。上一次每步约 3
 
 **队列**（pueue `gpu8` 组，排在另一个会话的用户模拟器实验 473–477 之后，依次执行）：
 
-| 任务                                                                                        | 内容                                                              | 依赖           |
-| ------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- | -------------- |
-| 478                                                                                         | Instruct smoke：tune 模式，2 步，验证 dev 20 题，约 52 条 episode | 无             |
-| 479                                                                                         | Qwen3.5 正式：94 步                                               | 无             |
-| 480                                                                                         | Instruct 正式：94 步                                              | 478 成功才运行 |
-| `scripts/critic-pack/`）。结果在 `<name>/tau2-critic-fit-evidence/validation-step-*.json`。 |                                                                   |                |
+| 任务 | 内容                                                              | 依赖           |
+| ---- | ----------------------------------------------------------------- | -------------- |
+| 478  | Instruct smoke：tune 模式，2 步，验证 dev 20 题，约 52 条 episode | 无             |
+| 479  | Qwen3.5 正式：94 步                                               | 无             |
+| 480  | Instruct 正式：94 步                                              | 478 成功才运行 |
+
+#### 16.14.1 结果（2026-10-12 晚）
+
+479（Qwen3.5，11:10–16:08）和 smoke 478 正常结束；480（Instruct）运行中，结果出来后补。验证集是 fixed test 60 题，EV
+按 token 计算：
+
+|                    | 总体 EV | Airline EV | Retail EV | 总体 MSE / 目标方差 |
+| ------------------ | ------- | ---------- | --------- | ------------------- |
+| 上一次，第 24 步   | −1.05   | −0.59      | −0.92     | 0.51 / 0.16         |
+| Qwen3.5，第 90 步  | −0.04   | −0.08      | −0.35     | 0.28 / 0.22         |
+| Qwen3.5，第 94 步  | +0.15   | +0.04      | −0.08     | 0.195 / 0.217       |
+| Instruct，第 60 步 | −0.01   | −0.07      | −0.00     | 0.29 / 0.23         |
+
+第 94 步的 +0.15 不算"EV 变正"：前一次验证还是负的；分领域看，两个领域的 MSE 都比直接预测本领域均值差（Airline 0.286 对
+0.245，Retail 0.131 对 0.122），总体 EV 的正值主要来自"Airline 比 Retail 难"这一领域差异。
+
+**运行健康**：Qwen3.5 无 infra 失败；Instruct 有 1 次 DeepSeek 返回空 user 回复（retail_414），重试后成功。日志里的
+`Error in golden actions … not found` 与上一次 critic 逐条相同，来自官方 retail 题故意设计的"先给错邮箱/订单号"，不影响
+reward。Instruct 有 9 次工具调用 JSON 格式错误，按失败计分，是模型本身的格式问题。user 用量：Qwen3.5 15.5M prompt + 2.3M
+completion token。
+
+**观察到的现象：**
+
+1. **Qwen3.5 的 pack 太简单**：训练 batch 成功率 0.81–1.00，94 步里 29 步整批为 1；只有每个 epoch 末尾的官方题降到
+   0.27–0.64。
+1. **Qwen3.5 的预测水平来回漂**：训练侧 `old_value/avg` 常在 1.2–1.9（目标最大为 1），验证 bias 在 −0.68 到 +1.07
+   之间。16 个验证点上，验证 bias 与当步训练 batch 的预测均值相关 0.82，与最近 3 个 batch 的目标均值相关 −0.00：漂移来自 critic
+   自身，不是在追 batch 的成功率。
+1. **Instruct 不漂，但学到的是训练集均值**：`old_value` 稳定跟住约 0.6，第二个 epoch 训练 EV 在 0 到 +0.1；但 test
+   成功率只有 0.37，验证 bias 一直是 +0.2 到 +0.45。Instruct 走通用的
+   `AutoModelForTokenClassification`，head 带 bias；Qwen3.5 的 head 不带 bias（见 16.14.3）。两者只有
+   Qwen3.5 漂，与"无 bias 时整体水平只能靠骨干表示、每次更新都会整体平移"的推测一致，但 两次运行的 actor 也不同，这只是相关证据。
+
+#### 16.14.2 两类问题
+
+- **A：整体水平漂移。** SAO 的 advantage 约为 $R - V_t$，$V$ 整体偏高 0.6，所有 token 的 advantage 都被压低
+  0.6，与 actor 做得好坏无关。A 不修，critic 有害。
+- **B：领域内能否区分成败。** A 修好、B 不解决，$V$ 只是每个领域一个常数 baseline，相当于 REINFORCE 减均值，SAO 需要的逐 token
+  credit assignment 落空：critic 无害，但也没用。
+
+**更正（16.14.4 的数据）**：先前我判断"只修 A 时分领域 EV 最多在 0 附近"，这对 Qwen3.5 的 Airline 不成立。把每条验证轨迹的
+预测均值做最优仿射校准（只调整体偏移和尺度）后，与 reward 的 $R^2$ 在第 40–80 步为 0.28–0.50（Airline）。也就是说 Qwen3.5 的
+critic 在 Airline 上已经能排序，EV 主要被 A 吃掉；Retail 的 $R^2$ 只有 0.01–0.06，是 B。Instruct 两个领域多数验证点都在
+0.00–0.17，是 B。这个 $R^2$ 在同一批 60 条上拟合两个参数，偏乐观；每个领域只有 20/40 条，噪声大。
+
+#### 16.14.3 优化器与 value head：现状和来历
+
+- **优化器**：配置写的是 `optimizer.type: adam`，`fsdp_engine.py` 实际构造的是 `torch.optim.AdamW`；我们的
+  critic 和 actor 配置都把 `weight_decay` 设成 0（AReaL 的默认是 0.01），所以实际行为等于 Adam。critic
+  是从预训练权重出发的 回归，衰减把权重拉向 0 而不是拉向初始值，没有明确好处，设 0 与 PPO 实现的常见做法一致。Adam 对梯度的整体缩放基本不敏感，所以
+  梯度裁剪（grad norm 20–400 裁到 1）不决定步长，步长主要由 lr 决定；16.14.1 之前"裁剪导致每步固定大小"的说法不对。
+- **value head**：Qwen3.5 的 `token_critic.py` 是 `nn.Linear(hidden, 1, bias=False)`，权重按
+  std 0.02 正态初始化，输出不加 约束。这是 LLM PPO 的常规结构：OpenRLHF、verl、TRL 的 critic 都是"LM 骨干 + 输出 1
+  维的线性层"。线性无界的理由在 RLHF： return 里有 reward model 的分数（无界的 logit）和逐 token 的 KL 惩罚，value
+  的取值范围事先不知道。我们这里 reward 只有 0/1， `kl_ctl: 0`、`discount: 1`、critic 的 GAE λ 为 1，目标必然在
+  $[0,1]$ 内，无界线性 head 是直接沿用的默认，不是为这个任务选的。 第 0 步输出约 $\pm 3$ 也来自这个初始化：std 0.02 乘以 2560
+  维、范数一百多的隐状态。
+- **可能的改法与是否标准**：把 head 输出初始化到目标均值（监督学习的常规做法，例如 RetinaNet 的先验 bias 初始化；RLHF 里 critic 从
+  reward model 初始化也是为了不从随机数值起步）；sigmoid + BCE（PRM/verifier 对 0/1 成功率的常用做法；Farebrother et
+  al. 2024 显示 value 回归改为分类在深度 RL 中更稳）；head 单独学习率（LP-FT 一类做法，非默认）。这些只针对 A。原先建议的 "从 pack
+  里删掉 Qwen3.5 几乎全对的题"撤回：SAO 训练时 actor 仍会遇到这些题，critic 需要对它们预测接近 1；删掉会让 critic 的
+  训练分布偏离使用分布，降权或降采样比删除合适。
+
+#### 16.14.4 EV 上限实验
+
+**问题**：B 是 critic 训练没做好，还是 user simulator 带来的随机性本来就预测不了？
+
+**做法**：fixed test 60 题，每题跑 $k=4$ 次，采样与 critic 的验证 rollout 完全相同：policy temperature
+1、DeepSeek-Flash user temperature 0、DeepSeek-Flash NL judge temperature 0、thinking
+关闭、同样的 parser。对题 $i$ 的成功率 $\hat p_i$：
+
+$$
+T = \bar p (1 - \bar p), \qquad
+W = \frac{1}{n} \sum_i \frac{k}{k-1} \hat p_i (1 - \hat p_i), \qquad
+\text{上限} = \frac{T - W}{T}.
+$$
+
+$T$ 是单条 episode reward 的总方差，$W$ 是同一道题内部的方差（无偏估计）。critic 在第一个 agent token 只知道是哪道题，最好也
+只能预测 $p_i$，所以第一个 token 的 EV 不超过"题间方差占比"。后面的前缀会透露更多信息，所以这是第一个 token 的上限，不是按 token 平均的 EV
+的上限：上限高，说明 B 至少有题目层面的信号可学；上限低，不能单凭它说明 B 学不会。95% 区间按题 bootstrap。
+
+**Qwen3.5**：直接用
+475（`user-sim-20261012/api-user/deepseek-test-u0p1`，另一个会话的用户模拟器实验）。它的采样参数与 critic
+验证逐项一致（解析后的配置只差训练用的 `n_samples`），两次提交之间 rollout 代码没有改动，240 条全部完成：
+
+|         | 题数 | $\bar p$ | 总方差 | 题内方差 | 上限 \[95%\]        | critic 第 94 步 EV | critic 预测与 $\hat p_i$ 的相关 |
+| ------- | ---- | -------- | ------ | -------- | ------------------- | ------------------ | ------------------------------- |
+| 总体    | 60   | 0.713    | 0.205  | 0.104    | 0.49 \[0.31, 0.64\] | +0.15              | 0.58                            |
+| Airline | 20   | 0.463    | 0.249  | 0.096    | 0.61 \[0.34, 0.85\] | +0.04              | 0.70                            |
+| Retail  | 40   | 0.838    | 0.136  | 0.108    | 0.20 \[0.03, 0.35\] | −0.08              | 0.10                            |
+
+- Airline 的上限远高于 critic 的实际 EV，而 critic 预测与题目成功率已经相关 0.70：Airline 上缺的主要是 A（水平校准），不是数据。
+- Retail 一半以上的方差在题内（0.108 / 0.136），上限只有 0.20，critic 与题目难度几乎不相关。Retail 是 user/policy
+  随机性占主导 的领域，正好可作为论文"现象"部分的证据。
+- 作为对照，user temperature 1、policy temperature 0 的 474 得到总体上限 0.41、Airline 0.57、Retail
+  0.17，结论相同。
+
+**Instruct**：没有现成的重复评测，pueue
+483（`tau2-training-20261012-critic-data/ceiling/launch_ceiling.sh ceiling-instruct-test-x4 instruct`，副本在
+`scripts/critic-data/`）按 475 的协议重跑，parser 改为 `qwen25`，固定在 `src-04be68ab`。check-config
+解析出的配置与 Instruct critic 验证逐项对比，只差 `n_samples`（evaluate 强制为 1）。240 条 episode，约 2–3M
+prompt token，排在 480–482
+之后。分析脚本：`scripts/critic-data/ev_ceiling.py EPISODES [VALIDATION_REPORT]`。
+
+**之后怎么用**：Qwen3.5 的下一轮 critic 优先修 A（head 带 bias 并初始化到均值，或 sigmoid + BCE），看 Airline 能否逼近
+0.6 的上限；Retail 的上限低，不期望大的正 EV。Instruct 等 483 和 480 的结果再定。
 
 ### 16.15 用户模拟器评测总表（2026-10-12 起维护）
 
