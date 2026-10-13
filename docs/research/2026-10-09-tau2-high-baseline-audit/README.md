@@ -3359,6 +3359,24 @@ v2 模式看 Airline 能否逼近 0.6 的上限（16.14.4）；Retail 的上限�
   不生效）。policy 保持 temperature 1，与 SAO 训练时的采样一致，也与 16.14.4 中 475 的上限口径一致；它和评测规范的 policy
   temperature 0 不同，这是有意为之。
 
+**499 结果（v2 模式，2026-10-13 19:26–00:27 北京时间，94 步，exit 0）。** 验证集是 fixed-v3 test 60 题；EV
+用去掉整体偏移后的残差方差计算，偏移单独列出：
+
+| 验证步 | 总体 EV | 总体偏移 | Airline EV | Airline 偏移 | Retail EV | Retail 偏移 |
+| -----: | ------: | -------: | ---------: | -----------: | --------: | ----------: |
+|      0 |   0.000 |    +0.16 |      0.000 |        +0.30 |     0.000 |       +0.07 |
+|     25 |   0.021 |    +0.22 |      0.015 |        +0.35 |     0.007 |       +0.14 |
+|     50 |   0.058 |    +0.09 |      0.004 |        +0.14 |    −0.002 |       +0.06 |
+|     55 |   0.074 |    +0.11 |      0.015 |        +0.10 |     0.003 |       +0.11 |
+|     70 |   0.000 |    +0.24 |      0.002 |        +0.38 |    −0.001 |       +0.15 |
+|     94 |   0.033 |    +0.12 |      0.025 |        +0.24 |    −0.001 |       +0.05 |
+
+- 零初始化 $w$ 去掉了 479 那种随机 head 带来的噪声，EV 从 0 起步、全程不再是大负数；训练时预测均值在 0.89–0.98，没有 479 的
+  1.2–1.9。
+- 区分成败的能力没有改善：Airline EV 最高 0.025，离 0.61 的上限很远；Retail 在 0 附近。总体 EV 的正值主要来自领域之间的差异。
+- 偏移随数据顺序起伏：每个 epoch 第 41–47 步训官方题，偏移在第 50 步降到 +0.09；回到 pack 题后升回 +0.24。训练集（pack 0.93）比
+  test（Airline 0.60）容易，Airline 整体偏高 0.24–0.38。
+
 启动前发现并处理了两处：
 
 - **数据目录换成 fixed-v3**。当前代码的 `fixed` 变体校验 v3 的任务哈希，v2 目录启动即报错。v3 比 v2 多修了 7 道题（11.2.1），所以
@@ -3368,6 +3386,41 @@ v2 模式看 Airline 能否逼近 0.6 的上限（16.14.4）；Retail 的上限�
   导入的。启动脚本现在先设 `PYTHONPATH=$SRC`，之后 check-config 里的模块路径都在 `src-a88d480e` 下。479/480 在
   20:04 前跑完，`04be68ab` 之后第一处代码提交是 20:48 的 `7da3a4f3`，已提交的代码一致；当时主 worktree
   有没有未提交的代码改动，已无法追溯。`launch_critic.sh` 和 `launch_ceiling.sh` 没有这一行，以后复用要补上。
+
+#### 16.14.6 SAO：mix pack + critic 500（2026-10-14，未启动）
+
+**设置（2026-10-13 用户确认）。**
+
+| 项              | 设置                                                                                                                                    |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| actor           | Qwen3.5-4B（non-thinking），lr 1e-6                                                                                                     |
+| critic          | 500（critic-head-qwen35-mix）最后一步的 checkpoint，从其 `summary.json` 的 `final_critic_checkpoint` 读取；lr 5e-6，head 不单独设学习率 |
+| 训练题          | mix pack 221 题 + 官方 fixed train 99 题 = 320 题（Airline 180、Retail 140）                                                            |
+| 采样            | 每题每个 epoch 4 条，2 个 epoch；每 epoch 1280 条，batch 64，共 40 步、2560 条 episode                                                  |
+| 更新顺序        | 每步先对 critic 做 2 次完整更新，再更新 actor 1 次（`critic_updates_before_actor: 2`）                                                  |
+| 评测            | fixed-v3 test 60 题 × 4 次，policy temperature 0；训练前和每 10 步一次，共 5 次                                                         |
+| user / NL judge | DeepSeek-Flash 默认 thinking                                                                                                            |
+
+- 选 mix 而不是 v2：v2 里约七成题对 Qwen3.5 几乎全对，SAO 中 advantage 接近 0，rollout 预算大多浪费；critic 500
+  也是在这份分布上训练的。不另跑 v2 的 SAO，也不跑 GRPO 对照。
+- 用最后一步而不是验证最好的 checkpoint：critic 的验证集就是 SAO 报分的 test 60 题，按它挑中间步等于用 test 选模型。
+- 评测频率：原配置每 5 步一次会评 9 次、约 2160 条 episode，和训练本身一样多，所以改为每 10 步一次。
+
+**代码**（`fccceaa1`，Codex 实现、Claude review）：新入口 `scripts/tau2/train_sao_pack.py` 和
+`run.sh policy-pack mixed sao`。训练行是 pack 的全部题加官方 fixed
+train，再走原来的按领域调度和打乱；要求每道题被调度的次数相同，否则拒绝启动。`examples/tau2/train.py` 只加了可选的
+`train_rows_hook`，原 `policy` 入口设了 `train_task_pack` 会报错，其余行为不变。`_task_pack_rows` 移到
+`examples/tau2/task_pack.py`，critic 训练与 SAO 共用。CPU 测试：新增 20 个，与 critic、task pack、SAO
+合约、head 相关测试共 125 个通过；Codex 把 9 个新检查逐个改坏，对应测试都会失败。review 时改了一处：`_task_pack_rows` 的参数
+`domains` 与模块函数重名，改名为 `selected_domains`。
+
+**启动**：worktree `tau2-training-20261014-sao-mix/src-fccceaa1`，脚本
+`launch_sao_pack.sh NAME {smoke|formal}`（副本在 `scripts/critic-data/`）。脚本检查 worktree 的
+HEAD、设 `PYTHONPATH`、确认 500 已完成，并先跑 `check_critic_head.py`。smoke 跑 2 步，不在训练前评测，在第 2
+步评测并存档。check-config（critic 临时换成 499 的最终 checkpoint）：每 epoch 1280 条，smoke 2 步，formal 40
+步、2560 条 episode，验证集 60 题，head 预检通过。
+
+**队列**：smoke 排在 500 之后；正式任务先挂起，看过 smoke 的结果再放进队列。
 
 ### 16.15 用户模拟器评测总表（2026-10-12 起维护）
 
