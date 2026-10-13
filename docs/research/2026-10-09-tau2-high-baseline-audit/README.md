@@ -2980,7 +2980,7 @@ $\beta$ 不改变梯度的期望，只降低方差。这与 Mao et al.（16.3）
 **汇合点**：case study 出来后，看主要的用户侧失败是"给定 agent
 的说法仍然随机"（本方法管得到），还是"系统性偏离"（管不到）。后者占主导时改方法；代码改动小，返工成本低。
 
-### 16.14 critic₀ 扩数据实验（2026-10-12；479 完成，480 运行中）
+### 16.14 critic₀ 扩数据实验（2026-10-12，478–480 完成）
 
 **要回答的问题**：训练集从官方 train 扩到"AReaL pack v2 + 官方 fixed train"之后，Qwen3.5-4B 的 critic₀ 在官方
 fixed test 上的 explained variance 能否变成正的。16.13 的方法线和 SAO 都以此为前提。
@@ -3068,20 +3068,23 @@ token）估算，约 16M prompt 和 2.2M completion token。上一次每步约 3
 
 #### 16.14.1 结果（2026-10-12 晚）
 
-479（Qwen3.5，11:10–16:08）和 smoke 478 正常结束；480（Instruct）运行中，结果出来后补。验证集是 fixed test 60 题，EV
-按 token 计算：
+smoke 478（2 步）正常结束；479（Qwen3.5，11:10–16:08）和 480（Instruct，16:08–20:04）都完成 94 步。验证集是
+fixed test 60 题，EV 按 token 计算：
 
 |                    | 总体 EV | Airline EV | Retail EV | 总体 MSE / 目标方差 |
 | ------------------ | ------- | ---------- | --------- | ------------------- |
 | 上一次，第 24 步   | −1.05   | −0.59      | −0.92     | 0.51 / 0.16         |
 | Qwen3.5，第 90 步  | −0.04   | −0.08      | −0.35     | 0.28 / 0.22         |
 | Qwen3.5，第 94 步  | +0.15   | +0.04      | −0.08     | 0.195 / 0.217       |
-| Instruct，第 60 步 | −0.01   | −0.07      | −0.00     | 0.29 / 0.23         |
+| Instruct，第 85 步 | −0.01   | −0.09      | −0.03     | 0.74 / 0.23         |
+| Instruct，第 94 步 | −0.00   | −0.07      | −0.02     | 0.236 / 0.234       |
 
 第 94 步的 +0.15 不算"EV 变正"：前一次验证还是负的；分领域看，两个领域的 MSE 都比直接预测本领域均值差（Airline 0.286 对
-0.245，Retail 0.131 对 0.122），总体 EV 的正值主要来自"Airline 比 Retail 难"这一领域差异。
+0.245，Retail 0.131 对 0.122），总体 EV 的正值主要来自"Airline 比 Retail 难"这一领域差异。Instruct 第 30 步之后的
+13 个验证点 EV 都在 −0.04 到 +0.01，第 94 步 分领域 MSE 也略高于本领域方差（Airline 0.199 对 0.186，Retail 0.255
+对 0.246），预测均值与 reward 的 $R^2$ 只有 0.07–0.11。
 
-**运行健康**：Qwen3.5 无 infra 失败；Instruct 有 1 次 DeepSeek 返回空 user 回复（retail_414），重试后成功。日志里的
+**运行健康**：Qwen3.5 无 infra 失败；Instruct 有 3 次 infra 错误（DeepSeek 返回空 user 回复），都重试成功。日志里的
 `Error in golden actions … not found` 与上一次 critic 逐条相同，来自官方 retail 题故意设计的"先给错邮箱/订单号"，不影响
 reward。Instruct 有 9 次工具调用 JSON 格式错误，按失败计分，是模型本身的格式问题。user 用量：Qwen3.5 15.5M prompt + 2.3M
 completion token。
@@ -3093,10 +3096,11 @@ completion token。
 1. **Qwen3.5 的预测水平来回漂**：训练侧 `old_value/avg` 常在 1.2–1.9（目标最大为 1），验证 bias 在 −0.68 到 +1.07
    之间。16 个验证点上，验证 bias 与当步训练 batch 的预测均值相关 0.82，与最近 3 个 batch 的目标均值相关 −0.00：漂移来自 critic
    自身，不是在追 batch 的成功率。
-1. **Instruct 不漂，但学到的是训练集均值**：`old_value` 稳定跟住约 0.6，第二个 epoch 训练 EV 在 0 到 +0.1；但 test
-   成功率只有 0.37，验证 bias 一直是 +0.2 到 +0.45。Instruct 走通用的
-   `AutoModelForTokenClassification`，head 带 bias；Qwen3.5 的 head 不带 bias（见 16.14.3）。两者只有
-   Qwen3.5 漂，与"无 bias 时整体水平只能靠骨干表示、每次更新都会整体平移"的推测一致，但 两次运行的 actor 也不同，这只是相关证据。
+1. **Instruct 漂得少，但学到的是训练集均值**：第一个 epoch `old_value` 稳定跟住约 0.6，第二个 epoch 训练 EV 在 0 到
+   +0.1；但 test 成功率只有 0.37，验证 bias 多在 +0.1 到 +0.45，第 85 步也跳到 +0.71（MSE
+   0.74），所以它同样会漂，只是幅度比 Qwen3.5 小。Instruct 的 head 带 bias、Qwen3.5 的不带，但 bias 零初始化、lr 5e-6
+   下 94 步最多移动约 5e-4，几乎不动， 不能解释两者的差别；差别更可能来自骨干结构（Qwen3 全 attention，Qwen3.5 混合 Gated
+   DeltaNet），尚未验证。
 
 #### 16.14.2 两类问题
 
