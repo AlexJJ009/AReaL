@@ -3269,7 +3269,7 @@ policy 用 greedy 解码、user temperature 0 时，题内方差没有变小（0
 
 #### 16.14.5 critic 训练数据配比（2026-10-13）
 
-**依据。** 把 479 的训练 rollout（temperature 1，每题 2 次）和 13.3 的 pack 评测（temperature 0，每题 4
+**依据**。 把 479 的训练 rollout（temperature 1，每题 2 次）和 13.3 的 pack 评测（temperature 0，每题 4
 次）按题合并，每题 6 个样本。下表按 479 的 2 次统计：
 
 | Qwen3.5      | 题数 | 成功率 | 2 次全对 | 2 次全错 | 有对有错 | 标签方差 |
@@ -3283,35 +3283,35 @@ policy 用 greedy 解码、user temperature 0 时，题内方差没有变小（0
   temperature 1 下的成功率是 0.66。
 - 简单题所有 token 的目标都是 1，只能教 critic 整体水平。整体水平已经交给 head 的 bias（16.14.3），几道题就够；479 的 1494 条
   episode 里约七成花在这类题上，每条约 11K DeepSeek prompt token。
-- **降采样，不加权。** 加权仍要把 rollout 跑完，费用不变，信息量也不变。
-- **不整题删。** SAO 训练时 actor 仍会遇到简单题，critic 要对它们预测接近 1，所以保留一小部分。
+- **降采样，不加权**。 加权仍要把 rollout 跑完，费用不变，信息量也不变。
+- **不整题删**。 SAO 训练时 actor 仍会遇到简单题，critic 要对它们预测接近 1，所以保留一小部分。
 
-**配比。** 有信号的 122 道全部保留；简单题按（领域，keep/fix）分层随机抽 99 道，配额与各层简单题数成比例（Airline fix 22 /
+**配比**。 有信号的 122 道全部保留；简单题按（领域，keep/fix）分层随机抽 99 道，配额与各层简单题数成比例（Airline fix 22 /
 117、keep 32 / 167，Retail fix 38 / 203、keep 7 / 39，种子 20261013）；再加官方 fixed train 99 道，共
 320 行，batch 16 下每个 epoch 正好 20 步。按 479 的 temperature 1 成功率估算，标签均值 0.78（全量 pack 时
 0.91），简单题占 31% 的 episode。
 
-**顺序。** pack 题和官方题混在一起，每个 epoch 重新打乱（`train_dataset.shuffle=true`，sampler 按 seed 和 epoch
+**顺序**。 pack 题和官方题混在一起，每个 epoch 重新打乱（`train_dataset.shuffle=true`，sampler 按 seed 和 epoch
 打乱）。479 是 pack 在前、官方在后、每个 epoch 同一顺序，每个 epoch 最后 7 个 batch 全是官方题。用同一个
 `create_dataloader` 在 CPU 上核对：不打乱时官方题集中在最后 7 个 batch；打乱后每个 batch 含 2–9 道官方题，两个 epoch
 的顺序不同。run 摘要里的 `source` 仍写 `task_pack_then_official_tau2_train_tasks`，指的是行的拼接顺序，采样顺序由
 shuffle 决定。
 
-**Pack。** `_cache/tau2-areal-pack-20261013-critic-mix-v1`（只读），由
+**Pack**。 `_cache/tau2-areal-pack-20261013-critic-mix-v1`（只读），由
 `scripts/critic-data/select_critic_mix.py`（`a88d480e`）从 pack v2 生成：两个领域的 `tasks.json` 和
 `task_db.json` 只保留选中的 221 题，数据库文件原样复制，manifest 重算 sha256，`selection.json`
 记录规则、输入路径、分层配额和题目清单。用 `examples/tau2/task_pack.py` 加载通过，221 题的任务定义和数据库路径与 v2
 逐题一致。`tau2-areal-pack-latest` 仍指向 v2。
 
-**Instruct 不调。** 它在 pack 上成功率 0.656，2 次全对 333 道、全错 131 道、有对有错 184 道，标签本身是平衡的；每题只有 2
+**Instruct 不调**。 它在 pack 上成功率 0.656，2 次全对 333 道、全错 131 道、有对有错 184 道，标签本身是平衡的；每题只有 2
 个样本，用来筛题噪声太大。它的问题是 pack（0.6）与 test（0.37）难度不同，但 SAO 训练时 critic
 面对的是训练题，这个差异对实际使用的影响可能小于验证数字显示的。
 
-**SAO 是否共用这份配比（未定）。** critic 在 SAO 里面对的是 SAO 的训练题，两边的分布应当一致。若 SAO 仍用全部 747 题，critic
+**SAO 是否共用这份配比（未定）**。 critic 在 SAO 里面对的是 SAO 的训练题，两边的分布应当一致。若 SAO 仍用全部 747 题，critic
 应对简单题加权（约 526 / 99 ≈ 5 倍）来补偿；若 SAO 也用这 320 题，不需要加权。简单题上 $R = 1$、$V \approx 1$，advantage
 接近 0，对 actor 也几乎没有信号。
 
-**实验（都还没有排队）。** worktree `tau2-training-20261013-critic-head/src-a88d480e`，启动脚本
+**实验（都还没有排队）**。 worktree `tau2-training-20261013-critic-head/src-a88d480e`，启动脚本
 `launch_critic_head.sh NAME {v2|mix}`（副本在 `scripts/critic-data/`），入口
 `data critic-head`，head lr 1e-4，骨干 lr 5e-6，其余与 479 相同：
 
@@ -3325,9 +3325,9 @@ v2 模式看 Airline 能否逼近 0.6 的上限（16.14.4）；Retail 的上限�
 
 启动前发现并处理了两处：
 
-- **数据目录换成 fixed-v3。** 当前代码的 `fixed` 变体校验 v3 的任务哈希，v2 目录启动即报错。v3 比 v2 多修了 7
+- **数据目录换成 fixed-v3**。 当前代码的 `fixed` 变体校验 v3 的任务哈希，v2 目录启动即报错。v3 比 v2 多修了 7
   道题（11.2.1），所以 v2 模式与 479 的对比不只差 head；16.15 里同一用户模拟器 v2 → v3 的合计变化在运行间噪声内。
-- **固定的 worktree 原本没有真正隔离。** worktree 里的 `.venv` 是指向主 worktree 的软链接，其中的 `areal.pth` 把主
+- **固定的 worktree 原本没有真正隔离**。 worktree 里的 `.venv` 是指向主 worktree 的软链接，其中的 `areal.pth` 把主
   worktree 加进 `sys.path`，第一次 check-config 的 traceback 显示 `train_critic.py` 是从主 worktree
   导入的。启动脚本现在先设 `PYTHONPATH=$SRC`，之后 check-config 里的模块路径都在 `src-a88d480e` 下。479/480 在
   20:04 前跑完，`04be68ab` 之后第一处代码提交是 20:48 的 `7da3a4f3`，已提交的代码一致；当时主 worktree
