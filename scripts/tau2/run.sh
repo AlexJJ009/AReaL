@@ -10,6 +10,7 @@ usage() {
 Usage:
   scripts/tau2/run.sh qualification {mixed|airline|retail|telecom} [overrides...]
   scripts/tau2/run.sh data critic [overrides...]
+  scripts/tau2/run.sh data critic-head [overrides...]   (biased, mean-initialised value head)
   scripts/tau2/run.sh policy {mixed|airline|retail|telecom} {grpo|sao} [overrides...]
 
 Required runtime variables:
@@ -186,6 +187,11 @@ case "${SELECTOR}:${MODE}" in
   data:critic)
     if ! has_check_config "$@"; then load_deepseek_key; fi
     exec "${PYTHON_BIN}" "${REPO_ROOT}/scripts/tau2/train_critic.py" \
+      --config "${REPO_ROOT}/examples/tau2/config_critic_production.yaml" "$@"
+    ;;
+  data:critic-head)
+    if ! has_check_config "$@"; then load_deepseek_key; fi
+    exec "${PYTHON_BIN}" "${REPO_ROOT}/scripts/tau2/train_critic_head.py" \
       --config "${REPO_ROOT}/examples/tau2/config_critic_production.yaml" "$@"
     ;;
   qualification:mixed)

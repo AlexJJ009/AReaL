@@ -323,6 +323,9 @@ def _compare_score_evidence(
 
 
 class FSDPEngine(TrainEngine):
+    # Model class for Qwen3.5 critics; subclasses may swap in a variant head.
+    qwen35_critic_class: type = Qwen35TokenCriticForCausalBackbone
+
     def __init__(self, config: TrainEngineConfig):
         self.config = config
         self.optimizer_config = config.optimizer
@@ -582,6 +585,8 @@ class FSDPEngine(TrainEngine):
             and dist.is_initialized()
         ):
             dist.broadcast(self.model.score.weight.data, src=0)
+            if self.model.score.bias is not None:
+                dist.broadcast(self.model.score.bias.data, src=0)
 
         if is_llm_cpu_load or self.config.use_lora:
             need_broadcast = True
@@ -1330,7 +1335,7 @@ class FSDPEngine(TrainEngine):
                 attn_implementation=self.config.attn_impl,
             )
         if _use_qwen35_token_critic_adapter(self.config, self.model_config):
-            model_class = Qwen35TokenCriticForCausalBackbone
+            model_class = self.qwen35_critic_class
             model_kwargs = {}
         elif self.config.is_critic:
             model_class = AutoModelForTokenClassification
@@ -1486,6 +1491,10 @@ class FSDPEngine(TrainEngine):
         if self.rank == 0:
             self.model.print_trainable_parameters()
 
+    def _optimizer_param_groups(self) -> list:
+        """Trainable parameters, or param-group dicts, passed to the optimizer."""
+        return [p for p in self.model.parameters() if p.requires_grad]
+
     def _create_optimizer(self, ft_spec: FinetuneSpec) -> None:
         if self.optimizer_config is None:
             return
@@ -1530,7 +1539,7 @@ class FSDPEngine(TrainEngine):
         beta1 = self.optimizer_config.beta1
         beta2 = self.optimizer_config.beta2
         eps = self.optimizer_config.eps
-        parameters = [p for p in self.model.parameters() if p.requires_grad]
+        parameters = self._optimizer_param_groups()
         if self.optimizer_config.type == "adam":
             self.optimizer = torch.optim.AdamW(
                 parameters,

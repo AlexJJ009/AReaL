@@ -14,6 +14,9 @@ from transformers.utils import ModelOutput
 
 from areal.utils.save_load import get_state_dict_from_repo_id_or_path
 
+# Head parameters are never in a pretrained backbone checkpoint.
+_SCORE_KEYS = ("score.weight", "score.bias")
+
 
 @dataclass
 class TokenCriticOutput(ModelOutput):
@@ -38,6 +41,8 @@ class Qwen35TokenCriticForCausalBackbone(PreTrainedModel):
 
     base_model_prefix = "model"
     supports_gradient_checkpointing = True
+    # Subclasses set True to give the value head a bias term.
+    score_bias = False
 
     def __init__(self, config: PretrainedConfig, language_model: nn.Module):
         super().__init__(config)
@@ -46,7 +51,7 @@ class Qwen35TokenCriticForCausalBackbone(PreTrainedModel):
         self.score = nn.Linear(
             _hidden_size(config),
             1,
-            bias=False,
+            bias=self.score_bias,
             dtype=backbone_parameter.dtype,
             device=backbone_parameter.device,
         )
@@ -84,7 +89,7 @@ class Qwen35TokenCriticForCausalBackbone(PreTrainedModel):
                 "Unexpected pretrained keys for Qwen3.5 token critic: "
                 f"{unexpected[:20]}"
             )
-        missing = [key for key in missing if key != "score.weight"]
+        missing = [key for key in missing if key not in _SCORE_KEYS]
         if missing:
             raise RuntimeError(
                 "Missing pretrained text-backbone keys for Qwen3.5 token critic: "
@@ -95,6 +100,8 @@ class Qwen35TokenCriticForCausalBackbone(PreTrainedModel):
     def _init_score_head(self) -> None:
         std = getattr(_text_config(self.config), "initializer_range", 0.02)
         nn.init.normal_(self.score.weight, mean=0.0, std=std)
+        if self.score.bias is not None:
+            nn.init.zeros_(self.score.bias)
 
     def forward(self, *args, **kwargs) -> TokenCriticOutput:
         kwargs["return_dict"] = True
@@ -117,7 +124,7 @@ class Qwen35TokenCriticForCausalBackbone(PreTrainedModel):
             for key in incompatible.unexpected_keys
             if not _is_ignored_pretrained_key(key)
         ]
-        missing = [key for key in incompatible.missing_keys if key != "score.weight"]
+        missing = [key for key in incompatible.missing_keys if key not in _SCORE_KEYS]
         if strict and (missing or unexpected):
             raise RuntimeError(
                 "Error(s) in loading state_dict for "
@@ -135,7 +142,7 @@ class Qwen35TokenCriticForCausalBackbone(PreTrainedModel):
                 f"{unexpected[:20]}"
             )
         return _IncompatibleKeys(
-            [key for key in incompatible.missing_keys if key == "score.weight"],
+            [key for key in incompatible.missing_keys if key in _SCORE_KEYS],
             [
                 key
                 for key in incompatible.unexpected_keys

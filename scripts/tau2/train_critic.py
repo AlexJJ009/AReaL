@@ -1275,7 +1275,9 @@ def _workflow_kwargs(config: Tau2PPOConfig) -> dict[str, Any]:
     )
 
 
-def main(argv: list[str]) -> None:
+def main(
+    argv: list[str], trainer_cls: type[PPOTrainer] = Tau2CriticOnlineTrainer
+) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--check-config", action="store_true")
@@ -1338,7 +1340,7 @@ def main(argv: list[str]) -> None:
             },
         },
     )
-    with Tau2CriticOnlineTrainer(config, train_dataset=train_dataset) as trainer:
+    with trainer_cls(config, train_dataset=train_dataset) as trainer:
         if trainer.recover_info is None:
             save_initial_critic(trainer)
         fixed_validation_rollouts = load_or_collect_fixed_validation_rollouts(
