@@ -3323,6 +3323,12 @@ shuffle 决定。
 v2 模式看 Airline 能否逼近 0.6 的上限（16.14.4）；Retail 的上限低，不期望大的正 EV。两个模式的 check-config 都通过：v2 为
 747 行、94 步，mix 为 320 行、80 步，解析出的配置里 bias、head lr、shuffle 和 epoch 数与上表一致。
 
+**队列**（pueue `gpu8` 组，2026-10-13 排入）：498 是 smoke（mix 数据、tune 模式、2 步，验证 dev 20 题），这是带
+bias 的 head 第一次在 GPU 上跑；499（v2）和 500（mix）依赖 498 成功，并延迟到北京时间 10 月 14 日 00:35 才入队，赶上
+DeepSeek 的夜间低价时段。user 和 NL judge 与 16.15 评测相同，都是 DeepSeek-Flash 默认 thinking（配置里写的
+temperature 0 不生效）。policy 保持 temperature 1，与 SAO 训练时的采样一致，也与 16.14.4 中 475
+的上限口径一致；它和评测规范的 policy temperature 0 不同，这是有意为之。
+
 启动前发现并处理了两处：
 
 - **数据目录换成 fixed-v3**。 当前代码的 `fixed` 变体校验 v3 的任务哈希，v2 目录启动即报错。v3 比 v2 多修了 7
