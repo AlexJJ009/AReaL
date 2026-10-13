@@ -3146,10 +3146,23 @@ completion token；Instruct 约 10M + 2M。
   另一条路是 sigmoid + BCE（PRM/verifier 对 0/1 成功率的常用做法；Farebrother et al. 2024 显示 value
   回归改为分类在深度 RL 中更稳），留作上面三处改完后仍漂时的备选。这些都只针对 A。
 
-- **实现方式（2026-10-12 决定）**：不改 `areal/api/cli_args.py` 和原训练脚本，另写一个包装层和新的训练脚本。原因是 critic
-  引擎在 worker 进程里构造，只在 driver 里 monkeypatch 不会生效；`PPOTrainer._create_critic` 在 driver
-  里选择引擎类，所以新脚本用一个 `PPOTrainer` 子类返回 `FSDPPPOCritic` 的子类，在子类里替换 head、做初始化、给 head
-  单独的参数组。注意：带 bias 的 checkpoint 多出 `score.bias`，之后 SAO 加载这个 critic 也要走同一个包装层。
+- **实现**（`7da3a4f3`）：`areal/api/cli_args.py` 和原训练路径不变，另起入口
+  `scripts/tau2/run.sh data critic-head` （`scripts/tau2/train_critic_head.py`）。critic
+  引擎在远端 worker 里构造，所以新入口用 `PPOTrainer` 子类返回 `examples/tau2/critic_head.py` 里的引擎子类，head
+  设置放在一个 `PPOCriticConfig` 子类里随 RPC 传给 worker。核心代码只加了三个
+  挂钩：`FSDPEngine.qwen35_critic_class`、`FSDPEngine._optimizer_param_groups`、`train_critic.main(trainer_cls=...)`；adapter
+  加载时容忍缺少 `score.bias`。新增的两个字段是 `critic_head_bias_init`（必填，$[0,1]$）和
+  `critic_head_lr`（不填则与骨干同为 5e-6）。CPU 测试 `tests/test_tau2_critic_head.py`（11 个）：第 0 步每个
+  token 都输出 bias、零权重仍有梯度、参数组只把 `score.weight`/`score.bias` 分给 head、配置子类经 RPC
+  序列化后保持类型；故意去掉 bias 初始化或换回原 adapter 时测试会失败。 check-config 已通过（747 行、94 步，不填 bias
+  时报错）。还没在 GPU 上跑过。
+
+- **bias 的取值**：按定义应是训练目标的期望。479 两个 epoch 的实际成功率是 pack 0.935、官方 train 0.73，按 648:99 加权约为
+  0.91； 配比改了要重算。
+
+- **已知后续**：带 bias 的 checkpoint 多出 `score.bias`。SAO 的 head 预检
+  `scripts/sao/check_critic_head.py` 只接受 `score.weight`，SAO 加载 critic 的
+  `scalar_value.py` 也是无 bias 的 head；用这个 critic 跑 SAO 之前这两处要一起改。
 
 **数据配比（未定）**：Qwen3.5 的 pack 里 86% 的题 temperature 0 下 4 次全对（558 / 648，13.3），只能教
 critic"预测接近 1"。不能整题删掉：SAO 训练时 actor 仍会遇到这些题，critic 需要对它们预测接近
@@ -3212,8 +3225,8 @@ policy 用 greedy 解码、user temperature 0 时，题内方差没有变小（0
 
 分析脚本：`scripts/critic-data/ev_ceiling.py EPISODES [VALIDATION_REPORT]`。
 
-**下一步**：Qwen3.5 的下一轮 critic 先修 A（16.14.3 的三处改动），数据不变，与 479 对比，看 Airline 能否逼近 0.6
-的上限；Retail 的上限低，不期望大的正 EV。配比定下来后再跑一次"修 A + 新配比"，与前一次对比。都还没有排队。
+**下一步**：Qwen3.5 的下一轮 critic 用 `data critic-head` 先修 A（16.14.3），数据不变，与 479 对比，看 Airline
+能否逼近 0.6 的上限；Retail 的上限低，不期望大的正 EV。配比定下来后再跑一次"修 A + 新配比"，与前一次对比。都还没有排队。
 
 ### 16.15 用户模拟器评测总表（2026-10-12 起维护）
 
