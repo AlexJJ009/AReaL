@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Step-0 eval of Qwen3.5-4B with an API user simulator and the fixed DeepSeek NL judge (commit 9e7082dc).
 # Usage: launch.sh NAME USER TASK_SET POLICY_T USER_T
-#   USER: deepseek | deepseek-nothink | doubao;  TASK_SET: test | base;  fixed variant, 4 repeats, 8 GPUs.
+#   USER: deepseek | deepseek-nothink | doubao | doubao-plan | doubao-lite-plan;  env TASKS=a:1,b:2 REPEATS=n for smoke;  TASK_SET: test | base;  fixed variant, 4 repeats, 8 GPUs.
 set -euo pipefail
 NAME=$1 USER_SIM=$2 TASK_SET=$3 POLICY_T=$4 USER_T=$5
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -39,12 +39,17 @@ case $USER_SIM in
           USER_OVR=(econfig.user_llm=doubao-seed-2-1-turbo-260628 econfig.user_llm_base_url=https://ark.cn-beijing.volces.com/api/v3
               econfig.user_llm_api_key_env=ARK_API_KEY econfig.user_llm_num_retries=2
               +econfig.user_llm_args.reasoning_effort=medium '+econfig.user_llm_args.allowed_openai_params=[reasoning_effort]') ;;
+  doubao-plan|doubao-lite-plan) load_key /data_storage/yl_test/lgx/home/.config/tau2-doubao/ark-plan.env; : "${ARK_PLAN_API_KEY:?}"
+          M=doubao-seed-2-1-turbo-260628; [ "$USER_SIM" = doubao-lite-plan ] && M=doubao-seed-2-1-lite-260915
+          USER_OVR=(econfig.user_llm=$M econfig.user_llm_base_url=https://ark.cn-beijing.volces.com/api/plan/v3
+              econfig.user_llm_api_key_env=ARK_PLAN_API_KEY econfig.user_llm_num_retries=2
+              +econfig.user_llm_args.reasoning_effort=medium '+econfig.user_llm_args.allowed_openai_params=[reasoning_effort]') ;;
   *) echo "bad user $USER_SIM"; exit 2 ;;
 esac
 set +e
 "$RUNTIME_VENV/bin/python" scripts/tau2/evaluate.py \
   --config examples/tau2/config_grpo.yaml --model-path "$MODEL" --output-root "$OUT" \
-  --task-set "$TASK_SET" --repeats 4 ${CHECK_ONLY:+--check-config} --temperature "$POLICY_T" \
+  --task-set "$TASK_SET" --repeats "${REPEATS:-4}" ${TASKS:+--tasks "$TASKS"} ${CHECK_ONLY:+--check-config} --temperature "$POLICY_T" \
   econfig.benchmark_variant=fixed 'domains=[airline,retail]' econfig.domain=mixed econfig.enable_thinking=false \
   evaluation_rollout.backend=sglang:d8p1t1 evaluation_rollout.max_concurrent_rollouts=256 \
   "${USER_OVR[@]}" econfig.user_llm_args.temperature="$USER_T" \
