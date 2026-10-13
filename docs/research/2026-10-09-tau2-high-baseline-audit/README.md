@@ -3146,23 +3146,28 @@ completion token；Instruct 约 10M + 2M。
   另一条路是 sigmoid + BCE（PRM/verifier 对 0/1 成功率的常用做法；Farebrother et al. 2024 显示 value
   回归改为分类在深度 RL 中更稳），留作上面三处改完后仍漂时的备选。这些都只针对 A。
 
-- **实现**（`7da3a4f3`）：`areal/api/cli_args.py` 和原训练路径不变，另起入口
-  `scripts/tau2/run.sh data critic-head` （`scripts/tau2/train_critic_head.py`）。critic
+- **实现**（`7da3a4f3`、`275548de`）：`areal/api/cli_args.py` 和原训练路径不变，另起入口
+  `scripts/tau2/run.sh data critic-head`（`scripts/tau2/train_critic_head.py`）。critic
   引擎在远端 worker 里构造，所以新入口用 `PPOTrainer` 子类返回 `examples/tau2/critic_head.py` 里的引擎子类，head
-  设置放在一个 `PPOCriticConfig` 子类里随 RPC 传给 worker。核心代码只加了三个
-  挂钩：`FSDPEngine.qwen35_critic_class`、`FSDPEngine._optimizer_param_groups`、`train_critic.main(trainer_cls=...)`；adapter
-  加载时容忍缺少 `score.bias`。新增的两个字段是 `critic_head_bias_init`（必填，$[0,1]$）和
-  `critic_head_lr`（不填则与骨干同为 5e-6）。CPU 测试 `tests/test_tau2_critic_head.py`（11 个）：第 0 步每个
-  token 都输出 bias、零权重仍有梯度、参数组只把 `score.weight`/`score.bias` 分给 head、配置子类经 RPC
-  序列化后保持类型；故意去掉 bias 初始化或换回原 adapter 时测试会失败。 check-config 已通过（747 行、94 步，不填 bias
-  时报错）。还没在 GPU 上跑过。
+  设置放在一个 `PPOCriticConfig` 子类里随 RPC 传给 worker。head 是否带 bias 由模型配置里的
+  `areal_value_head_bias` 决定：引擎子类把它写进自己的 `model_config`，保存 checkpoint 时随 config.json
+  落盘；Qwen3.5 adapter、`Qwen35ScalarValueModel` 和 SAO 的 head 预检
+  `scripts/sao/check_critic_head.py` 都按它构建或检查 head，所以 SAO 用普通的 `FSDPEngine` 就能加载带 bias 的
+  critic，不需要这个 模块；有 bias 没标记、有标记没 bias，都会报错。从已训练的带 bias critic 重启时，引擎子类保留原
+  head、不重新初始化。新增字段 `critic_head_bias_init`（必填，$[0,1]$）和 `critic_head_lr`（不填则与骨干同为
+  5e-6）。核心代码的改动：adapter 和 scalar value 模型读这个标记，`FSDPEngine` 在 `from_pretrained` 时把自己的
+  `model_config` 传给 adapter（与 adapter 自己从同一路径重读的配置相同），新增 `_optimizer_param_groups`
+  挂钩，`train_critic.main` 接受 `trainer_cls`。
+
+- **测试**：`tests/test_tau2_critic_head.py`（16 个）和
+  `tests/test_sao_critic_head_guard.py`（新增 7 个），CPU 上跑。 覆盖：第 0 步每个 token 都输出
+  bias；零权重仍有梯度；参数组只把 `score.weight`/`score.bias` 分给 head；配置子类经 RPC 序列化后保持类型；按引擎的保存方式写出的
+  checkpoint，用 SAO 的普通引擎加载后 bias 和输出完全一致，并通过 head 预检；从这个 checkpoint 重启时 head 不变；标记与 bias
+  不一致时加载和预检都失败。故意改坏 adapter 传配置、scalar value 读标记、预检的一致性 检查、重启时跳过初始化这四处，对应测试都会失败。critic 与
+  SAO 相关的 130 个测试通过；check-config 通过（747 行、94 步，不填 bias 时报错）。还没在 GPU 上跑过。
 
 - **bias 的取值**：按定义应是训练目标的期望。479 两个 epoch 的实际成功率是 pack 0.935、官方 train 0.73，按 648:99 加权约为
   0.91； 配比改了要重算。
-
-- **已知后续**：带 bias 的 checkpoint 多出 `score.bias`。SAO 的 head 预检
-  `scripts/sao/check_critic_head.py` 只接受 `score.weight`，SAO 加载 critic 的
-  `scalar_value.py` 也是无 bias 的 head；用这个 critic 跑 SAO 之前这两处要一起改。
 
 **数据配比（未定）**：Qwen3.5 的 pack 里 86% 的题 temperature 0 下 4 次全对（558 / 648，13.3），只能教
 critic"预测接近 1"。不能整题删掉：SAO 训练时 actor 仍会遇到这些题，critic 需要对它们预测接近
