@@ -3070,52 +3070,113 @@ token）估算，约 16M prompt 和 2.2M completion token。上一次每步约 3
 ### 16.15 用户模拟器评测总表（2026-10-12 起维护）
 
 **口径。** actor 固定为训练前的 Qwen3.5-4B（non-thinking，policy temperature 0）；fixed v2 变体；官方 test
-60 题（Airline 20、Retail 40）× 4 次；用户 temperature 0；NL judge 固定为 DeepSeek-Flash、temperature
-0（`9e7082dc` 起与用户解耦，见 16.12）。表中 mean@4 等于
-pass^1。脚本：`_artifacts/AReaL/codex-sao-math/user-sim-20261012/test60_table.py`，按 test
-题号从各次运行的 `episodes.jsonl` 里取。
+60 题（Airline 20、Retail 40）× 4 次。用户模拟器和 NL judge 都用各模型的默认模式：DeepSeek-Flash 和 Doubao 默认开
+thinking，此时 temperature 参数不生效（见下文"thinking 与 temperature"）；Qwen3.5-4B 用户关
+thinking、temperature 0。NL judge 固定为 DeepSeek-Flash（`9e7082dc` 起与用户解耦，见 16.12）。表中 mean@4
+等于 pass^1。脚本： `scripts/user-sim/test60_table.py`，按 test 题号从各次运行的 `episodes.jsonl` 里取。
 
-| 用户模拟器             | 档位 | Airline mean@4 | Airline pass^4 | Retail mean@4 | Retail pass^4 | 合计 mean@4 | 合计 pass^4 | 运行（代码）                                       |
-| ---------------------- | ---- | -------------: | -------------: | ------------: | ------------: | ----------: | ----------: | -------------------------------------------------- |
-| DeepSeek-Flash         | 中上 |          0.438 |          0.300 |         0.812 |         0.575 |       0.688 |       0.483 | `step0-base-t0-deepseek-fixed-v2`（`b31e8eb5`）\*  |
-| Doubao 2.1 Turbo       | 中下 |           待跑 |                |               |               |             |             | pueue 476                                          |
-| Qwen3.5-4B（自己部署） | 弱   |          0.450 |          0.250 |         0.669 |         0.400 |       0.596 |       0.350 | `full-qwen35user-v2`（`9e7082dc`，pueue 472）      |
-| GLM 5.3 / Haiku / Luna |      |           待跑 |                |               |               |             |             | endpoint 待接入；Luna 等 DeepSeek 半价窗口结束后跑 |
+| 用户模拟器             | 档位 | 模式            | Airline mean@4 | Airline pass^4 | Retail mean@4 | Retail pass^4 | 合计 mean@4 | 合计 pass^4 | 运行（代码）                                       |
+| ---------------------- | ---- | --------------- | -------------: | -------------: | ------------: | ------------: | ----------: | ----------: | -------------------------------------------------- |
+| DeepSeek-Flash         | 中上 | thinking        |          0.512 |          0.300 |         0.825 |         0.525 |       0.721 |       0.450 | `deepseek-base-u0p0`（`9e7082dc`，pueue 473）\*    |
+| Doubao 2.1 Turbo       | 中下 | thinking medium |          0.438 |          0.250 |         0.606 |         0.250 |       0.550 |       0.250 | `doubao-base-u0p0`（`9e7082dc`，pueue 476）        |
+| Qwen3.5-4B（自己部署） | 弱   | non-thinking T0 |          0.450 |          0.250 |         0.669 |         0.400 |       0.596 |       0.350 | `full-qwen35user-v2`（`9e7082dc`，pueue 472）      |
+| GLM 5.3 / Haiku / Luna |      |                 |           待跑 |                |               |               |             |             | endpoint 待接入；Luna 等 DeepSeek 半价窗口结束后跑 |
 
-\* 旧运行里 judge 和用户都是 DeepSeek-Flash，与解耦后的配置等价；同代码重跑见 pueue 473，两次的差异也就是同配置下的运行间噪声。
+\* 旧运行 `step0-base-t0-deepseek-fixed-v2`（`b31e8eb5`，judge 和用户都是 DeepSeek-Flash）为 Airline
+0.438 / 0.300、Retail 0.812 / 0.575、合计 0.688 / 0.483。两次配置等价，差异就是同配置下的运行间噪声：Airline 差
+0.075（80 个 episode），Retail 差 0.013。
 
 第 8 节的 Doubao 结果（official 变体、judge 也是 Doubao）按同样的 test 题号算是 Airline 0.787、Retail
 0.588，**不能放进上表**：official 的 Airline 有"只说 Done 也得分"的评分盲区（第 7 节），Airline 因此偏高约 0.35。
 
-**目前的读数。** 用户变弱时掉分集中在 Retail（DeepSeek → Qwen3.5-4B：0.812 → 0.669，19 题变差、8 题变好），Airline
-基本不变（5 题变差、7 题变好），和第 9.1 节 Doubao 的规律一致。原因要靠下面的 case study 确定。
+**读数。** 换弱用户时掉分集中在 Retail：DeepSeek 0.825 → Doubao 0.606 / Qwen
+0.669。按（题、trial）配对，DeepSeek 成功而 Doubao 失败 41 例、反向 6 例；DeepSeek 成功而 Qwen 失败 44 例、反向 19
+例。Airline 三者在 0.44–0.51 之间，落在上面的运行间噪声范围内。
+
+**已知评分偏差：用户先发 TRANSFER 仍判成功。** 用户发 `###TRANSFER###` 时 agent 还没调用转人工工具，episode 却得 1
+分。test 60 的成功 episode 里，DeepSeek 11 个、Doubao 4 个、Qwen 4 个，集中在 airline
+26/31/32/37/48、retail 27/32/65/94。这是上限：agent 本应拒绝、用户转人工后结束时，数据库未改，成功是合理的。全部扣掉时 DeepSeek
+为 0.675，排序不变。决定（2026-10-12）：暂不修题，避免已有运行全部重跑。
 
 **只报 test，不报 base。** 论文和训练中评测只用 test 60 题，主表就只报 test。base 运行（test + train 99
 题）只在两种情况下需要：看用户模拟器对 train 题的影响（训练时 agent 实际面对的是 train 题和这个模拟器，这决定 16.12
 里"现象要出在训练上"能不能成立），以及给 case study 多一倍样本。所以 API 便宜时跑 base，主表仍取 test 子集。
 
-**已挂的运行（2026-10-12，pueue `gpu8`，代码 `9e7082dc`，启动脚本
-`user-sim-20261012/api-user/launch.sh`）：**
+#### thinking 与 temperature（2026-10-12 核查）
 
-| pueue | 用户     | 题集 | policy T | 用户 T | 目的                                                                     |
-| ----- | -------- | ---- | -------: | -----: | ------------------------------------------------------------------------ |
-| 473   | DeepSeek | base |        0 |      0 | 同代码的 DeepSeek 基线；和旧运行对比得到运行间噪声                       |
-| 474   | DeepSeek | test |        0 |    1.0 | agent 固定、只让用户随机：4 次之间的差异全部来自用户（16.3 问题 A 的量） |
-| 475   | DeepSeek | test |      1.0 |      0 | 用户固定、只让 agent 随机，对照 474；也是训练时的采样设定                |
-| 476   | Doubao   | base |        0 |      0 | 填上表的 Doubao 行（judge 为 DeepSeek）                                  |
+473 的用户和 policy 都按 temperature 0 配置，但 4 次重复仍有 27/60 题结果不一致。逐对比较轨迹，DeepSeek 489/492
+对、Doubao 489/489 对在第一条用户消息就已分叉。原因是 `deepseek-flash` 默认开 thinking，thinking 模式下服务商不理会
+temperature；Doubao 的 `reasoning_effort=medium` 同理。tau2 代码把 temperature
+正确传到了请求里（resolved_config 可查），问题在于我们没有传关闭 thinking 的参数。官方 τ²-bench 的用户是
+gpt-4.1，不是推理模型，所以没有这个问题。
 
-DeepSeek 用量大的 473–475 排在前面，赶 DeepSeek 的半价时段。
+直接调 API 的实测（同一 prompt、temperature 0、各 3 次）：
 
-**Case study 计划。** 对象是上表的三个模拟器（DeepSeek、Doubao 476、Qwen3.5-4B）。actor 固定且 policy
-temperature 0，同一题同一 trial 在不同模拟器下的差异只能来自用户，所以按（题、trial）配对比较，重点看"一个模拟器下成功、另一个下失败"的配对。每条失败
-episode 标一个首要原因：
+| 设置                                         | thinking | 3 次输出     |
+| -------------------------------------------- | -------- | ------------ |
+| DeepSeek 默认                                | 有       | 各不相同     |
+| DeepSeek `extra_body.thinking.type=disabled` | 无       | 逐字相同     |
+| Doubao `reasoning_effort=medium` 或不传      | 有       | 各不相同     |
+| Doubao `thinking.type=disabled`              | 无       | 仍有细微差别 |
 
-- **agent 侧**：沿用第 14 节和 15.5 的 M1–M17、T 编码，能细分时再加子类。目的是列出 agent 还能提升的能力。
-- **用户侧（新增 U 编码，标注时可以修订）**：U1 确认的同一句里结束（9.1 的主要机制）；U2 不给或给错必要信息；U3
-  偏离任务说明（换目标、换颜色/型号、编造信息）；U4 无理由要求转人工或放弃；U5 角色错乱（像 agent 一样说话、替 agent 做决定）；U6 过度帮忙，替
-  agent 补上该由 agent 推出的信息（成功被用户"救回来"，16.11 的 $\eta$）；U7 格式或协议错误（漏掉或误用
-  `###STOP###`/`###TRANSFER###`）。
-- **benchmark 侧**：题目本身的问题，沿用第 7 节的分类。
+经 LiteLLM（用户模拟器的实际调用路径）复测 DeepSeek，结果相同，`extra_body` 能传到服务端。
 
-产出是"模拟器 × 失败原因"矩阵，以及每类 2–3 个代表轨迹，作为论文开头那张图的候选（16.12）。U6 要从成功的 episode 里找，只看失败会漏掉。 Doubao
-的 476 跑完后三个模拟器一起标；标注沿用 14 节的做法（Codex 分片标注，我抽查）。
+**setting 决定（2026-10-12）。** 用户模拟器和 NL judge 用各模型的默认模式，DeepSeek 和 Doubao 开
+thinking；闭源模型多数不支持关 thinking 或设 temperature，统一用默认模式最容易对齐。被训练的 actor 关 thinking，评测时
+policy temperature 0。
+
+**用户随机性对组内 reward 的影响。** 474、475 原本想拆开"只有用户随机"和"只有 policy 随机"两部分（GRPO 的组内 reward 差异里，只有
+policy 那部分是 agent 能学的信号）。用户一直开着 thinking，所以 473 和 474 实际都是"只有用户随机"，policy 在 T=0
+下基本确定（473 中第一处分叉落在 actor 上的只有 3/492 对）；475 是"两者都随机"。4 次结果不一致的 test 题数：
+
+| 运行 | 用户                        | policy | 不一致题数 / 60 |
+| ---- | --------------------------- | ------ | --------------: |
+| 473  | DeepSeek thinking           | T=0    |              27 |
+| 474  | DeepSeek thinking（设 T=1） | T=0    |              26 |
+| 475  | DeepSeek thinking           | T=1    |              23 |
+| 476  | Doubao thinking             | T=0    |              36 |
+| 472  | Qwen3.5-4B non-thinking T0  | T=0    |              29 |
+
+用户随机性单独就让四成以上的题结果不稳定，policy 采样没有让它更乱。"只有 policy 随机"一组需要确定性的用户，只有关掉 thinking 的 DeepSeek
+能做到，见 481/482。472 两侧都是 T=0 却仍有 29 题不一致，来自 SGLang 批量推理的数值不确定性（第一处分叉 actor 90 对、用户 86 对）。
+
+#### 运行记录（pueue `gpu8`，代码 `9e7082dc`，启动脚本 `scripts/user-sim/launch_api_user.sh`）
+
+| pueue | 用户                  | 题集 | policy T | 用户 T      | 结果 / 目的                                  |
+| ----- | --------------------- | ---- | -------: | ----------- | -------------------------------------------- |
+| 473   | DeepSeek thinking     | base |        0 | 0（不生效） | 总表 DeepSeek 行；和旧运行对比得到运行间噪声 |
+| 474   | DeepSeek thinking     | test |        0 | 1（不生效） | 合计 0.721 / 0.467，和 473 等价              |
+| 475   | DeepSeek thinking     | test |      1.0 | 0（不生效） | 合计 0.713 / 0.500；训练时的采样设定         |
+| 476   | Doubao thinking       | base |        0 | 0（不生效） | 总表 Doubao 行                               |
+| 481   | DeepSeek non-thinking | test |        0 | 0           | 待跑：用户能力是否下降，4 次是否一致         |
+| 482   | DeepSeek non-thinking | test |      1.0 | 0           | 待跑："只有 policy 随机"一组                 |
+
+所有已完成运行：240（test）或 656（base）个 episode 全部完成，无 infra 排除，judge 请求全部到
+api.deepseek.com，用户请求全部到对应服务商。
+
+#### Case study：三个模拟器下的失败归因（Codex，pueue 477）
+
+完整报告：[user-sim-case-study-20261012/REPORT.md](user-sim-case-study-20261012/REPORT.md)；模拟器
+× 原因矩阵与配对统计：[matrix.md](user-sim-case-study-20261012/matrix.md)。逐条标注 `labels.jsonl`（277
+行）在 `_artifacts/AReaL/codex-sao-math/user-sim-20261012/case-study/`。
+
+三个模拟器共 720 个 test episode，272 个失败，每个失败标一个首因：agent 133、用户 124、benchmark 15。Codex 自查 10
+例，首因改动 0；人工抽查 deepseek retail:49 t0（第 21 条消息"Yes, please proceed …
+###STOP###"，换货工具未执行，U1）标注正确。
+
+| 用户模拟器 | 成功 / 240 | agent 首因 | 用户首因 | benchmark 首因 |
+| ---------- | ---------: | ---------: | -------: | -------------: |
+| DeepSeek   |        173 |         46 |       13 |              8 |
+| Doubao     |        132 |         49 |       55 |              4 |
+| Qwen3.5-4B |        143 |         38 |       56 |              3 |
+
+- **Retail 掉分来自用户。** 三者 Retail 的 agent 首因失败几乎相同（13、14、12）。DeepSeek 的 13 个用户首因全是
+  U1（同意操作的同一句里发 STOP）；Doubao 49 个用户首因里 U1
+  31、首轮就结束（U4a）9、中途结束或缩小目标（U4b）3、偏离目标（U3）6，偶尔混入中文售后话术或把 scenario 当话题讨论（U5）；Qwen 40
+  个用户首因里 37 个是 U3，编造地址、跟随 agent 的错误前提、违反预算或分支条件。
+- **Airline 主要是 agent 问题。** "资格判断正确、却用转人工代替拒绝"（M2a）在三个模拟器下分别 21、19、18
+  次；其次是工具语义误解（M14）和支付路由（M5）。
+- **成功里也有用户的作用。** 5 例是用户把 agent 从死路拉回（U6，例如提出 pending 订单改 modify 代替 exchange）。
+
+新增的用户子码：U4a 未开始任务就结束，U4b 未完成就结束或缩小目标，U7a 转人工工具执行前发 TRANSFER。benchmark 码：B1 指令欠指定或分支与
+gold 不一致，B2 fixed 的转人工规则误伤合法 handoff。
