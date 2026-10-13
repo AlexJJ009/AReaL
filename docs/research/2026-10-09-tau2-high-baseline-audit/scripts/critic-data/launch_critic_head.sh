@@ -6,7 +6,9 @@
 #        order, 2 epochs = 94 steps. Same data as run 479; compare head only.
 #   mix  critic-mix pack (122 informative + 99 easy, 16.14.5) + official train
 #        (99) = 320 rows, reshuffled together every epoch, 4 epochs = 80 steps.
-# Bias init = expected T=1 success of the training rows (479 rollouts).
+# Bias init = expected T=1 success of the training rows (479 rollouts). The head
+# trains at the backbone lr (5e-6): with Adam a 1e-4 head lr moved the zero-init
+# weight enough to shift every prediction by ~0.15 in one step (smoke 498).
 # Uses all 8 GPUs (4 train + 4 rollout); queue it in the pueue gpu8 group.
 # Usage: launch_critic_head.sh NAME {v2|mix} [extra hydra overrides...]
 set -euo pipefail
@@ -15,11 +17,12 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 SRC="$ROOT/src-a88d480e"
 OUT="$ROOT/$NAME"
 CACHE=/data_storage/yl_test/lgx/data-1/code/_cache
+PACKS=/data_storage/yl_test/lgx/data-1/dataset/tau2
 test ! -e "$OUT/tau2-critic-fit-evidence/summary.json" || { echo "refusing to overwrite $OUT"; exit 2; }
 case $DATA in
-  v2)  PACK=$CACHE/tau2-areal-pack-20261011-v2
+  v2)  PACK=$PACKS/tau2-areal-pack-20261011-v2
        DATA_OVR=(critic_head_bias_init=0.91 total_train_epochs=2 train_dataset.shuffle=false) ;;
-  mix) PACK=$CACHE/tau2-areal-pack-20261013-critic-mix-v1
+  mix) PACK=$PACKS/tau2-areal-pack-20261013-critic-mix-v1
        DATA_OVR=(critic_head_bias_init=0.78 total_train_epochs=4 train_dataset.shuffle=true) ;;
   *) echo "bad data $DATA"; exit 2 ;;
 esac
@@ -42,7 +45,7 @@ git rev-parse HEAD > "$OUT/git-head.txt"
 git status --short > "$OUT/git-status.txt"
 echo "$DATA $*" > "$OUT/args.txt"
 OVR=(experiment_name=tau2-critic-head econfig.benchmark_variant=fixed "critic_task_pack=$PACK"
-     critic_head_lr=1e-4 "${DATA_OVR[@]}" "$@")
+     "${DATA_OVR[@]}" "$@")
 if [[ " $* " == *" --check-config "* ]]; then
   exec scripts/tau2/run.sh data critic-head "${OVR[@]}"
 fi

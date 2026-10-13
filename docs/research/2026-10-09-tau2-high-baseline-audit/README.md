@@ -1156,11 +1156,16 @@ airline_654 一道违规。其余被标出的都是误报：gold 里先订再改
 
 **版本**：
 
-- `_cache/tau2-areal-pack-<日期>-v<N>` 每个版本只读保留，里面带
-  `decisions.json`，记着每道题为什么保留、改了什么、为什么丢，供追溯和写 ADR 用。
-- `_cache/tau2-areal-pack-latest` 是指向当前版本的软链（现在指向 v2），脚本默认读它。出新版本只改这个软链。
-- Telecom 单独建 pack：`_cache/tau2-areal-telecom-pack-<日期>-v<N>`，当前版本的软链是
+- 每个版本只读保存在 `data-1/dataset/tau2/tau2-areal-pack-<日期>-v<N>`，里面带
+  `decisions.json`，记着每道题为什么保留、改了什么、为什么丢，供追溯和写 ADR 用。`_cache` 名义上是可再生成的缓存，pack 不能再生成，所以
+  2026-10-13 起放在 `dataset/`。`code/_cache/` 下同名路径是指向 `dataset/tau2/` 的软链，本文其他地方和旧脚本、旧 run
+  的 `pack.txt` 里写的 `_cache/...` 路径都仍然有效。
+- `tau2-areal-pack-latest` 是指向当前版本的软链（现在指向 v2），`dataset/tau2/` 和 `_cache/` 下各有一个，脚本默认读
+  `_cache` 下的那个。出新版本时两个软链都要改。
+- Telecom 单独建 pack：`dataset/tau2/tau2-areal-telecom-pack-<日期>-v<N>`，当前版本的软链是
   `tau2-areal-telecom-pack-latest`（现在指向 v1）。
+- critic 训练用的子集 pack（16.14.5）也放在 `dataset/tau2/`。修过的 tau2-bench
+  数据目录（fixed-v2、fixed-v3）还在 `_cache/`，许多 pueue 命令写死了这些路径，等队列空了再搬。
 
 **工作目录**
 `/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/audits/areal-tau2-data-screen-20261010/`：`data/`（原始数据），四份
@@ -3176,14 +3181,22 @@ completion token；Instruct 约 10M + 2M。
   $[0,1]$ 内，无界线性 head 是沿用的默认，不是为这个任务选的。第 0 步输出约 $\pm 3$ 来自这个初始化：std 0.02 的权重乘以 2560
   维、范数一百多的隐状态。
 
-- **修 A 的做法**：只加一个 bias（$V = w^\top h + b$）不够。lr 5e-6 下 $b$ 几乎不动，整体水平仍要靠骨干一起平移；$b$ 设成均值、
-  $w$ 仍按 std 0.02 随机初始化，$b$ 也会被 $\pm 3$ 的噪声盖住。所以要三处一起改：
+- **修 A 的做法**：只加一个 bias（$V = w^\top h + b$）不够：$b$ 设成均值、$w$ 仍按 std 0.02 随机初始化，$b$ 会被
+  $\pm 3$ 的噪声盖住。所以两处一起改：
 
-  | 改动                                        | 作用                                                                                                                          |
-  | ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-  | $w$ 零初始化                                | 第 0 步对所有 token 输出 $b$，MSE 从约 10 降到目标方差；最后一层只有 1 个输出，零初始化没有对称性问题，梯度 $(V - y)h$ 不为 0 |
-  | $b$ 初始化为训练集均值                      | 起点在正确的水平上（监督学习的先验 bias 初始化，例如 RetinaNet）                                                              |
-  | head 单独学习率（1e-4 量级），骨干仍为 5e-6 | 整体水平由 $b$ 很快修正，而不是让骨干一起平移（LP-FT 一类做法）                                                               |
+  | 改动                   | 作用                                                                                                                          |
+  | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+  | $w$ 零初始化           | 第 0 步对所有 token 输出 $b$，MSE 从约 10 降到目标方差；最后一层只有 1 个输出，零初始化没有对称性问题，梯度 $(V - y)h$ 不为 0 |
+  | $b$ 初始化为训练集均值 | 起点在正确的水平上（监督学习的先验 bias 初始化，例如 RetinaNet）                                                              |
+
+  head 和骨干用同一个学习率 5e-6，不单独设。Adam 让每个参数每步大约移动 lr，与梯度大小无关：$b$ 只有 1 个参数，即使 lr 为 1e-4，80
+  步也只移动约 0.008，整体水平修正不了；$w$ 有 2560 个分量，乘上范数一百多的隐状态，lr 1e-4 时一步就能让输出整体移动零点几。smoke 498 用
+  1e-4 时，第 1 步后预测从全部 0.78 变为均值 0.63、范围 0.43–0.81，正好朝那一个 batch 的目标均值 0.62 靠，整体水平会逐 batch
+  跳动。所以起点靠初始化修好，之后不靠 head 的大学习率。`critic_head_lr` 字段保留，正式实验不设。
+
+  训练时参数以 fp32 存储（`optimizer_dtype: float32`，前向和反向由 FSDP2 转成 bf16 计算），lr 量级的小更新不会被 bf16
+  舍入掉：498 的 recover checkpoint 里 `score.bias` 是 fp32，两步后从 0.78 变为 0.779909，Adam 状态也是
+  fp32。导出给 SAO 的 HF checkpoint 转成 bf16（`score.bias` 读出为 0.78125），0.78 附近的精度约 0.004。
 
   另一条路是 sigmoid + BCE（PRM/verifier 对 0/1 成功率的常用做法；Farebrother et al. 2024 显示 value
   回归改为分类在深度 RL 中更稳），留作上面三处改完后仍漂时的备选。这些都只针对 A。
@@ -3269,7 +3282,7 @@ policy 用 greedy 解码、user temperature 0 时，题内方差没有变小（0
 
 #### 16.14.5 critic 训练数据配比（2026-10-13）
 
-**依据**。 把 479 的训练 rollout（temperature 1，每题 2 次）和 13.3 的 pack 评测（temperature 0，每题 4
+**依据**。把 479 的训练 rollout（temperature 1，每题 2 次）和 13.3 的 pack 评测（temperature 0，每题 4
 次）按题合并，每题 6 个样本。下表按 479 的 2 次统计：
 
 | Qwen3.5      | 题数 | 成功率 | 2 次全对 | 2 次全错 | 有对有错 | 标签方差 |
@@ -3283,37 +3296,37 @@ policy 用 greedy 解码、user temperature 0 时，题内方差没有变小（0
   temperature 1 下的成功率是 0.66。
 - 简单题所有 token 的目标都是 1，只能教 critic 整体水平。整体水平已经交给 head 的 bias（16.14.3），几道题就够；479 的 1494 条
   episode 里约七成花在这类题上，每条约 11K DeepSeek prompt token。
-- **降采样，不加权**。 加权仍要把 rollout 跑完，费用不变，信息量也不变。
-- **不整题删**。 SAO 训练时 actor 仍会遇到简单题，critic 要对它们预测接近 1，所以保留一小部分。
+- **降采样，不加权**。加权仍要把 rollout 跑完，费用不变，信息量也不变。
+- **不整题删**。SAO 训练时 actor 仍会遇到简单题，critic 要对它们预测接近 1，所以保留一小部分。
 
-**配比**。 有信号的 122 道全部保留；简单题按（领域，keep/fix）分层随机抽 99 道，配额与各层简单题数成比例（Airline fix 22 /
-117、keep 32 / 167，Retail fix 38 / 203、keep 7 / 39，种子 20261013）；再加官方 fixed train 99 道，共
-320 行，batch 16 下每个 epoch 正好 20 步。按 479 的 temperature 1 成功率估算，标签均值 0.78（全量 pack 时
-0.91），简单题占 31% 的 episode。
+**配比**。有信号的 122 道全部保留；简单题按（领域，keep/fix）分层随机抽 99 道，配额与各层简单题数成比例（Airline fix 22 / 117、keep
+32 / 167，Retail fix 38 / 203、keep 7 / 39，种子 20261013）；再加官方 fixed train 99 道，共 320
+行，batch 16 下每个 epoch 正好 20 步。按 479 的 temperature 1 成功率估算，标签均值 0.78（全量 pack 时 0.91），简单题占
+31% 的 episode。
 
-**顺序**。 pack 题和官方题混在一起，每个 epoch 重新打乱（`train_dataset.shuffle=true`，sampler 按 seed 和 epoch
+**顺序**。pack 题和官方题混在一起，每个 epoch 重新打乱（`train_dataset.shuffle=true`，sampler 按 seed 和 epoch
 打乱）。479 是 pack 在前、官方在后、每个 epoch 同一顺序，每个 epoch 最后 7 个 batch 全是官方题。用同一个
 `create_dataloader` 在 CPU 上核对：不打乱时官方题集中在最后 7 个 batch；打乱后每个 batch 含 2–9 道官方题，两个 epoch
 的顺序不同。run 摘要里的 `source` 仍写 `task_pack_then_official_tau2_train_tasks`，指的是行的拼接顺序，采样顺序由
 shuffle 决定。
 
-**Pack**。 `_cache/tau2-areal-pack-20261013-critic-mix-v1`（只读），由
+**Pack**。`data-1/dataset/tau2/tau2-areal-pack-20261013-critic-mix-v1`（只读），由
 `scripts/critic-data/select_critic_mix.py`（`a88d480e`）从 pack v2 生成：两个领域的 `tasks.json` 和
 `task_db.json` 只保留选中的 221 题，数据库文件原样复制，manifest 重算 sha256，`selection.json`
 记录规则、输入路径、分层配额和题目清单。用 `examples/tau2/task_pack.py` 加载通过，221 题的任务定义和数据库路径与 v2
 逐题一致。`tau2-areal-pack-latest` 仍指向 v2。
 
-**Instruct 不调**。 它在 pack 上成功率 0.656，2 次全对 333 道、全错 131 道、有对有错 184 道，标签本身是平衡的；每题只有 2
+**Instruct 不调**。它在 pack 上成功率 0.656，2 次全对 333 道、全错 131 道、有对有错 184 道，标签本身是平衡的；每题只有 2
 个样本，用来筛题噪声太大。它的问题是 pack（0.6）与 test（0.37）难度不同，但 SAO 训练时 critic
 面对的是训练题，这个差异对实际使用的影响可能小于验证数字显示的。
 
-**SAO 是否共用这份配比（未定）**。 critic 在 SAO 里面对的是 SAO 的训练题，两边的分布应当一致。若 SAO 仍用全部 747 题，critic
+**SAO 是否共用这份配比（未定）**。critic 在 SAO 里面对的是 SAO 的训练题，两边的分布应当一致。若 SAO 仍用全部 747 题，critic
 应对简单题加权（约 526 / 99 ≈ 5 倍）来补偿；若 SAO 也用这 320 题，不需要加权。简单题上 $R = 1$、$V \approx 1$，advantage
 接近 0，对 actor 也几乎没有信号。
 
-**实验（都还没有排队）**。 worktree `tau2-training-20261013-critic-head/src-a88d480e`，启动脚本
+**实验**。worktree `tau2-training-20261013-critic-head/src-a88d480e`，启动脚本
 `launch_critic_head.sh NAME {v2|mix}`（副本在 `scripts/critic-data/`），入口
-`data critic-head`，head lr 1e-4，骨干 lr 5e-6，其余与 479 相同：
+`data critic-head`，head 与骨干的 lr 都是 5e-6（16.14.3），其余与 479 相同：
 
 | 模式 | 训练数据                     | 顺序                | epoch / 步数 | bias 初值 | 对比对象                |
 | ---- | ---------------------------- | ------------------- | ------------ | --------- | ----------------------- |
@@ -3321,19 +3334,25 @@ shuffle 决定。
 | mix  | mix pack 221 + 官方 train 99 | 混合，每 epoch 重排 | 4 / 80       | 0.78      | v2 模式：只差数据和顺序 |
 
 v2 模式看 Airline 能否逼近 0.6 的上限（16.14.4）；Retail 的上限低，不期望大的正 EV。两个模式的 check-config 都通过：v2 为
-747 行、94 步，mix 为 320 行、80 步，解析出的配置里 bias、head lr、shuffle 和 epoch 数与上表一致。
+747 行、94 步，mix 为 320 行、80 步，解析出的配置里 bias、shuffle 和 epoch 数与上表一致，不设 `critic_head_lr`。
 
-**队列**（pueue `gpu8` 组，2026-10-13 排入）：498 是 smoke（mix 数据、tune 模式、2 步，验证 dev 20 题），这是带
-bias 的 head 第一次在 GPU 上跑；499（v2）和 500（mix）依赖 498 成功，并延迟到北京时间 10 月 14 日 00:35 才入队，赶上
-DeepSeek 的夜间低价时段。user 和 NL judge 与 16.15 评测相同，都是 DeepSeek-Flash 默认 thinking（配置里写的
-temperature 0 不生效）。policy 保持 temperature 1，与 SAO 训练时的采样一致，也与 16.14.4 中 475
-的上限口径一致；它和评测规范的 policy temperature 0 不同，这是有意为之。
+**队列**（pueue `gpu8` 组）：
+
+- 498 smoke（mix 数据、tune 模式、2 步、验证 dev 20 题，head lr 1e-4）2026-10-13 02:13–02:38 PDT
+  跑完，退出码 0。第 1 步 所有 token 的预测都等于 bias 初值 0.78，起点 MSE 0.26（479 第 0 步约 10）；checkpoint 带
+  `score.bias`，SAO 的 `check_critic_head.py` 通过。它也暴露了 head lr 1e-4
+  的问题（16.14.3），所以正式实验去掉了这个设置。
+- 499（v2）和 500（mix）依赖 498 成功，延迟到北京时间 10 月 14 日 00:35 才入队，赶上 DeepSeek
+  的夜间低价时段。启动脚本在入队前改成不设 head lr、读 `dataset/tau2/` 下的 pack，任务命令不变。
+- user 和 NL judge 与 16.15 评测相同，都是 DeepSeek-Flash 默认 thinking（配置里写的 temperature 0
+  不生效）。policy 保持 temperature 1，与 SAO 训练时的采样一致，也与 16.14.4 中 475 的上限口径一致；它和评测规范的 policy
+  temperature 0 不同，这是有意为之。
 
 启动前发现并处理了两处：
 
-- **数据目录换成 fixed-v3**。 当前代码的 `fixed` 变体校验 v3 的任务哈希，v2 目录启动即报错。v3 比 v2 多修了 7
-  道题（11.2.1），所以 v2 模式与 479 的对比不只差 head；16.15 里同一用户模拟器 v2 → v3 的合计变化在运行间噪声内。
-- **固定的 worktree 原本没有真正隔离**。 worktree 里的 `.venv` 是指向主 worktree 的软链接，其中的 `areal.pth` 把主
+- **数据目录换成 fixed-v3**。当前代码的 `fixed` 变体校验 v3 的任务哈希，v2 目录启动即报错。v3 比 v2 多修了 7 道题（11.2.1），所以
+  v2 模式与 479 的对比不只差 head；16.15 里同一用户模拟器 v2 → v3 的合计变化在运行间噪声内。
+- **固定的 worktree 原本没有真正隔离**。worktree 里的 `.venv` 是指向主 worktree 的软链接，其中的 `areal.pth` 把主
   worktree 加进 `sys.path`，第一次 check-config 的 traceback 显示 `train_critic.py` 是从主 worktree
   导入的。启动脚本现在先设 `PYTHONPATH=$SRC`，之后 check-config 里的模块路径都在 `src-a88d480e` 下。479/480 在
   20:04 前跑完，`04be68ab` 之后第一处代码提交是 20:48 的 `7da3a4f3`，已提交的代码一致；当时主 worktree
