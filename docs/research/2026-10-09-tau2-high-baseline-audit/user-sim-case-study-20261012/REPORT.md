@@ -305,9 +305,10 @@ M1/M2a 和用户偏离，所以 M8 集中在 Doubao 下可能和对话走向有�
 照办（`insurance: "yes"`），gold 却写死了 `insurance: "no"`，数据库比对失败。用户和 agent 都没有违反说明。
 
 同类：[qwen retail:55 t3](/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/step0-selfhost-user/full-qwen35user-v2/trajectories/retail:55:trial3/ba46462c091e44dbba93f14a43cbc6ff.json)
-的取消原因任务没指定，gold 只认 "no longer
-needed"；[deepseek retail:45 t2](/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/deepseek-base-u0p0/trajectories/retail:45:trial2/889e2f1959874b2ea460b65e7925ae27.json)
-的 gold 固定了一个只在特定分支下成立的选项。
+的取消原因任务没指定，gold 只认 "no longer needed"。
+
+deepseek retail:45 t2 原标为 B1，fixed-v3 审查时改判为 agent 失败（M7）：数据库里有 3 款可用的 canister
+吸尘器，agent 只列了一款，而这道题考的正是列全选项（README 11.2.1）。所以 B1 实际是 6 个。
 
 ### 6.2 B2：转人工规则误伤合法转人工（8 个）
 

@@ -3308,6 +3308,10 @@ temperature；Doubao 的 `reasoning_effort=medium` 同理。tau2 代码把 tempe
 实测：DeepSeek 传 `extra_body.thinking.type=disabled` 后三次输出逐字相同，经 LiteLLM 传也有效；Doubao 关掉
 thinking 后仍有细微差别。
 
+**关掉 thinking 后 DeepSeek 用户反而更好。** test 60：Airline 0.412 / 0.200，Retail 0.906 / 0.775，合计
+0.742 / 0.583（policy T=1 时合计 0.775 / 0.600）。对比 thinking 的 Retail 0.825 / 0.525。原因待 case
+study 确认；setting 仍按下面的决定用默认模式，这组结果只作对照。
+
 **setting 决定（2026-10-12）。** 用户模拟器和 NL judge 用各模型的默认模式（DeepSeek、Doubao 开
 thinking）。闭源模型多数不支持关 thinking 或设 temperature，统一用默认模式最容易对齐。被训练的 actor 关 thinking，评测时
 policy temperature 0。
@@ -3320,10 +3324,13 @@ test 题数：
 | DeepSeek thinking          |      27/60 |      23/60 |
 | Doubao thinking            |      36/60 |            |
 | Qwen3.5-4B non-thinking T0 |      29/60 |            |
+| DeepSeek non-thinking T0   |      17/60 |      19/60 |
 
 policy 在 T=0 时基本确定（DeepSeek 运行中第一处分叉落在 actor 上的只有 3/492
-对），所以用户的随机性单独就让四成以上的题结果不稳定，policy 采样没有让它更乱。"只有 policy 随机"的一组需要确定性用户，用关 thinking 的
-DeepSeek 跑（pueue 481/482，待结果）。Qwen 用户两侧都是 T=0 仍有 29 题不一致，来自 SGLang 批量推理的数值不确定性。
+对），所以用户的随机性单独就让四成以上的题结果不稳定，policy 采样没有让它更乱。关掉 thinking 的 DeepSeek（pueue 481/482）回复里确实没有
+reasoning（0/994 条），不一致的题从 27 降到 17，但 180 对重复里仍有 100 对在第一条用户消息就分叉：真实的长 prompt 下，DeepSeek
+在 T=0、关 thinking 时也不完全确定，前面短 prompt 的"逐字相同"推广不到这里。所以"只有 policy
+随机"一组做不出来，用户侧的随机性只能减小、不能消除。Qwen 用户两侧都是 T=0 仍有 29 题不一致，来自 SGLang 批量推理的数值不确定性。
 
 **Case study：失败是谁造成的。**
 完整报告：[user-sim-case-study-20261012/REPORT.md](user-sim-case-study-20261012/REPORT.md)。三个模拟器共

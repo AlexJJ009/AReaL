@@ -5,8 +5,8 @@
 set -euo pipefail
 NAME=$1 USER_SIM=$2 TASK_SET=$3 POLICY_T=$4 USER_T=$5
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-SRC=/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/pinned-worktrees-b2/AReaL/validation-tau2-selfhost-user-b2-20261012
-SHA=9e7082dcc4532048523a464f50fb7f65ba8b0c8f
+SRC=${TAU2_SRC_PIN:-/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/pinned-worktrees-b2/AReaL/validation-tau2-selfhost-user-b2-20261012}
+SHA=${TAU2_SHA_PIN:-9e7082dcc4532048523a464f50fb7f65ba8b0c8f}
 RUNTIME_VENV=/data_storage/yl_test/lgx/data-1/code/_worktrees/AReaL/codex-sao-math/.venv
 MODEL=/data_storage/yl_test/lgx/data-1/.cache/huggingface/hub/models--Qwen--Qwen3.5-4B/snapshots/851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a
 OUT="$ROOT/$NAME"
@@ -19,7 +19,7 @@ test -z "$(git status --porcelain)"
 echo "$@" > "$OUT/args.txt"; git rev-parse HEAD > "$OUT/git-head.txt"
 export SAO_ARTIFACT_ROOT=/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math
 export HF_HUB_CACHE=/data_storage/yl_test/lgx/data-1/.cache/huggingface/hub
-export TAU2_DATA_DIR=/data_storage/yl_test/lgx/data-1/code/_cache/tau2-bench-b7ea9074c1cba482b30687fecdb5c8425fd6f619-fixed-v2/data
+export TAU2_DATA_DIR=${TAU2_DATA_DIR_PIN:-/data_storage/yl_test/lgx/data-1/code/_cache/tau2-bench-b7ea9074c1cba482b30687fecdb5c8425fd6f619-fixed-v2/data}
 source scripts/sao/runtime_env.sh
 export CPATH="$RUNTIME_VENV/lib/python3.12/site-packages/nvidia/curand/include"
 export PATH="$RUNTIME_VENV/bin:$PATH" PYTHONPATH="$SRC"
