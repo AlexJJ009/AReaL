@@ -178,6 +178,9 @@ M14。致败原因仍归用户，因为任务说明明确要求用户不提供�
   mei_kovacs_8020、邮编 28236、要换水瓶和台灯，没有缺信息。10 个 U4a 都出现在 Doubao 下，涉及 retail:9（3 次）、108（2
   次）、42、56、65、71 和 airline:32。**原因未查明**：可能和 Doubao 的 thinking
   有关，比如推理用完了输出预算、正文为空，但这只是猜测，需要看原始响应才能确认。
+- **2026-10-12 补充：U4a 很可能是方舟服务端异常。** 同样代码和配置下，充值后的 Doubao 重跑（pueue 488，240 个
+  episode）开场就结束的是 0 个，空回复重试 0 次；账户临近欠费时的一次运行（486）是 10 个，还出现过一条无关的"电商商品信息提取结果"。所以这 10 个
+  U4a 不宜算作 Doubao 作为用户模拟器的能力问题（README 16.15）。
 - **U4b，缩小目标后结束（3 个）。**
   [doubao retail:108 t3](/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/doubao-base-u0p0/trajectories/retail:108:trial3/9711cd545660412aae8f0b00fe3e6a5f.json)：任务是退掉除平板以外的物品，用户把目标改成了"问一下能退多少钱"，得知金额
   346.93 后就发了 STOP。
