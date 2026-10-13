@@ -24,6 +24,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
+import random
 import threading
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,35 @@ def domains(pack: str) -> list[str]:
 
 def task_ids(pack: str, domain: str) -> list[str]:
     return list(_domain(pack, domain)[0])
+
+
+def _task_pack_rows(
+    pack: str,
+    selected_domains: tuple[str, ...],
+    *,
+    provenance: dict[str, Any],
+    seed: int,
+) -> list[dict[str, Any]]:
+    """One train row per pack task, shuffled with the seed, domains interleaved."""
+
+    pack = str(Path(pack).absolute())
+    rows = []
+    for domain in selected_domains:
+        if domain not in domains(pack):
+            raise ValueError(f"Task pack {pack} has no {domain} tasks")
+        rows.extend(
+            {
+                "domain": domain,
+                "task_id": task_id,
+                "split": "train",
+                "source_id": f"pack:{domain}:{task_id}",
+                "task_pack": pack,
+                **provenance,
+            }
+            for task_id in task_ids(pack, domain)
+        )
+    random.Random(f"{seed}:task_pack").shuffle(rows)
+    return rows
 
 
 def get_task(pack: str, domain: str, task_id: str) -> Any:

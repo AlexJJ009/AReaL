@@ -11,7 +11,6 @@ import hashlib
 import json
 import math
 import os
-import random
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -31,6 +30,7 @@ from examples.tau2.contracts import (
     resolve_pinned_hf_snapshot,
 )
 from examples.tau2.evaluation import repeat_groups_for_dispatch
+from examples.tau2.task_pack import _task_pack_rows
 from examples.tau2.train import collection_provenance, get_tau2_dataset
 from examples.tau2.utils import Tau2PPOConfig
 from scripts.qualification.critic_pretrain import (
@@ -433,31 +433,6 @@ def resolve_training_snapshots(config: Tau2PPOConfig, *, snapshot_resolver=None)
     if config.critic is not None and config.critic.path == actor_source:
         config.critic.path = actor_snapshot
     return actor_snapshot
-
-
-def _task_pack_rows(
-    pack: str, domains: tuple[str, ...], *, provenance: dict[str, Any], seed: int
-) -> list[dict[str, Any]]:
-    """One train row per pack task, shuffled with the seed, domains interleaved."""
-
-    pack = str(Path(pack).absolute())
-    rows = []
-    for domain in domains:
-        if domain not in task_pack.domains(pack):
-            raise ValueError(f"Task pack {pack} has no {domain} tasks")
-        rows.extend(
-            {
-                "domain": domain,
-                "task_id": task_id,
-                "split": "train",
-                "source_id": f"pack:{domain}:{task_id}",
-                "task_pack": pack,
-                **provenance,
-            }
-            for task_id in task_pack.task_ids(pack, domain)
-        )
-    random.Random(f"{seed}:task_pack").shuffle(rows)
-    return rows
 
 
 def build_tau2_critic_datasets(

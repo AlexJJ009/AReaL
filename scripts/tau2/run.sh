@@ -12,6 +12,8 @@ Usage:
   scripts/tau2/run.sh data critic [overrides...]
   scripts/tau2/run.sh data critic-head [overrides...]   (biased, mean-initialised value head)
   scripts/tau2/run.sh policy {mixed|airline|retail|telecom} {grpo|sao} [overrides...]
+  scripts/tau2/run.sh policy-pack {mixed|airline|retail} sao train_task_pack=/absolute/pack [overrides...]
+    Requires econfig.benchmark_variant=fixed and equal repeats of the combined pool.
 
 Required runtime variables:
   SAO_ARTIFACT_ROOT  shared AReaL runtime/cache root
@@ -142,7 +144,7 @@ case "${SELECTOR}" in
       export TAU2_RUN_ROOT
     fi
     ;;
-  policy)
+  policy|policy-pack)
     MODE="$1"
     shift
     if [[ $# -lt 1 ]]; then
@@ -155,6 +157,10 @@ case "${SELECTOR}" in
     if [[ "${ALGORITHM}" != "grpo" && "${ALGORITHM}" != "sao" ]]; then
       printf 'Unsupported tau2 policy algorithm in this entrypoint: %s\n' "${ALGORITHM}" >&2
       usage >&2
+      exit 2
+    fi
+    if [[ "${SELECTOR}" == "policy-pack" && "${ALGORITHM}" != "sao" ]]; then
+      printf 'Policy-pack mode requires sao\n' >&2
       exit 2
     fi
     case "${MODE}" in
@@ -182,6 +188,11 @@ case "${SELECTOR}" in
     exit 2
     ;;
 esac
+
+POLICY_ENTRY="${REPO_ROOT}/examples/tau2/train.py"
+if [[ "${SELECTOR}" == "policy-pack" ]]; then
+  POLICY_ENTRY="${REPO_ROOT}/scripts/tau2/train_sao_pack.py"
+fi
 
 case "${SELECTOR}:${MODE}" in
   data:critic)
@@ -224,22 +235,22 @@ case "${SELECTOR}:${MODE}" in
       "train_dataset.batch_size=1" \
       "$@"
     ;;
-  policy:mixed)
+  policy:mixed|policy-pack:mixed)
     if ! has_check_config "$@"; then
       load_deepseek_key
     fi
     if [[ "${ALGORITHM}" == "sao" ]]; then
       : "${TAU2_CRITIC_PATH:?Set TAU2_CRITIC_PATH to the restored critic checkpoint}"
       reject_sao_domain_identity_overrides "$@"
-      exec "${PYTHON_BIN}" "${REPO_ROOT}/examples/tau2/train.py" \
+      exec "${PYTHON_BIN}" "${POLICY_ENTRY}" \
         --config "${REPO_ROOT}/examples/tau2/config_sao.yaml" \
         "$@"
     fi
-    exec "${PYTHON_BIN}" "${REPO_ROOT}/examples/tau2/train.py" \
+    exec "${PYTHON_BIN}" "${POLICY_ENTRY}" \
       --config "${REPO_ROOT}/examples/tau2/config_grpo.yaml" \
       "$@"
     ;;
-  policy:airline|policy:retail|policy:telecom)
+  policy:airline|policy:retail|policy:telecom|policy-pack:airline|policy-pack:retail|policy-pack:telecom)
     if ! has_check_config "$@"; then
       load_deepseek_key
     fi
@@ -255,7 +266,7 @@ case "${SELECTOR}:${MODE}" in
           exit 2
           ;;
       esac
-      exec "${PYTHON_BIN}" "${REPO_ROOT}/examples/tau2/train.py" \
+      exec "${PYTHON_BIN}" "${POLICY_ENTRY}" \
         --config "${REPO_ROOT}/examples/tau2/config_sao.yaml" \
         "domains=[${MODE}]" \
         "econfig.domain=${MODE}" \
@@ -263,7 +274,7 @@ case "${SELECTOR}:${MODE}" in
         "${DOMAIN_PRUNE[@]}" \
         "$@"
     fi
-    exec "${PYTHON_BIN}" "${REPO_ROOT}/examples/tau2/train.py" \
+    exec "${PYTHON_BIN}" "${POLICY_ENTRY}" \
       --config "${REPO_ROOT}/examples/tau2/config_grpo.yaml" \
       "domains=[${MODE}]" \
       "econfig.domain=${MODE}" \

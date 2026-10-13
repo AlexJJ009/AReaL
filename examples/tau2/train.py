@@ -6,7 +6,7 @@ import os
 import random
 import sys
 import warnings
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from datasets import Dataset
@@ -366,7 +366,10 @@ def resolve_effective_episodes(config: Tau2PPOConfig, train_items: int) -> int:
     return actual
 
 
-def main(args):
+def main(
+    args,
+    train_rows_hook: Callable[[Tau2PPOConfig, dict[str, Any]], Dataset] | None = None,
+):
     # Suppress pydantic UserWarning
     warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
@@ -374,6 +377,8 @@ def main(args):
     parser.add_argument("--check-config", action="store_true")
     options, config_args = parser.parse_known_args(args)
     config, _ = load_expr_config(config_args, Tau2PPOConfig)
+    if config.train_task_pack is not None and train_rows_hook is None:
+        raise ValueError("train_task_pack requires scripts/tau2/train_sao_pack.py")
     actor_source = config.actor.path
     provenance = collection_provenance(config, actor_source=actor_source)
     domains = validate_tau2_recipe(config)
@@ -391,12 +396,15 @@ def main(args):
     )
     if _dataset_split(config.train_dataset, "train") != "train":
         raise ValueError("Gradient training must use official train tasks")
-    train_dataset = get_tau2_dataset(
-        **dataset_kwargs,
-        split="train",
-        algorithm=config.algorithm,
-        domain_effective_episodes=config.domain_effective_episodes,
-    )
+    if train_rows_hook is None:
+        train_dataset = get_tau2_dataset(
+            **dataset_kwargs,
+            split="train",
+            algorithm=config.algorithm,
+            domain_effective_episodes=config.domain_effective_episodes,
+        )
+    else:
+        train_dataset = train_rows_hook(config, dataset_kwargs)
     if config.task_limit is not None:
         if config.task_limit < 1:
             raise ValueError("task_limit must be positive")
@@ -424,6 +432,17 @@ def main(args):
         and valid_dataset is None
     ):
         raise ValueError("Formal/tune τ² SAO requires a validation dataset")
+    if train_rows_hook is not None and valid_dataset is not None:
+        train_ids = {
+            (row["domain"], row["task_id"], row.get("task_pack"))
+            for row in train_dataset
+        }
+        validation_ids = {
+            (row["domain"], row["task_id"], row.get("task_pack"))
+            for row in valid_dataset
+        }
+        if train_ids & validation_ids:
+            raise ValueError("Tau2 policy train/validation task split is not disjoint")
     if options.check_config:
         logger.info(
             "Resolved config (no workers/API calls):\n%s",

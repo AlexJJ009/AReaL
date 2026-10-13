@@ -180,6 +180,8 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
     # Critic fitting only: a task pack (examples/tau2/task_pack.py) whose tasks
     # are trained before the official train split in every epoch.
     critic_task_pack: str | None = None
+    # SAO pack wrapper only: combine these tasks with the official train split.
+    train_task_pack: str | None = None
     # Critic fitting with scripts/tau2/train_critic_head.py only: value-head bias
     # init (the expected success rate) and head learning rate (None: critic lr).
     critic_head_bias_init: float | None = None
