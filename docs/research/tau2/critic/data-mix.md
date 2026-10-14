@@ -43,10 +43,6 @@ shuffle 决定。
 个样本，用来筛题噪声太大。它的问题是 pack（0.6）与 test（0.37）难度不同，但 SAO 训练时 critic
 面对的是训练题，这个差异对实际使用的影响可能小于验证数字显示的。
 
-**SAO 是否共用这份配比（未定）**。critic 在 SAO 里面对的是 SAO 的训练题，两边的分布应当一致。若 SAO 仍用全部 747 题，critic
-应对简单题加权（约 526 / 99 ≈ 5 倍）来补偿；若 SAO 也用这 320 题，不需要加权。简单题上 $R = 1$、$V \approx 1$，advantage
-接近 0，对 actor 也几乎没有信号。
-
 **实验**。worktree `tau2-training-20261013-critic-head/src-a88d480e`，启动脚本
 `launch_critic_head.sh NAME {v2|mix}`（副本在 `../scripts/critic-data`），入口
 `data critic-head`，head 与骨干的 lr 都是 5e-6（[value-head.md](value-head.md)），其余与 479 相同：
@@ -66,8 +62,6 @@ check-config 都通过：v2 为 747 行、94 步，mix 为 320 行、80 步，�
   跑完，退出码 0。第 1 步 所有 token 的预测都等于 bias 初值 0.78，起点 MSE 0.26（479 第 0 步约 10）；checkpoint 带
   `score.bias`，SAO 的 `check_critic_head.py` 通过。它也暴露了 head lr 1e-4
   的问题（[value-head.md](value-head.md)），所以正式实验去掉了这个设置。
-- 499（v2）和 500（mix）依赖 498 成功，延迟到北京时间 10 月 14 日 00:35 才入队，赶上 DeepSeek
-  的夜间低价时段。启动脚本在入队前改成不设 head lr、读 `dataset/tau2/` 下的 pack，任务命令不变。
 - user 和 NL judge 与 [user-simulator.md §2](../user-simulator.md) 评测相同，都是 DeepSeek-Flash
   默认 thinking（配置里写的 temperature 0 不生效）。policy 保持 temperature 1，与 SAO 训练时的采样一致，也与
   [ev-ceiling.md](ev-ceiling.md) 中 475 的上限口径一致；它和评测规范的 policy temperature 0 不同，这是有意为之。

@@ -49,10 +49,6 @@
 1. 先做零成本的两项：GRPO 丢掉全对或全错的组，训练时用户模拟器用 temperature 1（评测仍用 0）。
    - 代价：每步有效样本变少，可能要加大 batch。
    - 与已经批准的训练计划不同，需要批准。
-1. 主方案：接入 skillscaffold 或 AReaL-tau2-data 的 Retail / Airline 任务，用我们的 4B 重新按 pass-rate
-   筛一遍，评测仍用官方 test 60 题。
-   - 工程量估计 1–2 天：按任务加载 DB，并按 §2 先过滤掉有问题的题。
-   - API 费用：每道候选题要用 DeepSeek 用户跑 8 次。
 
 ## 2 AReaL-tau2-data 的数据质量（2026-10-10 核查）
 
@@ -309,7 +305,7 @@ airline_654 一道违规。其余被标出的都是误报：gold 里先订再改
      fix，判断都成立。
    - 123 道 fix 都只改指令（替换 74、追加 43、两者都有 6），没有替换 gold。
 1. **v2 pack**：`_cache/tau2-areal-pack-20261011-v2`，Airline 380（keep 191、fix 189）、Retail
-   268（keep 48、fix 220），共 648 题；`check_task_pack.py` 结果是全部 gold 1 分、空轨迹 0 分。v2 还没有重新评测。
+   268（keep 48、fix 220），共 648 题；`check_task_pack.py` 结果是全部 gold 1 分、空轨迹 0 分。
 
 ## 5 筛选流程（现行做法）
 

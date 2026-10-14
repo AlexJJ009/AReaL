@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""CPU tests for the τ² mean-initialised critic head (README 16.14.3)."""
+"""CPU tests for the τ² mean-initialised critic head (docs/research/tau2/critic/value-head.md)."""
 
 # Optional model packages must be checked before dependent imports.
 # ruff: noqa: E402

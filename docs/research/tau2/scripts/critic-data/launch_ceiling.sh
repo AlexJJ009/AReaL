@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Repeated eval for the critic EV ceiling (README 16.14): fixed official test (60 tasks) x 4,
+# Repeated eval for the critic EV ceiling (docs/research/tau2/critic/ev-ceiling.md): fixed official test (60 tasks) x 4,
 # with the same sampling as the critic's validation rollouts: policy T=1, DeepSeek-Flash user T=0,
 # DeepSeek-Flash NL judge T=0, thinking off. Protocol copied from user-sim-20261012/api-user/launch.sh
 # (run 475, deepseek-test-u0p1), pinned to the critic snapshot src-04be68ab. Uses 8 GPUs (pueue gpu8).

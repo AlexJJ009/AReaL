@@ -35,7 +35,7 @@ without silently changing which tasks an epoch covers?
   otherwise replay the task once at the end of the epoch under a skip budget. This is
   close to NeMo-RL, SkyRL and upstream AReaL `min_usable_group_size`.
 
-The 2026-10-10 survey in [audit §12.3](../research/tau2/README.md) weighs these:
+The 2026-10-10 survey in [audit §3](../research/tau2/training-setup.md) weighs these:
 
 - With two survivors and a binary reward, the advantage is either 0 or ±1.
 - Losing six of eight members signals a broken task, and a floor of 2 hides that.

@@ -5,7 +5,7 @@ The base critic head is a linear layer with weight std 0.02, so its first output
 are about ±3 for 0/1 targets, and every Adam step moves each parameter by about the
 learning rate: a head bias at the backbone lr of 5e-6 never moves. This variant
 gives the head a bias set to the expected success rate, a zero weight (every token
-starts at that rate), and an optional learning rate of its own (README 16.14.3).
+starts at that rate), and an optional learning rate of its own (docs/research/tau2/critic/value-head.md).
 
 The bias is switched on through ``VALUE_HEAD_BIAS_FLAG`` on the model config, which
 the engine writes into the checkpoint's config.json; the plain critic loaders read

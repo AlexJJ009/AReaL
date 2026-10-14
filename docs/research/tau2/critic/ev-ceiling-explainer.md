@@ -1,7 +1,8 @@
 # 解释方差（EV）与"第一个 token 的上限"
 
-本文解释 README 16.14.4 里"Retail 的 EV 上限只有 0.20"是什么意思、为什么关心 EV，以及这个上限是怎么算出来的。数字来自 16.14.4
-的实验 475：Qwen3.5-4B 当 policy，DeepSeek-Flash 当用户，fixed test 60 题每题跑 4 次。
+本文解释 [ev-ceiling.md](ev-ceiling.md) 里"Retail 的 EV 上限只有 0.20"是什么意思、为什么关心
+EV，以及这个上限是怎么算出来的。数字来自 [ev-ceiling.md](ev-ceiling.md) 的实验 475：Qwen3.5-4B 当
+policy，DeepSeek-Flash 当用户，fixed test 60 题每题跑 4 次。
 
 ## 1. EV 衡量什么
 
@@ -95,7 +96,7 @@ $$
 - **Airline**：大部分波动来自题目难度的差别，critic 有很多可学的东西。实际 EV（v2 最终 0.025，r2 第 50 步 0.137）远低于
   0.61，说明还有很大提升空间。
 
-题内的随机性主要来自哪一侧？16.14.4 做过对照：
+题内的随机性主要来自哪一侧？[ev-ceiling.md](ev-ceiling.md) 做过对照：
 
 - policy 改为 greedy 解码，题内方差没有变小（0.124 对 0.104）；
 - 把用户换成豆包，题内方差更大（0.175）。

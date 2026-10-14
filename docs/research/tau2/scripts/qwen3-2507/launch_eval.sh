@@ -4,7 +4,7 @@
 #   DOMAINS: comma list (airline,retail[,telecom]); THINKING: 0|1; PARSER: qwen25|qwen3_coder
 # Runs from a worktree pinned at a6abe781 so edits in the main checkout cannot reach workers.
 # Optional env: TAU2_SRC = another pinned worktree (task packs need >= 1b17bc3f);
-# TASK_PACK = evaluate a task pack (README 12.11) instead of the base set; a *-latest
+# TASK_PACK = evaluate a task pack (docs/research/tau2/training-data.md §5) instead of the base set; a *-latest
 # symlink is resolved and recorded in pack.txt.
 set -euo pipefail
 NAME=$1 MODEL=$2 GPUS=$3 VARIANT=$4 DOMAINS=$5 THINKING=$6 PARSER=$7

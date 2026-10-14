@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SAO on the critic-mix pack (README 16.14.6). Qwen3.5-4B actor, critic = step-55
+# SAO on the critic-mix pack (docs/research/tau2/sao-runs.md). Qwen3.5-4B actor, critic = step-55
 # checkpoint of critic run 510 (critic-head-qwen35-mix-r2), chosen by the user on
 # its fixed-v3 test validation (Airline EV 0.179), i.e. selected on the SAO test set.
 # Train: mix pack 221 + official fixed train 99 = 320 tasks (Airline 180, Retail 140),

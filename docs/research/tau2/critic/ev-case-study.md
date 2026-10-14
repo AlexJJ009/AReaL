@@ -77,10 +77,6 @@ EV 的定义和"上限"的含义见 `ev-ceiling-explainer.md`。这里补充验�
 差别说明：critic 的预测在一条轨迹内部来回波动，盖住了轨迹之间的排序。另外，轨迹平均值用到了轨迹后面的 token，对话进行中的 critic 拿不到，所以 Claude
 那一列只说明"排序存在"，不是 critic 实际能达到的值。
 
-**这也修正了 [critic0-expanded-data.md §2](critic0-expanded-data.md) 和
-[ev-ceiling.md](ev-ceiling.md) 的判断**：之前说 Airline 的 EV"主要被整体水平（A）吃掉"，但 EV 已经扣掉了整体偏移，水平不影响
-EV。真正的问题是预测幅度太小和轨迹内的波动。
-
 ## 分析 3：为什么预测几乎不动
 
 这一条是推测，没有做干预实验验证。

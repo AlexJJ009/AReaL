@@ -13,7 +13,7 @@ OUT="$ROOT/$NAME"
 test ! -e "$OUT/tau2-critic-fit-evidence/summary.json" || { echo "refusing to overwrite $OUT"; exit 2; }
 case $ACTOR in
   qwen35) export TAU2_ACTOR_PATH=Qwen/Qwen3.5-4B@851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a; ACTOR_OVR=() ;;
-  # Same parser as the Instruct step 0 evals (README 15.2).
+  # Same parser as the Instruct step 0 evals (docs/research/tau2/step0-evaluations.md §6.1).
   instruct) export TAU2_ACTOR_PATH=Qwen/Qwen3-4B-Instruct-2507@cdbee75f17c01a7cc42f958dc650907174af0554
             ACTOR_OVR=(rollout.agent.tool_call_parser=qwen25) ;;
   *) echo "bad actor $ACTOR"; exit 2 ;;

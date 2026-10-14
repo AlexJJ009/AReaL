@@ -49,8 +49,10 @@ non-thinking。因而实验比较的是这些完整用户配置，不能单独�
 或评分规则仍拒绝该结果，归 benchmark。之后才发生的偏离记
 secondary，不叠加进失败总数。任务明令用户报错、坚持或改主意，不算用户缺陷；被纠正且没有影响结果的错误，也不作为致败原因。
 
-沿用 U1–U7、U4a/U4b/U7a、README 14.2/15.5 的 M/T 码以及 B1/B2；本轮没有 T 类致败原因。U6 和成功侧 U7a
-是成功异常标记，与失败计数分开。未将所有普通澄清或偏好重述都计成 U6，只保留针对已有错误计划、错误实体角色或错误执行方法的纠正。
+沿用
+U1–U7、U4a/U4b/U7a、[capability-gaps.md §1.2](../capability-gaps.md)、[§2.2](../capability-gaps.md)
+的 M/T 码以及 B1/B2；本轮没有 T 类致败原因。U6 和成功侧 U7a 是成功异常标记，与失败计数分开。未将所有普通澄清或偏好重述都计成
+U6，只保留针对已有错误计划、错误实体角色或错误执行方法的纠正。
 
 消息编号为 JSON 的 messages 数组 **0-based**，m0 是 agent 开场问候；t0–t3 是 trial。`labels.jsonl`
 保留原轨迹绝对路径、SHA256、原话、tool_calls、实际写操作、任务说明字段与行号、gold、reward breakdown 和未满足的 NL 断言。计数依据
@@ -365,8 +367,9 @@ item_id 换货等。
   with the amount being \$50 times the number of passengers. But first, let me
   understand the situation better.”。
 
-沿用 [README 11.3](../README.md:595) 对“政策内拒绝”与“超出工具能力”的区别：不允许取消、改 basic economy
-航段或补加保险，不能用人工转接绕开禁令。用户受任务要求坚持并不算用户错误。M2a 的补救目标是守住拒绝而不是禁止所有转接；B2 中存在合法转接，不能把二者合并训练成一条硬规则。
+沿用 [benchmark-variants.md §1.3](../benchmark-variants.md) 对“政策内拒绝”与“超出工具能力”的区别：不允许取消、改
+basic economy 航段或补加保险，不能用人工转接绕开禁令。用户受任务要求坚持并不算用户错误。M2a 的补救目标是守住拒绝而不是禁止所有转接；B2
+中存在合法转接，不能把二者合并训练成一条硬规则。
 
 ### 5.2 M3 与 M4：遗漏合法替代方案、混淆多实体角色
 
@@ -773,7 +776,8 @@ README 未修改。
 
 报告和标注由 Codex（pueue 501）完成，以下是我在合入前做的独立核对。
 
-- **计数。** 每个模拟器的失败数等于 $240\times(1-\text{mean@4})$，和 README 16.15 主表一致（67/88/72/58/100）。
+- **计数。** 每个模拟器的失败数等于 $240\times(1-\text{mean@4})$，和
+  [user-simulator.md §2](../user-simulator.md) 主表一致（67/88/72/58/100）。
 - **U1 用规则交叉核对。** 规则：失败 episode 最后一条用户消息含 `###STOP###` 且含确认用语。规则与 Codex 的 U1 标注只差 7 条：6
   条是规则漏判（"just process it" 之类的确认说法），1 条是
   [Turbo retail:101 t0](/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-doubao-test-u0p0-r2/trajectories/retail:101:trial0/a2c7569b1e9a421786d150db41767980.json)。这条读完轨迹后同意记
@@ -782,7 +786,7 @@ README 未修改。
 - **airline:44 是 v3 没修到的 gold 错误，B1 成立。** 任务要求"含中转 ≤3 小时的航班才升舱"，KC18K6 是 HAT300 MSP
   06:00 → HAT215 CLT 13:00，含中转 7 小时；gold 仍对 KC18K6 调用 `update_reservation_flights`，NL
   断言的 1380–1390 报价和 "Agent updates KC18K6 to business" 也按升舱算。按任务正确执行的用户和 agent 会被判
-  0。待修，记在 README 11.2.1。
+  0。待修，记在 [benchmark-variants.md §1.2.1](../benchmark-variants.md)。
 - **retail:5 的确认次数依赖成立。** 任务写"第一次确认只换台灯，第二次确认改为退水瓶"，gold 只有退水瓶。agent 只确认一次时，用户按任务行事反而得
   0（DeepSeek t0）。
 - **[GLM airline:37 t2](/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/v3-glm53-test-u0p0-r2/trajectories/airline:37:trial2/b7b695ba208c4fc5ad10da74899b38e7.json)

@@ -104,12 +104,14 @@ Telecom），policy temperature 0，每题 4 次，用户模拟器 temperature 0
   被截断）和重试规则；本次无排除。两者和用户模拟器本身的随机性各占多少，没有逐题核对。
 - Doubao 评测里 3 个 episode 是用户第一句就
   stop，按官方打分，没有中止评测。后来查明是方舟服务异常（[user-simulator.md §2](user-simulator.md)）。
-- [initial-audit.md](initial-audit.md) 第 6 节第 2 条的 Doubao 对照已完成（2.0 Pro 已下线，用 2.1
-  Turbo），分析见[user-simulator.md §1](user-simulator.md)。
 
 产物：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-eval-20261009/step0-base-t0-deepseek-official/`
 和
 `.../step0-base-t0-doubao21turbo-official/`（`summary.json`、`episodes.jsonl`、`trajectories/`）。
+
+复现脚本：`scripts/official-runner/fault_user_proxy.py`（PRD 第 6 节的故障注入
+smoke）、`scripts/official-runner/metrics_table.py` （从 `episodes.jsonl`
+重算[step0-evaluations.md §2](step0-evaluations.md)的 mean@4 / pass^1/2/4，在仓库根目录运行）。
 
 ## 3 上一轮：official 与 fixed v1（2026-10-10）
 

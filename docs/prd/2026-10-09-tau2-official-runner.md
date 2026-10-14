@@ -3,7 +3,7 @@
 日期：2026-10-09 状态：已实施（afb42082）
 
 相关记录：[ADR 0009](../decisions/0009-official-tau2-runner-semantics.md)、
-[2026-10-09 审计第 7 节](../research/tau2/README.md)
+[2026-10-09 审计 §3](../research/tau2/benchmark-variants.md)
 
 ## 1. 背景
 

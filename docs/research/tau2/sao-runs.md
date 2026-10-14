@@ -1,4 +1,4 @@
-# SAO：mix pack + critic 510 第 55 步（2026-10-14，未启动）
+# SAO：mix pack + critic 510 第 55 步（2026-10-14）
 
 > 来源：原 README 第 16.14.6 节。拆分前的全文见 git 提交 b8d95027 中的
 > docs/research/2026-10-09-tau2-high-baseline-audit/README.md。

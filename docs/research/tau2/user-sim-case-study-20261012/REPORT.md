@@ -12,9 +12,10 @@
    - DeepSeek 最好，但 Retail 仍有 13 个失败是"用户在同意操作的同一句话里结束了对话"（U1），工具还没执行，episode 就判零。
    - Doubao 主要是**提前结束**：U1 31 个，开场第一句就结束对话 10 个，中途缩小目标后结束 3 个。
    - Qwen3.5-4B 主要是**不忠于任务说明**（U3，50 个）：agent 问到它不知道的信息时自己编一个，或者不按任务里的条件分支走。
-1. **Airline 主要暴露 agent 的问题。** 头号缺口仍是 14.2 节的"资格判断正确，却用转人工代替拒绝"（M2a）：59 个失败，三个模拟器下各约 20
-   个， 其中 6 道 Airline 题在三个模拟器下都失败在这里。其余 agent 缺口（工具语义、报错后乱改、退款路由）也都是 14.2
-   节已有的类别，**这次没有发现新的 agent 能力缺口**。
+1. **Airline 主要暴露 agent 的问题。** 头号缺口仍是
+   [capability-gaps.md §1.2](../capability-gaps.md)的"资格判断正确，却用转人工代替拒绝"（M2a）：59
+   个失败，三个模拟器下各约 20 个， 其中 6 道 Airline 题在三个模拟器下都失败在这里。其余 agent 缺口（工具语义、报错后乱改、退款路由）也都是
+   [capability-gaps.md §1.2](../capability-gaps.md) 节已有的类别，**这次没有发现新的 agent 能力缺口**。
 1. **agent 缺口的测量基本不受模拟器影响**：有 9 个"题 × 缺口"组合在三个模拟器下都出现，例如 airline:45 的 M2a、airline:44 的
    M14、retail:36 的 M15。用户模拟器影响的是 Retail 的总分，不太改变 agent 缺口的排序。
 1. **用户模拟器也会让分数偏高**：5 个成功 episode 是用户把 agent 从死路上拉回来的（U6）；19 个成功 episode 是用户在 agent
@@ -29,7 +30,8 @@
 - 三个用户模拟器：DeepSeek-Flash（thinking）、Doubao 2.1
   Turbo（thinking，reasoning_effort=medium）、自己部署的 Qwen3.5-4B（non-thinking，T=0）。NL judge 都是
   DeepSeek-Flash。
-- 每个模拟器 240 个 episode，共 720 个，失败 272 个。分数见 README 16.15 节总表。
+- 每个模拟器 240 个 episode，共 720 个，失败 272 个。分数见
+  [user-simulator.md §2](../user-simulator.md)总表。
 
 ### 2.2 每个失败只记一个"致败原因"
 
@@ -53,9 +55,11 @@ reward 就不可能再是 1 的那一步，由谁的哪种行为造成。其余�
 
 ### 2.3 编码
 
-- agent 侧沿用 README 14.2 和 15.5 节的 M 码，这次出现了 M1、M2a、M3、M4、M5、M7、M8、M11、M12、M14、M15、M16。
-- 用户侧用 16.15 节提出的 U1–U7。这次细分出三个子码：U4a（开场第一句就结束）、U4b（没做完就结束或缩小目标）、U7a（agent
-  调用转人工工具之前，用户就发了 TRANSFER）。
+- agent 侧沿用 [capability-gaps.md §1.2](../capability-gaps.md) 和
+  [capability-gaps.md §2.2](../capability-gaps.md)的 M 码，这次出现了
+  M1、M2a、M3、M4、M5、M7、M8、M11、M12、M14、M15、M16。
+- 用户侧用 [user-simulator.md §2](../user-simulator.md)提出的
+  U1–U7。这次细分出三个子码：U4a（开场第一句就结束）、U4b（没做完就结束或缩小目标）、U7a（agent 调用转人工工具之前，用户就发了 TRANSFER）。
 - benchmark 侧：B1（任务说明没写清，gold 只认一种做法）、B2（fixed 的转人工规则误伤 policy 要求的转人工）。
 
 ### 2.4 复核
@@ -132,8 +136,8 @@ STOP。对话就此结束，agent 再也没有机会调用工具，数据库没�
 **分布。** 集中在 Retail 的单步写操作题：retail:5 出现 5 次，retail:70 出现 4 次，retail:108、26、9 各 3
 次。DeepSeek 作为最好的模拟器也有 13 次，占它全部 240 个 episode 的 5%。Qwen 几乎不犯这个错（1 次），它的问题在 U3。
 
-**对训练的影响。** U1 惩罚的恰恰是正确行为：agent 越守规矩地先确认，越容易撞上 U1 拿到零分。不先确认就直接执行的 agent 反而能得分。14.3 节已经在
-GRPO 训练数据里观察到这个冲突。
+**对训练的影响。** U1 惩罚的恰恰是正确行为：agent 越守规矩地先确认，越容易撞上 U1 拿到零分。不先确认就直接执行的 agent
+反而能得分。[capability-gaps.md §1.3](../capability-gaps.md)已经在 GRPO 训练数据里观察到这个冲突。
 
 ### 4.2 U3：偏离任务说明（57 个：Doubao 7、Qwen 50）
 
@@ -180,7 +184,7 @@ M14。致败原因仍归用户，因为任务说明明确要求用户不提供�
   有关，比如推理用完了输出预算、正文为空，但这只是猜测，需要看原始响应才能确认。
 - **2026-10-12 补充：U4a 很可能是方舟服务端异常。** 同样代码和配置下，充值后的 Doubao 重跑（pueue 488，240 个
   episode）开场就结束的是 0 个，空回复重试 0 次；账户临近欠费时的一次运行（486）是 10 个，还出现过一条无关的"电商商品信息提取结果"。所以这 10 个
-  U4a 不宜算作 Doubao 作为用户模拟器的能力问题（README 16.15）。
+  U4a 不宜算作 Doubao 作为用户模拟器的能力问题（[user-simulator.md §2](../user-simulator.md)）。
 - **U4b，缩小目标后结束（3 个）。**
   [doubao retail:108 t3](/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/doubao-base-u0p0/trajectories/retail:108:trial3/9711cd545660412aae8f0b00fe3e6a5f.json)：任务是退掉除平板以外的物品，用户把目标改成了"问一下能退多少钱"，得知金额
   346.93 后就发了 STOP。
@@ -235,17 +239,18 @@ instead?"，agent 才转去用 modify，最后成功了。gold 的做法正是 m
 
 ### 5.1 和之前缺口分析的对照
 
-| 缺口                                 | 代码                 | 本次 DeepSeek / Doubao / Qwen | 14.2 节（官方 base 集）  | 三个模拟器下同一题都出现       |
-| ------------------------------------ | -------------------- | ----------------------------- | ------------------------ | ------------------------------ |
-| 资格判断正确，却用转人工代替拒绝     | M2a                  | 21 / 20 / 18                  | 头号缺口，Airline 34.8pp | airline:24、26、31、35、45、48 |
-| 误解工具能力或订单状态               | M14                  | 9 / 7 / 10                    | 已有                     | airline:44                     |
-| 报错后不问用户就改参数重写           | M15                  | 4 / 2 / 2                     | 已有                     | retail:36                      |
-| 支付 / 退款路由                      | M5                   | 2 / 3 / 5                     | 已有                     | airline:18                     |
-| 漏做子目标 / 声称做了没执行          | M8、M16              | 1 / 9 / 0                     | 已有（M16 来自 15.5 节） | —                              |
-| 政策资格规则                         | M1                   | 5 / 5 / 0                     | 已有                     | —                              |
-| 写前没报价、没传达指定信息、选错对象 | M11、M12、M4、M7、M3 | 4 / 3 / 3                     | 已有                     | —                              |
+| 缺口                                 | 代码                 | 本次 DeepSeek / Doubao / Qwen | [capability-gaps.md §1.2](../capability-gaps.md)（官方 base 集）  | 三个模拟器下同一题都出现       |
+| ------------------------------------ | -------------------- | ----------------------------- | ----------------------------------------------------------------- | ------------------------------ |
+| 资格判断正确，却用转人工代替拒绝     | M2a                  | 21 / 20 / 18                  | 头号缺口，Airline 34.8pp                                          | airline:24、26、31、35、45、48 |
+| 误解工具能力或订单状态               | M14                  | 9 / 7 / 10                    | 已有                                                              | airline:44                     |
+| 报错后不问用户就改参数重写           | M15                  | 4 / 2 / 2                     | 已有                                                              | retail:36                      |
+| 支付 / 退款路由                      | M5                   | 2 / 3 / 5                     | 已有                                                              | airline:18                     |
+| 漏做子目标 / 声称做了没执行          | M8、M16              | 1 / 9 / 0                     | 已有（M16 来自 [capability-gaps.md §2.2](../capability-gaps.md)） | —                              |
+| 政策资格规则                         | M1                   | 5 / 5 / 0                     | 已有                                                              | —                              |
+| 写前没报价、没传达指定信息、选错对象 | M11、M12、M4、M7、M3 | 4 / 3 / 3                     | 已有                                                              | —                              |
 
-这次没有出现 14.2 节以外的新类别。数量排序也和 14.2 节一致：M2a 远多于其他，其次是工具语义（M14/M15）。
+这次没有出现 [capability-gaps.md §1.2](../capability-gaps.md)以外的新类别。数量排序也和
+[capability-gaps.md §1.2](../capability-gaps.md)一致：M2a 远多于其他，其次是工具语义（M14/M15）。
 
 ### 5.2 M2a：资格判断正确，却用转人工代替拒绝（59 个）
 
@@ -258,8 +263,9 @@ no circumstances you want to get transferred to another agent"。agent 查到预
 economy、没有保险、10 天前订的，第 6 条自己列出了"超过 24 小时、basic economy、没有保险"，紧接着调用了转人工。用户第 9 条抗议："No,
 please don't transfer me!"。
 
-**稳定性。** 同样 6 道 Airline 题在三个模拟器下都失败在 M2a 上，说明这是 agent 自己的行为习惯，和用户怎么说无关。14.1 节分析过成因：agent
-把 policy 第 141 行"已飞航段需要转人工"推广到了所有办不了的请求。
+**稳定性。** 同样 6 道 Airline 题在三个模拟器下都失败在 M2a 上，说明这是 agent
+自己的行为习惯，和用户怎么说无关。[capability-gaps.md §1.1](../capability-gaps.md)分析过成因：agent 把 policy 第
+141 行"已飞航段需要转人工"推广到了所有办不了的请求。
 
 **补救。** RL（fixed 评分已经能区分转与不转），或者在 harness 里加转人工门控。
 
@@ -268,8 +274,8 @@ please don't transfer me!"。
 - **以为工具查不到。**
   [deepseek airline:44 t2](/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/deepseek-base-u0p0/trajectories/airline:44:trial2/d6d0357a878f4fe2a8d758a6da962e38.json)：任务需要比较航班时长。agent
   只调了 `get_flight_status`，返回的是 "available"，第 18 条就说"I don't have a tool to get the
-  actual flight times"，然后转人工。实际上 `search_direct_flight` 的返回结果里有起降时间（14.1
-  节已核对）。三个模拟器下这道题都这样失败。
+  actual flight times"，然后转人工。实际上 `search_direct_flight`
+  的返回结果里有起降时间（[capability-gaps.md §1.1](../capability-gaps.md) 节已核对）。三个模拟器下这道题都这样失败。
 - **以为必须让用户口述地址。** 好几道 Retail 题的任务设定是：用户要用的地址在另一张订单里，用户不愿意说出来。agent 的正确做法是去订单里查。deepseek
   retail:111 t1 里，DeepSeek 用户第 23、25、27 条三次坚持"不想说，请查我的订单"，agent 始终没找到，最后转人工，记为 agent
   失败（M14）。[qwen retail:39 t3](/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/step0-selfhost-user/full-qwen35user-v2/trajectories/retail:39:trial3/22314bd801654f1793e1fb08b31224b3.json)
@@ -311,12 +317,15 @@ M1/M2a 和用户偏离，所以 M8 集中在 Doubao 下可能和对话走向有�
 的取消原因任务没指定，gold 只认 "no longer needed"。
 
 deepseek retail:45 t2 原标为 B1，fixed-v3 审查时改判为 agent 失败（M7）：数据库里有 3 款可用的 canister
-吸尘器，agent 只列了一款，而这道题考的正是列全选项（README 11.2.1）。所以 B1 实际是 6 个。
+吸尘器，agent
+只列了一款，而这道题考的正是列全选项（[benchmark-variants.md §1.2.1](../benchmark-variants.md)）。所以 B1 实际是 6
+个。
 
 ### 6.2 B2：转人工规则误伤合法转人工（8 个）
 
 全部在 airline:37 上。agent 正确完成了升舱，然后按 policy 第 141 行为已飞航段转人工。gold 里没有转人工，fixed
-的转人工规则就把这个合法的转接判成 unexpected_transfer。14.3 节已经记录过这个问题。
+的转人工规则就把这个合法的转接判成
+unexpected_transfer。[capability-gaps.md §1.3](../capability-gaps.md)已经记录过这个问题。
 
 ### 6.3 用户先发 TRANSFER 仍被判成功（不进入失败计数）
 
@@ -335,7 +344,7 @@ deepseek retail:45 t2 原标为 B1，fixed-v3 审查时改判为 agent 失败（
 1. **提前结束（U4a）。** Doubao 特有，原因待查。如果是 thinking 输出预算的问题，可以通过配置修好，就不算模拟器的能力问题。
 1. **成功侧的偏差（U6 和 6.3 节的 TRANSFER）。** 会让分数偏高，单看成功率看不出来。
 
-**agent 侧要补的能力**，和 14.2 节的结论一致：
+**agent 侧要补的能力**，和 [capability-gaps.md §1.2](../capability-gaps.md)的结论一致：
 
 1. M2a：拒绝后继续处理允许的部分，不要用转人工收尾。占 Airline 失败的大头，RL 或转人工门控都能处理。
 1. M14：利用已读到的信息填参数（订单里的地址、预订里的航线），读懂工具返回的字段。

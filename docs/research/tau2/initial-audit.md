@@ -32,17 +32,6 @@ gold 固定为 "no longer needed"，用户多数时候选 "ordered by mistake"�
 为真，直接判通过（`tau2/evaluator/evaluator_nl_assertions.py:51,134`）。历史记录未保存 judge
 原始返回，无法确认是否发生过。
 
-### 与 Recuris 论文（Qwen3.5-4B：Retail 68.0 / Airline 75.3）的差距
-
-已在[recuris-and-leaderboard.md](recuris-and-leaderboard.md)查清：两边都用 Doubao
-用户时，差距在抽样误差内；Recuris 的 harness 对这一行没有影响。下面是 2026-10-09 的原始判断，保留作记录。
-
-- **不是题集差异**。未训练模型在 train split（epoch 1 覆盖全部任务，权重相对变化约 1e-4）上为 Retail 84.8%、Airline
-  78.3%；与 test 合并估算全量 114/50 题约 82%/79%。
-- **论文 Table 1 的用户模拟器不是 4B 自己**。Recuris 源码 `src/recuris/adapters/tau2/treatment.py` 的
-  transfer 配置固定 Doubao Seed 2.0 Pro 作为用户模拟器和 NL
-  judge（`reasoning_effort=medium`，temperature=0），被测 agent temperature 强制为 0。
-
 ## 2 训练为什么看不出效果
 
 ### 2.1 评测噪声
@@ -92,18 +81,10 @@ gold 固定为 "no longer needed"，用户多数时候选 "ordered by mistake"�
 | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 评测 temperature=0（训练保持 1）                                 | `examples/tau2/config_grpo.yaml` `eval_gconfig`；`scripts/tau2/evaluate.py --temperature` 默认 0                                                                                                                                                                                                                |
 | 评测每题 4 次（原 8 次）；评测并发改为 8 组×4 次，保持 32 条在途 | `eval_gconfig.n_samples: 4`、`evaluation_rollout.max_concurrent_rollouts: 8`；`evaluate.py --repeats` 默认 4                                                                                                                                                                                                    |
-| 训练与评测去掉 Telecom                                           | `domains: [airline, retail]`（GRPO，SAO 继承）；SAO 预算 240+592=832/epoch，共 1664 episode、26 步；GRPO 也是 26 步                                                                                                                                                                                             |
+| 训练与评测去掉 Telecom                                           | `domains: [airline, retail]`（GRPO，SAO 继承）                                                                                                                                                                                                                                                                  |
 | critic 改为 airline+retail 重训                                  | `config_critic_production.yaml`；`train_critic.py` 不再强制三场景，验证集行数按场景计算（formal 60、tune 21），共 14 步                                                                                                                                                                                         |
 | 评测脚本按配置的场景计算覆盖                                     | `evaluate.py` 期望行数 = 各场景 test 题数 × repeats，manifest 记录 `domains`；`upload_metrics.py` 读 manifest 场景（旧 manifest 回退三场景）                                                                                                                                                                    |
 | 评测题集二选一                                                   | `evaluate.py --task-set test`（默认，official test：Airline 20、Retail 40，每题 4 次共 240 条）或 `--task-set base`（官方榜单全量 train+test：Airline 50、Retail 114，共 656 条）；base 运行前核对题目 ID 等于官方 `base` 列表，summary 的 `by_domain_split` 分开给出 train/test 部分；manifest 记录 `task_set` |
 | SAO 单场景入口                                                   | `run.sh policy {airline,retail} sao` 不再删除已不存在的 telecom 预算；`policy telecom sao` 明确报错                                                                                                                                                                                                             |
 
 未改：GRPO/SAO 的 lr、训练步数、用户模拟器、judge。历史结果保持原口径（temperature=1、N=8、含 Telecom），不与新口径混比。
-
-验证：tau2 相关 6 个测试文件 117 项通过；设置 `TAU2_DATA_DIR` 后数据依赖测试 52
-项通过；`run.sh policy mixed grpo|sao`、`policy airline sao`、`data critic` 与 `evaluate.py` 均
-`--check-config` 通过（GRPO/SAO 26 步，critic 14 步，评测 240 episode、temperature 0）。
-
-## 5 下一步
-
-已执行或并入[training-setup.md](training-setup.md)。

@@ -244,7 +244,7 @@ instruct:airline_617、instruct:telecom_13 两条轨迹，以及选错线路和 
 
 **依据。** [training-data.md §3](training-data.md) 的 813 题对 Qwen3.5-4B 太容易：mean@4
 0.912，temperature 0 下 78% 的题 4 次全对。两个 Qwen3 模型在 fixed 上比 Qwen3.5 低
-15–44pp，这份数据的难度对它们可能正合适。这是一个候选方向，还没有测。
+15–44pp，这份数据的难度对它们可能正合适。
 
 **已测（2026-10-12）。** 改为在筛选后的 v2（648 题）和 Telecom v1 上评测，结果在
 [step0-evaluations.md §1](step0-evaluations.md) 表 B。Instruct 在 v2 上 54% 的题有对有错，难度合适。

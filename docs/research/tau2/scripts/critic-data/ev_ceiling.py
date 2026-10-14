@@ -1,4 +1,4 @@
-"""Task-level EV ceiling of a critic from repeated τ² evals (README 16.14).
+"""Task-level EV ceiling of a critic from repeated τ² evals (docs/research/tau2/critic/ev-ceiling.md).
 
 Each task is run k times with the same sampling as the critic's validation rollouts. A critic
 that sees only the task can at best predict the task's success rate p_i, so the share of the

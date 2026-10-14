@@ -1,4 +1,4 @@
-"""Build the critic training mix from AReaL pack v2 (README 16.14.5).
+"""Build the critic training mix from AReaL pack v2 (docs/research/tau2/critic/data-mix.md).
 
 Keeps every pack task with a learning signal and a stratified random sample of
 the easy ones, then writes a subset task pack that ``critic_task_pack`` loads.

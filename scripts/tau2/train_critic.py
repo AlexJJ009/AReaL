@@ -1110,7 +1110,7 @@ class Tau2CriticOnlineTrainer(PPOTrainer):
     def _init_impl(self, config, *args, **kwargs):
         # The actor must stay frozen for the whole run: recovery then skips the
         # actor -> inference weight push, since inference already serves the
-        # same HF snapshot (README 16.14.5).
+        # same HF snapshot (docs/research/tau2/critic/data-mix.md).
         if config.actor.optimizer.lr != 0:
             raise ValueError("Tau2 critic-only training requires a frozen actor (lr=0)")
         if not (

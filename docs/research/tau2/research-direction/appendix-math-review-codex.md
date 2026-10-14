@@ -1,9 +1,11 @@
 # README §16 数学审稿：ICML 标准
 
 审阅对象：§16.11（README L2243–2743），并核对 §16.0、§16.2–16.4、§16.9–16.10、§3.4 和 §9.1。以下 `L…`
-均指本次读取的
-[README.md](/data_storage/yl_test/lgx/data-1/code/_worktrees/AReaL/codex-sao-math/docs/research/tau2/README.md)
-行号；代码路径相对于仓库根目录。审阅日期：2026-10-12。本审阅只读取材料、复算数值；没有修改原稿、代码或配置，也没有运行训练。
+均指本次读取的拆分前 README（git 提交 b8d95027 中的
+`docs/research/2026-10-09-tau2-high-baseline-audit/README.md`）的行号，§16.x 也指拆分前的章节编号，新位置见
+[problem-and-plan.md](problem-and-plan.md)、[analysis.md](analysis.md)、[related-work.md](related-work.md)
+和
+[appendix-method-draft-16.11.md](appendix-method-draft-16.11.md)；代码路径相对于仓库根目录。审阅日期：2026-10-12。本审阅只读取材料、复算数值；没有修改原稿、代码或配置，也没有运行训练。
 
 ## 1. 总体评价
 

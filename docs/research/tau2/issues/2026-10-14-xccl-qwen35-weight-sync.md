@@ -1,7 +1,8 @@
 # Issue: xccl weight sync from the FSDP actor to SGLang crashes on Qwen3.5-4B
 
-- Status: root cause found and fixed (2026-10-14, d8f72c51, 6bf1d96e; README 16.14.8).
-  SAO smoke 526 is the first real-training check. are stashed).
+- Status: root cause found and fixed (2026-10-14, d8f72c51, 6bf1d96e;
+  [infra-issues.md §3](../infra-issues.md)). SAO smoke 526 is the first real-training
+  check. are stashed).
 - Owner: Codex round 2 (pueue 516, GPU), review by Claude.
 - Branch with work in progress: `codex/xccl-qwen35-fix` (worktree
   `_worktrees/AReaL/codex-xccl-qwen35`).

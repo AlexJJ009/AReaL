@@ -81,11 +81,3 @@ mean@4 同口径。
 - 训练过 train 部分后，base 集分数不是完全 held-out 的泛化结果。MUA-RL、RWML、AReaL-SEA
   等同类工作的题集和用户模拟器都不同，分数不能直接比。
 - 逐 step 的训练中 validation 表（mean@4 / mean@8）以飞书文档为准。
-
-## 5 下一步
-
-仍未完成的项目已并入 [training-setup.md §6](training-setup.md)。
-
-复现脚本：`scripts/official-runner/fault_user_proxy.py`（PRD 第 6 节的故障注入
-smoke）、`scripts/official-runner/metrics_table.py` （从 `episodes.jsonl`
-重算[step0-evaluations.md §2](step0-evaluations.md)的 mean@4 / pass^1/2/4，在仓库根目录运行）。

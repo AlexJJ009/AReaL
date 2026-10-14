@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""τ² critic fit with a biased, mean-initialised value head (README 16.14.3).
+"""τ² critic fit with a biased, mean-initialised value head (docs/research/tau2/critic/value-head.md).
 
 Same as ``train_critic.py`` except the critic engine: the head gets a bias set to
 ``critic_head_bias_init``, a zero weight, and the learning rate ``critic_head_lr``.

@@ -1,9 +1,10 @@
 # Issue: why critic-only training on tau2 barely reaches positive explained variance
 
-- Status: both case studies done (2026-10-14); synthesis in README 16.14.7. Next:
-  offline experiments (probe, planted signal, replay). its own report.
-- Background: README 16.14 (all subsections). Read it first; this file only adds the run
-  index and the open questions.
+- Status: both case studies done (2026-10-14); synthesis in
+  [ev-case-study.md](../critic/ev-case-study.md). Next: offline experiments (probe,
+  planted signal, replay). its own report.
+- Background: [critic/README.md](../critic/README.md) (all critic docs). Read it first;
+  this file only adds the run index and the open questions.
 
 ## Run index
 
@@ -22,23 +23,24 @@ Run directories are under
 | mix (first try)   | 500   | `tau2-training-20261013-critic-head/critic-head-qwen35-mix`    | mix pack 221 + official 99, reshuffled each epoch | zero w, bias 0.78 | 22 of 80 | failed (SGLang OOM) |
 | mix r2            | 510   | `tau2-training-20261013-critic-head/critic-head-qwen35-mix-r2` | same as 500                                       | same as 500       | 80       | running / done      |
 
-"v2" and "mix" are the two data choices of README 16.14.5. "r2" means the second attempt
-of the mix run. All runs use Qwen3.5-4B (non-thinking) as a frozen actor at policy
-temperature 1 unless marked Instruct, DeepSeek-Flash as user simulator and NL judge,
-critic lr 5e-6, batch 16 episodes, 0/1 terminal reward, gamma 1, GAE lambda 1, and
-validation on fixed-v3 (fixed-v2 for 479/480) test: 60 tasks (Airline 20, Retail 40),
-one T=1 rollout each, collected once per run and reused. Each run collects its own
-validation rollouts, so the validation sets differ across runs.
+"v2" and "mix" are the two data choices of [data-mix.md](../critic/data-mix.md). "r2"
+means the second attempt of the mix run. All runs use Qwen3.5-4B (non-thinking) as a
+frozen actor at policy temperature 1 unless marked Instruct, DeepSeek-Flash as user
+simulator and NL judge, critic lr 5e-6, batch 16 episodes, 0/1 terminal reward, gamma 1,
+GAE lambda 1, and validation on fixed-v3 (fixed-v2 for 479/480) test: 60 tasks (Airline
+20, Retail 40), one T=1 rollout each, collected once per run and reused. Each run
+collects its own validation rollouts, so the validation sets differ across runs.
 
-## What is known (README 16.14.1-16.14.4)
+## What is known (see [critic/README.md](../critic/README.md))
 
-- Problem A, level drift: fixed by zero-init w + mean-init bias (16.14.3); level is now
-  stable in 499/510.
+- Problem A, level drift: fixed by zero-init w + mean-init bias
+  ([value-head.md](../critic/value-head.md)); level is now stable in 499/510.
 - Problem B, ranking within a domain: Airline predictions correlate with task difficulty
   (0.70 in 479), Retail does not (0.10).
-- EV ceiling at the first token from task identity alone (16.14.4): Airline 0.61, Retail
-  0.20 \[0.03, 0.35\]. More than half of Retail's reward variance is within-task (same
-  task, different outcome), i.e. user-side randomness.
+- EV ceiling at the first token from task identity alone
+  ([ev-ceiling.md](../critic/ev-ceiling.md)): Airline 0.61, Retail 0.20 \[0.03, 0.35\].
+  More than half of Retail's reward variance is within-task (same task, different
+  outcome), i.e. user-side randomness.
 - 510 so far (step 50): Airline EV up to 0.137, Retail about 0. 499 final: Airline
   0.025, Retail -0.001.
 

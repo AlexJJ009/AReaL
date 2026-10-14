@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# critic₀ fit with the biased, mean-initialised value head (README 16.14.3, 16.14.5).
+# critic₀ fit with the biased, mean-initialised value head (docs/research/tau2/critic/value-head.md, docs/research/tau2/critic/data-mix.md).
 # Copy of tau2-training-20261012-critic-data/launch_critic.sh, changed only in:
 # entry `data critic-head`, pinned source, head settings, and the DATA choice:
 #   v2   AReaL pack v2 (648) + official fixed train (99), pack first, fixed
