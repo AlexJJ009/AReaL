@@ -22,6 +22,7 @@ from scripts.tau2.critic_preexp_data import (
     LABEL_SEMANTICS,
     PLANTED_RULES,
     SEED,
+    WRITE_TOOL_INVENTORY,
     PlantedRuleSelectionError,
     load_pool,
     prefix_labels,
@@ -245,6 +246,7 @@ def verify_cache(
         rule.get("label_semantics") != LABEL_SEMANTICS
         or rule.get("status") != "selected"
         or rule.get("rule") not in PLANTED_RULES
+        or rule.get("write_tool_inventory") != WRITE_TOOL_INVENTORY
     ):
         raise ValueError(
             "Cache planted rule semantics/status mismatch; regenerate labels"
@@ -531,6 +533,8 @@ def main() -> None:
         or rule["selection_split"] != "train"
         or rule.get("label_semantics") != LABEL_SEMANTICS
         or rule.get("status") != "selected"
+        or rule.get("rule") not in PLANTED_RULES
+        or rule.get("write_tool_inventory") != WRITE_TOOL_INVENTORY
     ):
         raise ValueError("Planted rule provenance mismatch")
     import torch

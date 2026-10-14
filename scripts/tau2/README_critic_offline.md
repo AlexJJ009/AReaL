@@ -22,6 +22,22 @@ to 128 uniformly sampled action prefixes per trajectory with seed 20261014; vali
 retains all action prefixes. Each sampled training token carries its original action
 count divided by retained count as loss weight.
 
+E8 uses the reviewer-authorized rule deviation: a prefix is positive after an earlier
+assistant WRITE call's complete Qwen XML `</tool_call>` is visible. The closing token
+must be at or before the prefix position `t-1`; no tool response is required. Prompt,
+schema, user, and READ calls do not activate it. `token_roles`, or the exporter's
+`action_origin_mask` recovery, supplies provenance independently of the loss mask.
+`critic_preexp_write_tools.json` records every annotated tool and the derived WRITE
+lists for the pool's airline and retail domains, with source lines, hashes and tau2
+revision. Reproduce it without importing tau2 using
+`critic_preexp_tools --source PINNED_TAU2_ROOT --output INVENTORY.json`.
+
+Selection checks training only: both sampled-prefix and weighted token-mass prevalence
+must be 20%–60% pooled and 5%–95% in each domain. Validation uses the same label
+function. The rule report records exact full-token prevalence and trajectory 0→1 counts
+as well. There is only one candidate; failed acceptance stops selection. Cache
+verification rejects the old tool-return semantics and mismatched inventories.
+
 E1 stores the final value-head input and decoder hidden states 8, 16 and 24 for the
 32-layer base model. Hidden-state index 8 is the output of decoder block 7, matching
 `output_hidden_states[8]`; similarly for 16 and 24. These correspond to 25%, 50% and 75%

@@ -170,12 +170,15 @@ def load_pool(
     return manifest, rows
 
 
-PLANTED_RULES = (
-    "error",
-    "error or not found",
-    "error or not found or invalid or cannot",
+PLANTED_RULES = ("earlier completed WRITE tool call",)
+LABEL_SEMANTICS = "completed_assistant_xml_write_tool_call_at_or_before_prefix"
+WRITE_TOOL_INVENTORY = json.loads(
+    Path(__file__).with_name("critic_preexp_write_tools.json").read_text()
 )
-LABEL_SEMANTICS = "completed_post_prompt_tool_return_case_insensitive_substring"
+WRITE_TOOLS = {
+    domain: frozenset(entry["write_tools"])
+    for domain, entry in WRITE_TOOL_INVENTORY["domains"].items()
+}
 
 
 class PlantedRuleSelectionError(ValueError):
@@ -239,14 +242,15 @@ def visible_prefix_texts(
     ]
 
 
-def completed_tool_returns(
+def completed_write_calls(
     row: dict[str, Any], tokenizer: Any, last_position: int
 ) -> list[tuple[int, str]]:
-    """Return (inclusive message end, payload) from stored observation tokens.
+    """Find complete Qwen XML WRITE calls wholly inside assistant-origin spans.
 
-    The exporter marks both user and tool input as observation. Qwen renders
-    tool replies as user messages containing tool_response wrappers. Decode only
-    complete observation messages, never the initial prompt or generated text.
+    The first assistant header can belong to the prompt; provenance comes from
+    token_roles (or the exporter's action_origin_mask recovery), not text headers.
+    A completion endpoint is the inclusive token containing the entire closing
+    tool_call tag, independently of im_end or any subsequent tool response.
     """
     import torch
 
@@ -266,61 +270,72 @@ def completed_tool_returns(
         raise ValueError("Planted labels require token-aligned token_roles")
     if set(roles) - {"prompt", "assistant", "observation"}:
         raise ValueError("Unsupported token_roles for planted labels")
-    start_id = tokenizer.convert_tokens_to_ids("<|im_start|>")
-    end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
-    if start_id is None or end_id is None or start_id == end_id:
-        raise ValueError("Planted labels require Qwen message delimiters")
     prompt_end = next((i for i, role in enumerate(roles) if role != "prompt"), len(ids))
     if "prompt_len" in row and int(row["prompt_len"]) != prompt_end:
         raise ValueError("prompt_len disagrees with token_roles")
-    messages = []
-    start = None
-    for i in range(prompt_end, min(last_position + 1, len(ids))):
-        if roles[i] != "observation":
-            start = None
+    domain = row.get("domain")
+    if domain not in WRITE_TOOLS:
+        raise ValueError(f"Unsupported WRITE tool domain: {domain}")
+    calls = []
+    limit = min(last_position + 1, len(ids))
+    start = prompt_end
+    while start < limit:
+        if roles[start] != "assistant":
+            start += 1
             continue
-        if ids[i] == start_id:
-            start = i
-        elif ids[i] == end_id and start is not None:
-            text = tokenizer.decode(
-                ids[start + 1 : i],
+        stop = start + 1
+        while stop < limit and roles[stop] == "assistant":
+            stop += 1
+        segment = ids[start:stop]
+
+        def decode(end):
+            return tokenizer.decode(
+                segment[:end],
                 skip_special_tokens=False,
                 clean_up_tokenization_spaces=False,
             )
-            role, separator, body = text.partition("\n")
-            if separator and role == "tool":
-                messages.append((i, body.lower()))
-            elif separator and role == "user":
-                # Require the whole body to be the template's tool envelope;
-                # quoted wrappers inside an ordinary user message do not count.
-                payloads = re.findall(
-                    r"<tool_response>(.*?)</tool_response>", body, re.S
-                )
-                remainder = re.sub(
-                    r"<tool_response>.*?</tool_response>", "", body, flags=re.S
-                )
-                if payloads and not remainder.strip():
-                    messages.extend((i, payload.lower()) for payload in payloads)
-            start = None
-    return messages
+
+        text = decode(len(segment))
+        for match in re.finditer(
+            r"<tool_call>((?:(?!<tool_call>).)*?)</tool_call>", text, re.S
+        ):
+            function = re.fullmatch(
+                r"\s*<function=([A-Za-z_][A-Za-z_0-9]*)>"
+                r"((?:\s*<parameter=[A-Za-z_][A-Za-z_0-9]*>.*?</parameter>)*)"
+                r"\s*</function>\s*",
+                match[1],
+                re.S,
+            )
+            if function is None or function[1] not in WRITE_TOOLS[domain]:
+                continue
+            # Decode only logarithmically many prefixes to locate the exact token
+            # endpoint, including tags split across tokens and merged suffixes.
+            required = text[: match.end()]
+            low, high = 1, len(segment)
+            while low < high:
+                middle = (low + high) // 2
+                if decode(middle).startswith(required):
+                    high = middle
+                else:
+                    low = middle + 1
+            calls.append((start + low - 1, function[1]))
+        start = stop
+    return calls
 
 
-def _first_tool_match(messages: list[tuple[int, str]], rule: str) -> int | None:
+def _first_tool_match(calls: list[tuple[int, str]], rule: str) -> int | None:
     if rule not in PLANTED_RULES:
         raise ValueError(f"Unsupported planted rule: {rule}")
-    needles = rule.split(" or ")
-    return next(
-        (end for end, text in messages if any(word in text for word in needles)), None
-    )
+    return calls[0][0] if calls else None
 
 
 def prefix_labels(row: dict[str, Any], positions: Any, tokenizer: Any, rule: str):
-    """Position p=t-1 is positive only after a matching tool message ends <=p."""
+    """Position p=t-1 is positive only after an assistant WRITE tool_call ends <=p."""
     import torch
 
     positions = torch.as_tensor(positions, dtype=torch.long)
     messages = (
-        completed_tool_returns(row, tokenizer, int(positions.max()))
+        completed_write_calls(row, tokenizer, int(positions.max()))
         if positions.numel()
         else []
     )
@@ -352,7 +367,7 @@ def select_planted_rule(rows: list[dict[str, Any]], tokenizer: Any) -> dict[str,
             continue
         positions, count = selected_positions(row, train_k=128, seed=SEED)
         actions = action_positions(row)
-        messages = completed_tool_returns(row, tokenizer, int(actions[-1]))
+        messages = completed_write_calls(row, tokenizer, int(actions[-1]))
         for rule in PLANTED_RULES:
             first = _first_tool_match(messages, rule)
             positives = int((positions >= first).sum()) if first is not None else 0
@@ -410,6 +425,8 @@ def select_planted_rule(rows: list[dict[str, Any]], tokenizer: Any) -> dict[str,
         "passing_candidates": passing,
         "selection_split": "train",
         "label_semantics": LABEL_SEMANTICS,
+        "write_tool_inventory": WRITE_TOOL_INVENTORY,
+        "protocol_deviation": "Reviewer-authorized replacement of tool-return keyword candidates with the single earlier completed assistant WRITE call rule; acceptance thresholds unchanged",
         "token_mass_semantics": "sampled prefixes weighted by trajectory action_tokens / sampled_prefixes",
         "flip_semantics": "both 0 and 1 occur among all action positions of a trajectory",
         "acceptance": {

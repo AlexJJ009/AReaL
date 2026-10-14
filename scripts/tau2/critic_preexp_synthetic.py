@@ -29,16 +29,13 @@ class SyntheticTokenizer:
     def decode(self, ids, **_kwargs):
         tokens = {
             9: "Error",
-            10: "<|im_start|>",
-            11: "user\n",
-            12: "<tool_response>\n",
-            13: "\n</tool_response>",
-            14: "<|im_end|>",
+            10: "<tool_call><function=",
+            11: "cancel_reservation",
+            12: "cancel_pending_order",
+            13: "></function></tool_call>",
+            14: "get_user_details",
         }
         return "".join(tokens.get(token, "word") for token in ids)
-
-    def convert_tokens_to_ids(self, token):
-        return {"<|im_start|>": 10, "<|im_end|>": 14}.get(token)
 
 
 def make_row(task: int, run: str, index: int, *, validation: bool) -> dict:
@@ -47,25 +44,20 @@ def make_row(task: int, run: str, index: int, *, validation: bool) -> dict:
     label = float((task + index // (60 if validation else 320)) % 4 != 0)
     planted = index % 2 == 0
     return {
+        # Three tokens form the generated call, followed by three action tokens.
+        # Half the rows call a WRITE tool; the rest call READ get_user_details.
         "input_ids": [
             9 if domain == "retail" else 1,
-            2,
             10,
-            11,
-            12,
-            9 if planted else 1,
+            (11 if domain == "airline" else 12) if planted else 14,
             13,
-            14,
-            *([2] * 5),
+            2,
+            2,
+            2,
         ],
-        "loss_mask": [0, 1, *([0] * 6), *([1] * 5)],
-        "token_roles": [
-            "prompt",
-            "assistant",
-            *(["observation"] * 6),
-            *(["assistant"] * 5),
-        ],
-        "attention_mask": [1] * 13,
+        "loss_mask": [0, *([1] * 6)],
+        "token_roles": ["prompt", *(["assistant"] * 6)],
+        "attention_mask": [1] * 7,
         "reward": label,
         "domain": domain,
         "task_id": key,
@@ -115,7 +107,7 @@ def make_fixture(out: Path) -> dict:
                     },
                     "input_ids_sha256": array_hash(row["input_ids"]),
                     "loss_mask_sha256": array_hash(row["loss_mask"]),
-                    "seqlen": 13,
+                    "seqlen": 7,
                     "loss_tokens": 6,
                 }
             )
@@ -139,7 +131,7 @@ def make_fixture(out: Path) -> dict:
                     },
                     "input_ids_sha256": array_hash(row["input_ids"]),
                     "loss_mask_sha256": array_hash(row["loss_mask"]),
-                    "seqlen": 13,
+                    "seqlen": 7,
                     "loss_tokens": 6,
                 }
             )

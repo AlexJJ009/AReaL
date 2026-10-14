@@ -15,6 +15,7 @@ from torch import nn
 
 from scripts.tau2 import critic_preexp_data as data
 from scripts.tau2 import critic_preexp_extract as extraction
+from scripts.tau2 import critic_preexp_tools as inventory
 
 
 class Tokenizer:
@@ -150,17 +151,15 @@ def test_load_pool_exact_source_identity_and_reward(pool):
     assert manifest["pool_manifest_sha256"] == data.sha256(pool)
 
 
-def test_prefix_future_text_cannot_change_label(monkeypatch):
-    """Future Error token is unavailable at the earlier causal prefix."""
-    row = {"input_ids": [1, 2, 9, 4], "token_roles": ["observation"] * 4}
-    if os.environ.get("PREEXP_RED") == "prefix":
-        monkeypatch.setattr(
-            data,
-            "prefix_labels",
-            lambda row, positions, tokenizer, rule: torch.ones(len(positions)),
-        )
-    labels = data.prefix_labels(row, torch.tensor([0, 2, 3]), Tokenizer(), "error")
-    torch.testing.assert_close(labels, torch.tensor([0.0, 0.0, 1.0]), rtol=0, atol=0)
+def test_prefix_future_text_cannot_change_label():
+    """A WRITE closing wrapper activates only when its final token is visible."""
+    call = _tool_call("cancel_pending_order")
+    row = _chat_row([("prompt", "policy"), ("assistant", call + "answer")])
+    end = len("policy") + len(call) - 1
+    labels = data.prefix_labels(
+        row, torch.tensor([end - 1, end, end + 1]), ChatTokenizer(), WRITE_RULE
+    )
+    torch.testing.assert_close(labels, torch.tensor([0.0, 1.0, 1.0]), rtol=0, atol=0)
 
 
 def test_intermediate_layer_index_and_final_score_input_exact(monkeypatch):
@@ -203,9 +202,10 @@ def test_disjoint_merge_matches_single_process_and_rejects_duplicate_positions(
     model, rule = (
         Model(),
         {
-            "rule": "error",
+            "rule": WRITE_RULE,
             "selection_split": "train",
             "label_semantics": data.LABEL_SEMANTICS,
+            "write_tool_inventory": data.WRITE_TOOL_INVENTORY,
             "status": "selected",
         },
     )
@@ -391,146 +391,153 @@ def _message(speaker, body):
     return f"<|im_start|>{speaker}\n{body}<|im_end|>"
 
 
-@pytest.mark.parametrize("domain", ["retail", "airline"])
-@pytest.mark.parametrize(
-    "speaker,body",
-    [
-        ("tool", "Error: lookup failed"),
-        ("user", "<tool_response>\nError: lookup failed\n</tool_response>"),
-    ],
-)
-def test_prompt_error_ignored_until_complete_post_prompt_tool_message(
-    domain, speaker, body
-):
-    """Domain policy text and user/assistant Error cannot create a planted signal."""
+WRITE_RULE = "earlier completed WRITE tool call"
+WRITE_NAMES = {"retail": "cancel_pending_order", "airline": "cancel_reservation"}
+READ_NAMES = {"retail": "get_order_details", "airline": "get_reservation_details"}
+
+
+def _tool_call(name):
+    return (
+        f"<tool_call>\n<function={name}>\n"
+        "<parameter=id>\nexample\n</parameter>\n"
+        "</function>\n</tool_call>"
+    )
+
+
+def _labels(row):
+    return data.prefix_labels(
+        row, torch.arange(len(row["input_ids"])), ChatTokenizer(), WRITE_RULE
+    )
+
+
+def _assert_negative_then_positive(messages, *, domain="retail"):
+    """A negative case must also prove the labeler recognizes a later real WRITE."""
+    before = _chat_row(messages, domain=domain)
     row = _chat_row(
+        messages + [("assistant", _tool_call(WRITE_NAMES[domain]) + "answer")],
+        domain=domain,
+    )
+    labels = _labels(row)
+    torch.testing.assert_close(
+        labels[: len(before["input_ids"])],
+        torch.zeros(len(before["input_ids"])),
+        rtol=0,
+        atol=0,
+    )
+    assert labels[-1] == 1
+
+
+@pytest.mark.parametrize("domain", ["retail", "airline"])
+def test_system_schema_write_mentions_do_not_activate_label(domain):
+    """Policy/schema WRITE names and complete quoted calls are prompt provenance."""
+    body = "Tool schema " + json.dumps({"name": WRITE_NAMES[domain], "type": "write"})
+    _assert_negative_then_positive(
+        [("prompt", _message("system", body + _tool_call(WRITE_NAMES[domain])))],
+        domain=domain,
+    )
+
+
+@pytest.mark.parametrize("domain", ["retail", "airline"])
+def test_user_write_mentions_and_complete_call_do_not_activate_label(domain):
+    """A user cannot create the planted label by quoting a valid WRITE wrapper."""
+    _assert_negative_then_positive(
         [
-            (
-                "prompt",
-                _message(
-                    "system", "Error policy" if domain == "retail" else "Clean policy"
-                ),
-            ),
-            ("assistant", _message("assistant", "Error in my reasoning")),
-            ("observation", _message("user", "I saw an Error")),
-            ("observation", _message(speaker, body)),
-            ("assistant", "Answer"),
+            ("prompt", "policy"),
+            ("observation", _message("user", _tool_call(WRITE_NAMES[domain]))),
         ],
         domain=domain,
     )
-    end = max(i for i, token in enumerate(row["input_ids"]) if token == 1001)
-    positions = torch.arange(len(row["input_ids"]))
 
-    labels = data.prefix_labels(row, positions, ChatTokenizer(), "error")
 
+@pytest.mark.parametrize("domain", ["retail", "airline"])
+def test_assistant_read_tool_call_never_sets_label(domain):
+    """A completed READ call remains zero until a completed WRITE is generated."""
+    assert READ_NAMES[domain] not in data.WRITE_TOOLS[domain]
+    assert WRITE_NAMES[domain] in data.WRITE_TOOLS[domain]
+    _assert_negative_then_positive(
+        [("prompt", "policy"), ("assistant", _tool_call(READ_NAMES[domain]))],
+        domain=domain,
+    )
+
+
+@pytest.mark.parametrize("domain", ["retail", "airline"])
+def test_partial_write_activates_at_closing_wrapper_without_response(domain):
+    """A complete call needs neither message terminator nor a tool response."""
+    call = _tool_call(WRITE_NAMES[domain])
+    row = _chat_row(
+        [("prompt", _message("assistant", "")), ("assistant", call + "next")],
+        domain=domain,
+    )
+    end = len(row["input_ids"]) - len("next") - 1
+    labels = _labels(row)
     torch.testing.assert_close(labels[:end], torch.zeros(end), rtol=0, atol=0)
     torch.testing.assert_close(
         labels[end:], torch.ones(len(labels) - end), rtol=0, atol=0
     )
-
-
-def test_select_planted_rule_domain_determined_signal_rejected():
-    """Pooled 40% is unacceptable when domain alone perfectly predicts the label."""
-    rows = [
-        _chat_row(
-            [
-                (
-                    "prompt",
-                    _message(
-                        "system",
-                        "Error policy" if domain == "retail" else "Clean policy",
-                    ),
-                ),
-                (
-                    "observation",
-                    _message("tool", "Error" if domain == "retail" else "Success"),
-                ),
-                ("assistant", "Answer"),
-            ],
-            domain=domain,
-            identity=f"{domain}-{index}",
-        )
-        for domain, count in (("retail", 8), ("airline", 12))
-        for index in range(count)
-    ]
-
-    with pytest.raises(ValueError, match="No planted rule") as failure:
-        data.select_planted_rule(rows, ChatTokenizer())
-
-    report = failure.value.report
-    assert set(report["candidate_rates"]) == {
-        "error",
-        "error or not found",
-        "error or not found or invalid or cannot",
-    }
-    assert report["candidate_rates"]["error"] == pytest.approx(0.4)
-    assert report["candidate_token_mass_rates"]["error"] == pytest.approx(0.4)
+    partial = dict(
+        row, input_ids=row["input_ids"][:end], token_roles=row["token_roles"][:end]
+    )
+    assert _labels(partial).sum() == 0
 
 
 @pytest.mark.parametrize(
-    "body,rule,positive",
+    "body",
     [
-        ("not found", "error", False),
-        ("not found", "error or not found", True),
-        ("invalid", "error or not found", False),
-        ("cannot proceed", "error or not found or invalid or cannot", True),
+        "<tool_call><function=cancel_pending_order><parameter=id>x</function></tool_call>",
+        "<tool_call><function=cancel_pending_order><parameter=id>x</parameter></tool_call>",
+        "<tool_call><function=cancel_pending_order><parameter=id>x</parameter></function>",
+        '<tool_call>{"name":"cancel_pending_order","arguments":{}}</tool_call>',
+        _tool_call("unknown_tool"),
+        _tool_call("cancel_reservation"),
+        "cancel_pending_order({})",
     ],
 )
-def test_planted_rule_disjunction_matches_each_complete_message(body, rule, positive):
-    """Registered disjunctions match individual error terms within tool responses."""
-    row = _chat_row(
+def test_malformed_unknown_and_wrong_domain_calls_do_not_activate_label(body):
+    """Only complete Qwen XML calls to a registered domain WRITE count."""
+    _assert_negative_then_positive([("prompt", "policy"), ("assistant", body)])
+
+
+def test_call_wrapper_across_role_segments_does_not_activate_label():
+    """A wrapper assembled from assistant and user tokens is not an action."""
+    call = _tool_call(WRITE_NAMES["retail"])
+    cut = call.index("parameter")
+    _assert_negative_then_positive(
         [
             ("prompt", "policy"),
-            ("observation", _message("tool", body)),
-            ("assistant", "a"),
+            ("assistant", call[:cut]),
+            ("observation", call[cut:]),
         ]
     )
-    labels = data.prefix_labels(
-        row, torch.tensor([len(row["input_ids"]) - 2]), ChatTokenizer(), rule
-    )
-    assert labels.tolist() == [float(positive)]
 
 
-def test_planted_phrase_split_across_tool_messages_does_not_match():
-    """Message boundaries cannot stitch 'not ' and 'found' into one error phrase."""
+def test_prefix_labels_unknown_domain_rejected():
+    """Unknown domains cannot borrow another domain's WRITE inventory."""
     row = _chat_row(
-        [
-            ("prompt", "policy"),
-            ("observation", _message("tool", "not ") + _message("tool", "found")),
-            ("assistant", "a"),
-        ]
+        [("assistant", _tool_call("cancel_pending_order"))], domain="unknown"
     )
-    labels = data.prefix_labels(
-        row, torch.arange(len(row["input_ids"])), ChatTokenizer(), "error or not found"
-    )
-    torch.testing.assert_close(labels, torch.zeros(len(labels)), rtol=0, atol=0)
-
-
-def test_unclosed_tool_message_never_activates_label():
-    """A visible Error without the terminating delimiter remains incomplete."""
-    row = _chat_row([("prompt", "policy"), ("observation", "<|im_start|>tool\nError")])
-    labels = data.prefix_labels(
-        row, torch.arange(len(row["input_ids"])), ChatTokenizer(), "error"
-    )
-    torch.testing.assert_close(labels, torch.zeros(len(labels)), rtol=0, atol=0)
+    with pytest.raises(ValueError, match="domain"):
+        _labels(row)
 
 
 def test_prefix_labels_missing_role_provenance_rejected():
-    """Text alone cannot distinguish policy, user and tool provenance."""
+    """Text alone cannot distinguish prompt, user and generated action tokens."""
     with pytest.raises(ValueError, match="token_roles|action_origin_mask"):
         data.prefix_labels(
-            {"input_ids": [1, 2]}, torch.tensor([1]), ChatTokenizer(), "error"
+            {"input_ids": [1, 2], "domain": "retail"},
+            torch.tensor([1]),
+            ChatTokenizer(),
+            WRITE_RULE,
         )
 
 
 def test_prefix_labels_action_origin_mask_matches_exported_roles():
-    """Validation PT role reconstruction agrees with the JSONL exporter convention."""
+    """Validation PT origin masks recover the same completed-WRITE transition."""
     row = _chat_row(
         [
-            ("prompt", _message("system", "Error policy")),
-            ("assistant", _message("assistant", "call")),
-            ("observation", _message("user", "<tool_response>Error</tool_response>")),
-            ("assistant", "answer"),
+            ("prompt", _message("system", _tool_call("cancel_pending_order"))),
+            ("assistant", "reason"),
+            ("observation", _message("user", _tool_call("cancel_pending_order"))),
+            ("assistant", _tool_call("cancel_pending_order") + "answer"),
         ]
     )
     fallback = {key: value for key, value in row.items() if key != "token_roles"}
@@ -538,93 +545,88 @@ def test_prefix_labels_action_origin_mask_matches_exported_roles():
         int(role == "assistant") for role in row["token_roles"]
     ]
     positions = torch.arange(len(row["input_ids"]))
-    expected = data.prefix_labels(row, positions, ChatTokenizer(), "error")
-    actual = data.prefix_labels(fallback, positions, ChatTokenizer(), "error")
+    expected = data.prefix_labels(row, positions, ChatTokenizer(), WRITE_RULE)
+    actual = data.prefix_labels(fallback, positions, ChatTokenizer(), WRITE_RULE)
     torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert actual[0] == 0
     assert actual[-1] == 1
 
 
-def test_prefix_labels_unregistered_rule_rejected():
-    """Ad hoc reward or policy words cannot replace the three registered rules."""
+@pytest.mark.parametrize("rule", ["error", "error or not found", "refund"])
+def test_prefix_labels_unregistered_rule_rejected(rule):
+    """Old keyword rules and ad hoc words cannot replace the registered WRITE rule."""
     row = _chat_row([("prompt", "policy"), ("assistant", "answer")])
     with pytest.raises(ValueError, match="rule|registered"):
-        data.prefix_labels(row, torch.tensor([0]), ChatTokenizer(), "refund")
+        data.prefix_labels(row, torch.tensor([0]), ChatTokenizer(), rule)
 
 
-def test_select_planted_rule_balanced_tool_errors_ignore_retail_prompt_policy():
-    """A synthetic two-domain pool selects tool errors despite retail prompt Error."""
+def _selection_row(domain, index, positive):
+    row = _chat_row(
+        [
+            ("prompt", _message("system", _tool_call(WRITE_NAMES[domain]))),
+            ("observation", _message("user", _tool_call(WRITE_NAMES[domain]))),
+            (
+                "assistant",
+                _tool_call(WRITE_NAMES[domain] if positive else READ_NAMES[domain]),
+            ),
+            ("assistant", "a" * 100),
+        ],
+        domain=domain,
+        identity=f"{domain}-{index}",
+    )
+    # Origin is generated-action provenance; sampled loss tokens need not include
+    # the earlier call. This gives every row exactly 100 equal-mass test prefixes.
+    row["loss_mask"] = [0] * (len(row["input_ids"]) - 100) + [1] * 100
+    return row
+
+
+@pytest.mark.parametrize("positive_domain", ["retail", "airline"])
+def test_select_planted_rule_domain_determined_signal_rejected(positive_domain):
+    """Pooled 40% passes, but domains with 0% or 100% must reject selection."""
+    negative_domain = "airline" if positive_domain == "retail" else "retail"
     rows = [
-        _chat_row(
-            [
-                (
-                    "prompt",
-                    _message(
-                        "system",
-                        "Error policy" if domain == "retail" else "Clean policy",
-                    ),
-                ),
-                ("observation", _message("user", "Error reported by customer")),
-                (
-                    "observation",
-                    _message(
-                        "user",
-                        "<tool_response>"
-                        + ("Error" if index < 4 else "Success")
-                        + "</tool_response>",
-                    ),
-                ),
-                ("assistant", "Answer"),
-            ],
-            domain=domain,
-            identity=f"{domain}-{index}",
-        )
+        _selection_row(domain, index, domain == positive_domain)
+        for domain, count in ((positive_domain, 8), (negative_domain, 12))
+        for index in range(count)
+    ]
+    assert _labels(rows[0])[-1] == 1
+    with pytest.raises(ValueError, match="No planted rule") as failure:
+        data.select_planted_rule(rows, ChatTokenizer())
+    report = failure.value.report
+    assert set(report["candidate_rates"]) == {WRITE_RULE}
+    assert report["candidate_rates"][WRITE_RULE] == pytest.approx(0.4)
+    assert report["candidate_token_mass_rates"][WRITE_RULE] == pytest.approx(0.4)
+    rates = report["candidate_domain_rates"][WRITE_RULE]
+    assert rates[positive_domain]["token_mass_rate"] == 1
+    assert rates[negative_domain]["token_mass_rate"] == 0
+
+
+def test_select_planted_rule_training_only_balanced_writes_selected():
+    """Balanced training WRITEs select 40%; held-out 100% cannot affect selection."""
+    rows = [
+        _selection_row(domain, index, index < 4)
         for domain in ("retail", "airline")
         for index in range(10)
     ]
-    held_out = _chat_row(
-        [
-            ("prompt", "policy"),
-            ("observation", _message("tool", "Error")),
-            ("assistant", "Answer"),
-        ]
-    )
+    held_out = _selection_row("retail", 100, True)
     held_out["_split"] = "validation"
-
+    held_out["domain"] = "held-out-unknown-domain"
     report = data.select_planted_rule(rows + [held_out] * 100, ChatTokenizer())
-
-    assert report["rule"] == "error"
+    assert report["rule"] == WRITE_RULE
     assert report["selection_split"] == "train"
+    assert report["candidate_order"] == [WRITE_RULE]
     assert report["training_token_base_rate"] == pytest.approx(0.4)
     assert report["training_token_mass_base_rate"] == pytest.approx(0.4)
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        "<tool_response>Error</tool_response> user says Error",
-        "user says <tool_response>Error</tool_response>",
-        "<tool_response>Error",
-    ],
-)
-def test_user_message_with_incomplete_or_mixed_tool_wrapper_ignored(body):
-    """Ordinary user text surrounding a wrapper cannot impersonate tool output."""
-    row = _chat_row(
-        [
-            ("prompt", "policy"),
-            ("observation", _message("user", body)),
-            ("assistant", "Answer"),
-        ]
-    )
-    labels = data.prefix_labels(
-        row, torch.arange(len(row["input_ids"])), ChatTokenizer(), "error"
-    )
-    torch.testing.assert_close(labels, torch.zeros(len(labels)), rtol=0, atol=0)
 
 
 @pytest.mark.parametrize(
     "overrides",
     [
         {"label_semantics": "lowercase_substring_in_tokens_through_prefix_position"},
+        {
+            "label_semantics": "completed_post_prompt_tool_return_case_insensitive_substring"
+        },
+        {"rule": "error"},
         {"status": "rejected"},
         {"rule": "refund"},
     ],
@@ -634,8 +636,9 @@ def test_verify_cache_stale_planted_rule_rejected_without_tokenizer(
 ):
     """Even metadata-only consumers must reject labels from the superseded rule."""
     rule = {
-        "rule": "error",
+        "rule": WRITE_RULE,
         "label_semantics": data.LABEL_SEMANTICS,
+        "write_tool_inventory": data.WRITE_TOOL_INVENTORY,
         "status": "selected",
     }
     rule.update(overrides)
@@ -653,3 +656,61 @@ def test_verify_cache_stale_planted_rule_rejected_without_tokenizer(
         extraction.verify_cache(
             path, [], {"pool_manifest_sha256": "pinned-pool"}, synthetic=True
         )
+
+
+def test_write_inventory_derived_from_annotations_with_source_provenance(
+    tmp_path, monkeypatch
+):
+    """AST annotations classify tools; comments and name heuristics cannot add WRITEs."""
+    content = (
+        "# @is_tool(ToolType.WRITE)\n"
+        "# def commented_write(): pass\n"
+        "@is_tool(ToolType.WRITE)\n"
+        "def surprising_name(): pass\n"
+        "@is_tool(ToolType.READ)\n"
+        "def cancel_read_only(): pass\n"
+        "@is_tool(ToolType.GENERIC)\n"
+        "async def generic_operation(): pass\n"
+        "def unannotated_write(): pass\n"
+    )
+    for domain in ("airline", "retail"):
+        path = tmp_path / "src" / "tau2" / "domains" / domain / "tools.py"
+        path.parent.mkdir(parents=True)
+        path.write_text(content)
+    calls = []
+
+    def pinned_revision(command, *, text):
+        calls.append((command, text))
+        return "pinned-revision\n"
+
+    monkeypatch.setattr(inventory.subprocess, "check_output", pinned_revision)
+    result = inventory.derive_write_inventory(tmp_path)
+
+    assert calls == [(["git", "-C", str(tmp_path), "rev-parse", "HEAD"], True)]
+    assert result["source_revision"] == "pinned-revision"
+    assert result["derivation"] == "AST is_tool(ToolType.WRITE)"
+    for domain in ("airline", "retail"):
+        entry = result["domains"][domain]
+        assert entry["write_tools"] == ["surprising_name"]
+        assert entry["source_file"] == f"src/tau2/domains/{domain}/tools.py"
+        assert entry["source_sha256"] == hashlib.sha256(content.encode()).hexdigest()
+        assert entry["tools"] == [
+            {
+                "name": "cancel_read_only",
+                "type": "READ",
+                "annotation_line": 5,
+                "definition_line": 6,
+            },
+            {
+                "name": "generic_operation",
+                "type": "GENERIC",
+                "annotation_line": 7,
+                "definition_line": 8,
+            },
+            {
+                "name": "surprising_name",
+                "type": "WRITE",
+                "annotation_line": 3,
+                "definition_line": 4,
+            },
+        ]
