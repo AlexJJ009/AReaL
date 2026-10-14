@@ -1,7 +1,7 @@
 # Issue: why critic-only training on tau2 barely reaches positive explained variance
 
-- Status: open (2026-10-14). Two independent case studies: Codex and Claude, each with
-  its own report.
+- Status: both case studies done (2026-10-14); synthesis in README 16.14.7. Next:
+  offline experiments (probe, planted signal, replay). its own report.
 - Background: README 16.14 (all subsections). Read it first; this file only adds the run
   index and the open questions.
 
