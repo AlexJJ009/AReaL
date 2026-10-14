@@ -1,0 +1,215 @@
+{
+  "source_revision": "b7ea9074c1cba482b30687fecdb5c8425fd6f619",
+  "derivation": "AST is_tool(ToolType.WRITE)",
+  "domains": {
+    "airline": {
+      "source_file": "src/tau2/domains/airline/tools.py",
+      "source_sha256": "3987f21c286314cb48764f97052934ff4fd60e27a0b2e4a43423911adf8eaa26",
+      "tools": [
+        {
+          "name": "book_reservation",
+          "type": "WRITE",
+          "annotation_line": 186,
+          "definition_line": 187
+        },
+        {
+          "name": "calculate",
+          "type": "GENERIC",
+          "annotation_line": 320,
+          "definition_line": 321
+        },
+        {
+          "name": "cancel_reservation",
+          "type": "WRITE",
+          "annotation_line": 338,
+          "definition_line": 339
+        },
+        {
+          "name": "get_flight_status",
+          "type": "READ",
+          "annotation_line": 720,
+          "definition_line": 721
+        },
+        {
+          "name": "get_reservation_details",
+          "type": "READ",
+          "annotation_line": 370,
+          "definition_line": 371
+        },
+        {
+          "name": "get_user_details",
+          "type": "READ",
+          "annotation_line": 386,
+          "definition_line": 387
+        },
+        {
+          "name": "list_all_airports",
+          "type": "READ",
+          "annotation_line": 402,
+          "definition_line": 403
+        },
+        {
+          "name": "search_direct_flight",
+          "type": "READ",
+          "annotation_line": 432,
+          "definition_line": 433
+        },
+        {
+          "name": "search_onestop_flight",
+          "type": "READ",
+          "annotation_line": 451,
+          "definition_line": 452
+        },
+        {
+          "name": "send_certificate",
+          "type": "WRITE",
+          "annotation_line": 487,
+          "definition_line": 488
+        },
+        {
+          "name": "transfer_to_human_agents",
+          "type": "GENERIC",
+          "annotation_line": 531,
+          "definition_line": 532
+        },
+        {
+          "name": "update_reservation_baggages",
+          "type": "WRITE",
+          "annotation_line": 547,
+          "definition_line": 548
+        },
+        {
+          "name": "update_reservation_flights",
+          "type": "WRITE",
+          "annotation_line": 591,
+          "definition_line": 592
+        },
+        {
+          "name": "update_reservation_passengers",
+          "type": "WRITE",
+          "annotation_line": 692,
+          "definition_line": 693
+        }
+      ],
+      "write_tools": [
+        "book_reservation",
+        "cancel_reservation",
+        "send_certificate",
+        "update_reservation_baggages",
+        "update_reservation_flights",
+        "update_reservation_passengers"
+      ]
+    },
+    "retail": {
+      "source_file": "src/tau2/domains/retail/tools.py",
+      "source_sha256": "34f4fe9702d36f0dd4697700fbcd63d0cf5386e6eb8e7499aaa336243bad8750",
+      "tools": [
+        {
+          "name": "calculate",
+          "type": "GENERIC",
+          "annotation_line": 140,
+          "definition_line": 141
+        },
+        {
+          "name": "cancel_pending_order",
+          "type": "WRITE",
+          "annotation_line": 158,
+          "definition_line": 159
+        },
+        {
+          "name": "exchange_delivered_order_items",
+          "type": "WRITE",
+          "annotation_line": 207,
+          "definition_line": 208
+        },
+        {
+          "name": "find_user_id_by_email",
+          "type": "READ",
+          "annotation_line": 314,
+          "definition_line": 315
+        },
+        {
+          "name": "find_user_id_by_name_zip",
+          "type": "READ",
+          "annotation_line": 286,
+          "definition_line": 287
+        },
+        {
+          "name": "get_item_details",
+          "type": "READ",
+          "annotation_line": 364,
+          "definition_line": 365
+        },
+        {
+          "name": "get_order_details",
+          "type": "READ",
+          "annotation_line": 332,
+          "definition_line": 333
+        },
+        {
+          "name": "get_product_details",
+          "type": "READ",
+          "annotation_line": 348,
+          "definition_line": 349
+        },
+        {
+          "name": "get_user_details",
+          "type": "READ",
+          "annotation_line": 380,
+          "definition_line": 381
+        },
+        {
+          "name": "list_all_product_types",
+          "type": "READ",
+          "annotation_line": 396,
+          "definition_line": 397
+        },
+        {
+          "name": "modify_pending_order_address",
+          "type": "WRITE",
+          "annotation_line": 410,
+          "definition_line": 411
+        },
+        {
+          "name": "modify_pending_order_items",
+          "type": "WRITE",
+          "annotation_line": 454,
+          "definition_line": 455
+        },
+        {
+          "name": "modify_pending_order_payment",
+          "type": "WRITE",
+          "annotation_line": 544,
+          "definition_line": 545
+        },
+        {
+          "name": "modify_user_address",
+          "type": "WRITE",
+          "annotation_line": 624,
+          "definition_line": 625
+        },
+        {
+          "name": "return_delivered_order_items",
+          "type": "WRITE",
+          "annotation_line": 663,
+          "definition_line": 664
+        },
+        {
+          "name": "transfer_to_human_agents",
+          "type": "GENERIC",
+          "annotation_line": 731,
+          "definition_line": 732
+        }
+      ],
+      "write_tools": [
+        "cancel_pending_order",
+        "exchange_delivered_order_items",
+        "modify_pending_order_address",
+        "modify_pending_order_items",
+        "modify_pending_order_payment",
+        "modify_user_address",
+        "return_delivered_order_items"
+      ]
+    }
+  }
+}

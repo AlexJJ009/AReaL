@@ -96,8 +96,9 @@ def replay_batches(rows: list[dict], batch_size: int, *, seed: int | None = None
 def parse_config(argv: list[str]):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
-    parser.add_argument("--train-rollouts", action="append", required=True)
-    parser.add_argument("--validation-rollouts", action="append", required=True)
+    parser.add_argument("--pool-manifest", type=Path)
+    parser.add_argument("--train-rollouts", action="append", default=[])
+    parser.add_argument("--validation-rollouts", action="append", default=[])
     parser.add_argument("--validation-label-override")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--epochs", type=int, default=1)
@@ -111,6 +112,11 @@ def parse_config(argv: list[str]):
     parser.add_argument("--head-init", help="Exported linear probe head .pt")
     parser.add_argument("--check-config", action="store_true")
     args, overrides = parser.parse_known_args(argv)
+    if args.pool_manifest:
+        if args.train_rollouts or args.validation_rollouts:
+            parser.error("--pool-manifest cannot be mixed with rollout paths")
+    elif not args.train_rollouts or not args.validation_rollouts:
+        parser.error("provide --pool-manifest or both train and validation rollouts")
     raw = OmegaConf.load(args.config)
     if "config" in raw:
         raw = raw.config
@@ -286,6 +292,45 @@ def load_probe_head(engine, path: str) -> None:
             parameter.copy_(value.to(parameter.device, dtype=parameter.dtype))
 
 
+def check_head_init(argv: list[str]) -> dict[str, Any]:
+    """Exercise the actual head loader on CPU without loading a backbone.
+
+    This verifies initialization plumbing and exact float32 readback; it does
+    not claim to test distributed placement or a bf16 backbone forward.
+    """
+    parser = argparse.ArgumentParser(description=check_head_init.__doc__)
+    parser.add_argument("--check-head-init", action="store_true", required=True)
+    parser.add_argument("--head-init", required=True)
+    parser.add_argument("--checkpoint", required=True)
+    args = parser.parse_args(argv)
+    state = validate_probe_artifact(args.head_init, args.checkpoint)
+    weight = state.get("score.weight", state.get("weight"))
+    bias = state.get("score.bias", state.get("bias"))
+    score = torch.nn.Linear(weight.shape[1], 1, bias=True, device="cpu")
+    engine = SimpleNamespace(
+        config=SimpleNamespace(path=args.checkpoint),
+        model=SimpleNamespace(score=score),
+    )
+    load_probe_head(engine, args.head_init)
+    torch.testing.assert_close(score.weight, weight.float(), rtol=0, atol=0)
+    torch.testing.assert_close(score.bias, bias.float(), rtol=0, atol=0)
+    return {
+        "passed": True,
+        "head_init": args.head_init,
+        "checkpoint": args.checkpoint,
+        "loader": "load_probe_head",
+        "device": "cpu",
+        "readback_equal": True,
+        "weight_shape": list(score.weight.shape),
+        "weight_sha256": hashlib.sha256(
+            score.weight.detach().numpy().tobytes()
+        ).hexdigest(),
+        "bias_sha256": hashlib.sha256(
+            score.bias.detach().numpy().tobytes()
+        ).hexdigest(),
+    }
+
+
 def evaluate_banks(holder, banks, validation, evidence, step):
     """Evaluate each bank once; pool official metric rows without extra forwards."""
     reports = {}
@@ -317,6 +362,8 @@ def evaluate_banks(holder, banks, validation, evidence, step):
 
 
 def main(argv: list[str]) -> dict[str, Any]:
+    if "--check-head-init" in argv:
+        return check_head_init(argv)
     args, config, critic_config, allocation, batch_size = parse_config(argv)
     # Shared stored-data reader enforces real tensor/mask/reward contracts.
     from scripts.tau2.critic_features import (
@@ -334,17 +381,40 @@ def main(argv: list[str]) -> dict[str, Any]:
         paths.extend(matches)
     if len(paths) != len(set(paths)):
         raise ValueError("Training inputs contain duplicate files")
-    train = iter_rollouts(paths, split="train", run="replay", batch_size=batch_size)
+    pool = None
+    if args.pool_manifest:
+        from scripts.tau2.critic_preexp_data import load_pool
+
+        pool, rows = load_pool(args.pool_manifest)
+        train = [row for row in rows if row["_split"] == "train"]
+        validation_inputs = [
+            (
+                run,
+                [
+                    row
+                    for row in rows
+                    if row["_split"] == "validation" and row["_run"] == run
+                ],
+            )
+            for run in sorted(
+                {row["_run"] for row in rows if row["_split"] == "validation"}
+            )
+        ]
+    else:
+        train = iter_rollouts(paths, split="train", run="replay", batch_size=batch_size)
+        validation_inputs = [
+            (f"bank-{index}", load_stored_rollouts(path))
+            for index, path in enumerate(args.validation_rollouts)
+        ]
     banks = {}
     validation = []
     validation_override = import_label_override(args.validation_label_override)
-    for index, path in enumerate(args.validation_rollouts):
-        bank = load_stored_rollouts(path)
+    for name, bank in validation_inputs:
         validate_splits(train, bank)
         copied = []
         for row in bank:
             row = dict(row)
-            row["episode_id"] = f"bank-{index}:{row.get('episode_id', len(copied))}"
+            row["episode_id"] = f"{name}:{row.get('episode_id', len(copied))}"
             if validation_override:
                 label = float(validation_override(row))
                 if not math.isfinite(label):
@@ -353,7 +423,7 @@ def main(argv: list[str]) -> dict[str, Any]:
                     )
                 row["reward"] = label
             copied.append(row)
-        banks[f"bank-{index}"] = copied
+        banks[name] = copied
         validation.extend(copied)
     if not train or not validation:
         raise ValueError("training and validation rollouts must both be nonempty")
@@ -384,6 +454,7 @@ def main(argv: list[str]) -> dict[str, Any]:
         "critic_config": asdict(critic_config),
         "engine": "examples.tau2.critic_head.Tau2HeadFSDPPPOCritic",
         "shuffle": args.shuffle,
+        "pool_manifest": str(args.pool_manifest) if pool is not None else None,
     }
     if args.head_init:
         validate_probe_artifact(args.head_init, critic_config.path)

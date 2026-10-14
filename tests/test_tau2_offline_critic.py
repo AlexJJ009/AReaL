@@ -230,6 +230,52 @@ def test_probe_head_rejects_logistic_and_mismatched_source(tmp_path):
     assert state["score.weight"].shape == (1, 3)
 
 
+def test_head_init_cli_cpu_reads_back_actual_loader_weights(tmp_path, monkeypatch):
+    """The no-backbone CLI must exercise the same loader used after initialize."""
+    path = tmp_path / "head.pt"
+    torch.save(
+        {
+            "base_checkpoint": "local-base",
+            "state_dict": {
+                "score.weight": torch.tensor([[0.1, -0.2, 0.3]]),
+                "score.bias": torch.tensor([0.78]),
+            },
+        },
+        path,
+    )
+    arguments = [
+        "--check-head-init",
+        "--head-init",
+        str(path),
+        "--checkpoint",
+        "local-base",
+    ]
+    result = replay.main(arguments)
+    assert result["readback_equal"] is True
+    assert result["device"] == "cpu"
+    # An implementation which validates metadata but never loads must fail.
+    monkeypatch.setattr(replay, "load_probe_head", lambda *_args: None)
+    with pytest.raises(AssertionError):
+        replay.main(arguments)
+
+
+def test_offline_fit_manifest_and_direct_sources_cannot_mix():
+    """Reject source selection ambiguity before reading configs or data."""
+    with pytest.raises(SystemExit):
+        replay.parse_config(
+            [
+                "--config",
+                "unused.yaml",
+                "--pool-manifest",
+                "pool-manifest.json",
+                "--train-rollouts",
+                "unregistered.jsonl",
+                "--output-dir",
+                "unused-output",
+            ]
+        )
+
+
 def test_validation_adapter_partitions_and_gathers_original_order(monkeypatch):
     """Each DP worker sees only its share; evaluator receives original row order."""
     observed = []
