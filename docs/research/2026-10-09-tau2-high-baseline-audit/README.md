@@ -3494,7 +3494,10 @@ HEAD、设 `PYTHONPATH`、确认第 55 步的 checkpoint 和验证报告存在�
 **队列**：第一次 smoke（525）用的是未修 xccl 的代码，在加载阶段就停掉，没有调用 API。xccl 修复（16.14.8）合并后，worktree 改为
 `src-6bf1d96e`、check-config 通过，smoke（526）重新排队，北京时间 17:00–18:08 跑完，exit 0：2
 步都正常推送了权重（16.14.8），第 2 步评测 pass^1 总体 0.738、Airline 0.550、Retail 0.831。用户确认评测频率保持每 10
-步一次后，正式任务（527）于北京时间 10 月 14 日 21:27 开始。
+步一次。正式任务 527 于 21:27 启动后 1.5 分钟报错退出，没有训练也没有调用 API：异步评测要求存 checkpoint
+和评测的频率一致（`areal/trainer/async_eval.py` 的 `_validate_save_eval_sync`），而 formal 模式只把评测改成了每
+10 步，存档仍是每 5 步。smoke 模式两者都是 2，check-config 也不构建 trainer，所以之前没查出来。formal 模式改为同时设
+`saver.freq_steps=10`，读回解析后的配置确认两者一致后重新排队（534）。
 
 #### 16.14.7 critic EV case study（2026-10-14）
 

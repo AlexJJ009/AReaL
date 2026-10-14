@@ -12,7 +12,7 @@
 set -euo pipefail
 NAME=$1 MODE=$2; shift 2
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-SHA=fccceaa1
+SHA=6bf1d96e
 SRC="$ROOT/src-$SHA"
 OUT="$ROOT/$NAME"
 CACHE=/data_storage/yl_test/lgx/data-1/code/_cache
@@ -20,7 +20,7 @@ PACK=/data_storage/yl_test/lgx/data-1/dataset/tau2/tau2-areal-pack-20261013-crit
 CRITIC_RUN=/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-training-20261013-critic-head/critic-head-qwen35-mix-r2
 case $MODE in
   smoke)  MODE_OVR=(total_train_steps=2 evaluator.eval_before_train=false evaluator.freq_steps=2 saver.freq_steps=2) ;;
-  formal) MODE_OVR=(evaluator.freq_steps=10) ;;
+  formal) MODE_OVR=(evaluator.freq_steps=10 saver.freq_steps=10) ;;
   *) echo "bad mode $MODE"; exit 2 ;;
 esac
 test ! -e "$OUT/exit-code.txt" || { echo "refusing to overwrite $OUT"; exit 2; }
