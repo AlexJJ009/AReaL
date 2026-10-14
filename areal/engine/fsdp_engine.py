@@ -2116,9 +2116,16 @@ class FSDPEngine(TrainEngine):
                 tensor = self._get_full_tensor(param)
                 if not main_rank:
                     continue
-                # Cast fp32 master storage to compute dtype before broadcast.
-                # Rollout engines (SGLang/vLLM) expect compute dtype (bf16).
-                tensor = self._cast_to_compute_dtype(tensor)
+                # SGLang keeps Qwen3.5's GatedDeltaNet A_log in fp32, even
+                # with bf16 inference. Rounding it here irreversibly changes
+                # the rollout values before the receiver copies them into fp32.
+                if not (
+                    is_qwen3_5_model(self.model_config.model_type)
+                    and meta.gen_allocation is not None
+                    and meta.gen_allocation.backend == "sglang"
+                    and name.endswith(".linear_attn.A_log")
+                ):
+                    tensor = self._cast_to_compute_dtype(tensor)
 
                 tensor_size = tensor.numel() * tensor.element_size()
                 bucket_overflow = (
