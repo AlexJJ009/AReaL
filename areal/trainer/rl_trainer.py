@@ -129,6 +129,8 @@ class PPOTrainer:
         config: PPOConfig,
         train_dataset: Dataset | None = None,
         valid_dataset: Dataset | None = None,
+        *,
+        skip_recovery_weight_update: bool = False,
     ):
         rank = int(os.getenv("RANK", "0"))
         if is_single_controller():
@@ -502,6 +504,7 @@ class PPOTrainer:
             # AWEX clears that flag because it drives the handover itself.
             colocated_rollout=self._is_actor_rollout_colocated(config),
             expected_trainer_state=self._expected_recovery_trainer_state(config),
+            skip_inference_weight_update=skip_recovery_weight_update,
         )
 
         # After recovery, sync the staleness manager so its capacity formula

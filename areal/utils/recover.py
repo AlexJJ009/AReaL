@@ -392,6 +392,7 @@ class RecoverHandler:
         inference_engine_update_from: str = "default",
         colocated_rollout: bool = False,
         expected_trainer_state: dict | None = None,
+        skip_inference_weight_update: bool = False,
     ) -> RecoverInfo | None:
         if self.config.mode in ("disabled", "off"):
             return
@@ -478,10 +479,26 @@ class RecoverHandler:
                         "Recovered policy version disagrees with warmup rounds"
                     )
 
-            is_awex_colocate = self._should_run_awex_colocate_transfer(
-                inference_engine=inference_engine,
-                weight_update_meta=weight_update_meta,
-                colocated_rollout=colocated_rollout,
+            # Only a model-only actor at its initial version can already match
+            # the HF snapshot served by inference. Callers must also guarantee
+            # that the actor stays frozen for the entire resumed run.
+            if skip_inference_weight_update:
+                if recovery_version != 0:
+                    raise ValueError(
+                        "Skipping recovery weight update requires policy_version=0"
+                    )
+                if self._optimizer_roles_state() != ["critic"]:
+                    raise ValueError(
+                        "Skipping recovery weight update requires critic-only optimizer roles"
+                    )
+
+            is_awex_colocate = (
+                not skip_inference_weight_update
+                and self._should_run_awex_colocate_transfer(
+                    inference_engine=inference_engine,
+                    weight_update_meta=weight_update_meta,
+                    colocated_rollout=colocated_rollout,
+                )
             )
             if is_awex_colocate:
                 self._require_colocate_rollout_protocol(inference_engine)
@@ -490,7 +507,7 @@ class RecoverHandler:
                 for name, engine_ in normalized_engine.items():
                     self._load_checkpoint(engine_, name=name)
 
-            if inference_engine is not None:
+            if inference_engine is not None and not skip_inference_weight_update:
                 assert weight_update_meta is not None
                 update_engine = normalized_engine[inference_engine_update_from]
                 versioned_meta = weight_update_meta.with_version(recovery_version)
@@ -523,6 +540,7 @@ class RecoverHandler:
                     # Always resume: leaving rollout paused after a failed
                     # checkpoint load or transfer would hang every later step.
                     inference_engine.resume()
+            if inference_engine is not None:
                 for engine_ in normalized_engine.values():
                     engine_.set_version(recovery_version)
                 inference_engine.set_version(recovery_version)

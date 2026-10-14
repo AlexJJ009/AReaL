@@ -1108,7 +1108,21 @@ class Tau2CriticOnlineTrainer(PPOTrainer):
     """PPOTrainer wrapper that preserves finite τ² task-tail coverage."""
 
     def _init_impl(self, config, *args, **kwargs):
-        super()._init_impl(config, *args, **kwargs)
+        # The actor must stay frozen for the whole run: recovery then skips the
+        # actor -> inference weight push, since inference already serves the
+        # same HF snapshot (README 16.14.5).
+        if config.actor.optimizer.lr != 0:
+            raise ValueError("Tau2 critic-only training requires a frozen actor (lr=0)")
+        if not (
+            config.total_train_steps is not None
+            and 0 < config.total_train_steps <= config.num_critic_only_steps
+            and config.critic_updates_before_actor == 0
+            and config.critic is not None
+        ):
+            raise ValueError(
+                "Tau2 critic-only training requires every step to be critic-only"
+            )
+        super()._init_impl(config, *args, skip_recovery_weight_update=True, **kwargs)
         self._tau2_train_epoch = (
             self.recover_info.last_step_info.epoch if self.recover_info else 0
         )
@@ -1119,8 +1133,10 @@ class Tau2CriticOnlineTrainer(PPOTrainer):
             if self.recover_info
             else 0
         )
-        if self.recover_info is None:
-            self.train_dataloader.sampler.seed = config.seed
+        # StatefulDataLoader.load_state_dict defers sampler fast-forward until
+        # iter(dataloader). Set the seed before _next_strict_rows creates it,
+        # including mid-epoch resumes (only samples_yielded is checkpointed).
+        self.train_dataloader.sampler.seed = config.seed
         self.rollout.prepare_batch = self._strict_prepare_training_batch
 
     def _next_strict_rows(self, dataloader) -> list[dict[str, Any]]:
