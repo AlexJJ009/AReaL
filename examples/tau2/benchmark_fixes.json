@@ -11,8 +11,8 @@
    "commit": "cc3103351cdbb9cbdee446cf46cd857ac1e10972"
   },
   "patches": {
-   "audit": "docs/research/2026-10-09-tau2-high-baseline-audit/README.md",
-   "case_study": "docs/research/2026-10-09-tau2-high-baseline-audit/user-sim-case-study-20261012/REPORT.md",
+   "audit": "docs/research/tau2/README.md",
+   "case_study": "docs/research/tau2/user-sim-case-study-20261012/REPORT.md",
    "evidence_root": "user-sim-20261012/"
   }
  },

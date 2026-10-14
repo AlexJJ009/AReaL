@@ -2,7 +2,7 @@
 
 审阅对象：§16.11（README L2243–2743），并核对 §16.0、§16.2–16.4、§16.9–16.10、§3.4 和 §9.1。以下 `L…`
 均指本次读取的
-[README.md](/data_storage/yl_test/lgx/data-1/code/_worktrees/AReaL/codex-sao-math/docs/research/2026-10-09-tau2-high-baseline-audit/README.md)
+[README.md](/data_storage/yl_test/lgx/data-1/code/_worktrees/AReaL/codex-sao-math/docs/research/tau2/README.md)
 行号；代码路径相对于仓库根目录。审阅日期：2026-10-12。本审阅只读取材料、复算数值；没有修改原稿、代码或配置，也没有运行训练。
 
 ## 1. 总体评价

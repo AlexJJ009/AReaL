@@ -11,10 +11,9 @@ Applies to `examples/tau2/benchmark_variant.py`, `examples/tau2/benchmark_fixes.
 
 ## Context and Problem Statement
 
-The step-0 failure audits on 2026-10-10
-([audit §10–§11](../research/2026-10-09-tau2-high-baseline-audit/README.md)) found
-problems in tau2-bench `b7ea907` that also affect the training reward, because training
-uses the same evaluator:
+The step-0 failure audits on 2026-10-10 ([audit §10–§11](../research/tau2/README.md))
+found problems in tau2-bench `b7ea907` that also affect the training reward, because
+training uses the same evaluator:
 
 - **A scoring hole.** On Airline refusal tasks with no gold write, transferring to a
   human leaves the database unchanged and scores 1. This accounts for about 30 pp of the

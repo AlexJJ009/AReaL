@@ -115,7 +115,7 @@ math port deliberately left this out (user decision). It was later added as opt-
 and `linear_attn` of the Qwen3.5 hybrid critic before FSDP wrapping. It is enabled in
 the τ² SAO and critic recipes at the user's request and disabled in `gsm8k_sao.yaml`.
 This is a dense-model adaptation, not the paper's parameter topology; see
-[docs/research/sao-critic-attention-freeze.md](../research/sao-critic-attention-freeze.md).
+[docs/research/sao/sao-critic-attention-freeze.md](../research/sao/sao-critic-attention-freeze.md).
 
 ### Consequences
 
