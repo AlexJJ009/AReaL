@@ -42,7 +42,8 @@ Paths are under
 
 ## What round 1 (Codex, CPU only) established
 
-Report: `.../tau2-training-20261014-xccl-qwen35-fix/codex-report.md`.
+Report: [round 1](../reports/xccl-qwen35-round1.md),
+[round 2](../reports/xccl-qwen35-round2.md).
 
 - Ruled out by source inspection: sender/receiver shape or dtype mismatch (the receiver
   allocates from the request metadata, which the sender derives from the real tensor),

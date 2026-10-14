@@ -12,7 +12,9 @@
 - Retail：本来就没多少可学的，训练数据里失败的例子也太少，EV 接近 0 是意料之中。
 - 验证集只有 60 条轨迹，单个验证点的 EV 误差约 ±0.1：r2 第 55 步的 0.18 和最后一步的 0，差别很可能只是噪声。
 
-原始报告：`tau2-training-20261014-critic-ev-case-study/{codex,claude}/report.md`；背景和问题清单：
+原始报告：[Codex](reports/ev-case-study-codex.md)（另有
+[data audit](reports/ev-case-study-codex-data-audit.md) 和
+[code audit](reports/ev-case-study-codex-code-audit.md)）、[Claude](reports/ev-case-study-claude.md)；背景和问题清单：
 `../issues/2026-10-14-critic-ev-case-study.md`。
 
 ## 先说清楚我们在看哪个数

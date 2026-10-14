@@ -61,6 +61,8 @@
 - [sao-runs.md](sao-runs.md)：SAO mix pack + critic 510 第 55 步。
 - [infra-issues.md](infra-issues.md)：proxy 容量泄漏、Qwen3 加速配置、SAO 推权重崩溃。
 - [issues/](issues/)：给 Codex 的 issue 记录。
+- [reports/](reports/README.md)：Codex / Claude 的最终报告（xccl、critic recover、SAO mix），critic
+  的报告在 [critic/reports/](critic/reports/ev-case-study-codex.md)。
 
 ### 研究方向与决策
 
