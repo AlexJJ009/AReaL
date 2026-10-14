@@ -76,3 +76,15 @@ DAPO。下表的结论来自代码，不是文档：
 - 没有一个框架用这个阈值作为默认值，最接近的是 rLLM 的 `min_trajs_per_group=2`，默认关闭。
 - 2 个成员、二值 reward 时，advantage 只有两种情况：全 0，或者 ±1，噪声很大。
 - 一个组丢了 6 个成员，本身就说明任务或环境有系统性问题；这个阈值会把这个信号掩盖掉。
+
+## 4 训练结果验证不了什么
+
+- **与 Recuris 或榜单比绝对分数**：用户模拟器不同（[benchmark-variants.md §3.2](benchmark-variants.md) 第 1
+  项），也没有 Telecom。fixed 的分数本来就不能与榜单比。
+- **小于噪声的提升**：test 只有 60 题。同一配置两次重测相差约
+  3pp（[step0-evaluations.md §3](step0-evaluations.md)）；采样噪声的 95% 半宽，合计约 ±4.1pp，Airline 约
+  ±6.4pp（[initial-audit.md §2.1](initial-audit.md)）。 几个点的变化不能当作训练有效。
+- **对 Doubao 或 gpt-5.2 用户的泛化**：训练和评测都用 DeepSeek 用户，换用户后的效果需要另跑评测。
+- **critic 对 SAO 的具体贡献**：MSE / EV 只说明 critic 拟合了 temperature 1 下的回报。它对 SAO 有没有帮助，只能从 SAO
+  与 GRPO 的对比里间接看出，而这个对比还混着两种算法的其他差异。
+- **NL judge 带来的 reward 噪声有多大**：Airline 有 26 道题按 NL 断言计分，judge 就是用户模拟器所用的模型。

@@ -22,6 +22,14 @@ evaluator、retail/airline environment 和我们 pinned 的 b7ea907 逐字节相
 [user-simulator.md §1](user-simulator.md) 的用户行为差异。 剩余不确定：Doubao 2.0 Pro（Recuris）与 2.1
 Turbo（我们）的差别无法复现；Recuris 没公开 4B 的部署参数（推理框架、tool parser、thinking）。
 
+**早期核查中仍成立的两点（2026-10-09）**：
+
+- **不是题集差异**。未训练模型在 train split（epoch 1 覆盖全部任务，权重相对变化约 1e-4）上为 Retail 84.8%、Airline
+  78.3%；与 test 合并估算全量 114/50 题约 82%/79%。
+- **论文 Table 1 的用户模拟器不是 4B 自己**。Recuris 源码 `src/recuris/adapters/tau2/treatment.py` 的
+  transfer 配置固定 Doubao Seed 2.0 Pro 作为用户模拟器和 NL
+  judge（`reasoning_effort=medium`，temperature=0），被测 agent temperature 强制为 0。
+
 ## 2 Recuris 的 Mode A 与 terminal gate
 
 - **是什么**。Mode A 指"用户的确认里带着 `###STOP###`，之后没有 agent 回合"，也就是
