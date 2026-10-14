@@ -3377,6 +3377,24 @@ v2 模式看 Airline 能否逼近 0.6 的上限（16.14.4）；Retail 的上限�
 - 偏移随数据顺序起伏：每个 epoch 第 41–47 步训官方题，偏移在第 50 步降到 +0.09；回到 pack 题后升回 +0.24。训练集（pack 0.93）比
   test（Airline 0.60）容易，Airline 整体偏高 0.24–0.38。
 
+**500（mix 模式）失败，重跑为 510**。500 于北京时间 10 月 14 日 00:27 启动，01:55 跑到第 22 步（第 2 个 epoch）时，GPU
+4–7 上的一台 SGLang 服务器在动态申请显存时 OOM 退出（`torch_memory_saver` 报 `CUresult error: 2`，配置为
+`mem_fraction_static=0.65`、上下文 32768、每台并发 4）。训练端没有发现服务器已退出，之后约四分之一的 episode 仍发往它，连接失败
+464 次；02:13 第 2 个 epoch 内有 3 道题两次被拒，超过 `max_skipped_tasks_per_epoch=2`，任务退出（exit 1）。499
+用同一配置跑了 5 小时没有出现，判断为偶发；当时同一张卡上是否有其他进程占显存已无法核实。失败前第 20 步：Airline EV 0.016、偏移 +0.33，Retail
+EV 0.019、偏移 +0.02，与 v2 模式同期接近（Airline 0.006、Retail 0.004）。
+
+- **从第 20 步 resume 失败（506）**。critic 训练脚本支持 recover，第 20 步恰好是第 1 个 epoch 结束，验证 rollout
+  也有带摘要校验的缓存。但 AReaL 的 recover 流程总会把 actor 权重经 NCCL（`weight_update_mode: xccl`）推给
+  SGLang，这一步在 Qwen3.5-4B 上触发 `illegal memory access`，GPU 4、5 的服务器退出，任务随即手动终止。critic-only
+  训练的正常步不推权重，所以 498–500 没有遇到。2026-09-27 的 SAO 运行 `sao-mixed-v1` 也在这一步出现同样的错误。另外，resume 后
+  epoch 打乱用的是采样器默认种子 0 而不是 `seed=42`（`Tau2CriticOnlineTrainer._init_impl` 只在不 recover
+  时设种子）。
+- **重跑**：510（`critic-head-qwen35-mix-r2`）从头训练，设置与 500 相同，只把 `mem_fraction_static` 降到
+  0.5（用户确认），每张推理卡多留约 12 GB 给动态显存。500 目录里两次尝试的日志改名为
+  `run.attempt1.log`、`run.attempt2-resume.log` 保留。
+- **待修**：SGLang 服务器退出后训练端不会察觉，继续向它分发请求，直到跳过上限才报错；critic-only 的 recover 不必推送未变的 actor 权重。
+
 启动前发现并处理了两处：
 
 - **数据目录换成 fixed-v3**。当前代码的 `fixed` 变体校验 v3 的任务哈希，v2 目录启动即报错。v3 比 v2 多修了 7 道题（11.2.1），所以
@@ -3387,21 +3405,21 @@ v2 模式看 Airline 能否逼近 0.6 的上限（16.14.4）；Retail 的上限�
   20:04 前跑完，`04be68ab` 之后第一处代码提交是 20:48 的 `7da3a4f3`，已提交的代码一致；当时主 worktree
   有没有未提交的代码改动，已无法追溯。`launch_critic.sh` 和 `launch_ceiling.sh` 没有这一行，以后复用要补上。
 
-#### 16.14.6 SAO：mix pack + critic 500（2026-10-14，未启动）
+#### 16.14.6 SAO：mix pack + critic 510（2026-10-14，未启动）
 
 **设置（2026-10-13 用户确认）**。
 
-| 项              | 设置                                                                                                                                    |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| actor           | Qwen3.5-4B（non-thinking），lr 1e-6                                                                                                     |
-| critic          | 500（critic-head-qwen35-mix）最后一步的 checkpoint，从其 `summary.json` 的 `final_critic_checkpoint` 读取；lr 5e-6，head 不单独设学习率 |
-| 训练题          | mix pack 221 题 + 官方 fixed train 99 题 = 320 题（Airline 180、Retail 140）                                                            |
-| 采样            | 每题每个 epoch 4 条，2 个 epoch；每 epoch 1280 条，batch 64，共 40 步、2560 条 episode                                                  |
-| 更新顺序        | 每步先对 critic 做 2 次完整更新，再更新 actor 1 次（`critic_updates_before_actor: 2`）                                                  |
-| 评测            | fixed-v3 test 60 题 × 4 次，policy temperature 0；训练前和每 10 步一次，共 5 次                                                         |
-| user / NL judge | DeepSeek-Flash 默认 thinking                                                                                                            |
+| 项              | 设置                                                                                                                                       |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| actor           | Qwen3.5-4B（non-thinking），lr 1e-6                                                                                                        |
+| critic          | 510（critic-head-qwen35-mix-r2）最后一步的 checkpoint，从其 `summary.json` 的 `final_critic_checkpoint` 读取；lr 5e-6，head 不单独设学习率 |
+| 训练题          | mix pack 221 题 + 官方 fixed train 99 题 = 320 题（Airline 180、Retail 140）                                                               |
+| 采样            | 每题每个 epoch 4 条，2 个 epoch；每 epoch 1280 条，batch 64，共 40 步、2560 条 episode                                                     |
+| 更新顺序        | 每步先对 critic 做 2 次完整更新，再更新 actor 1 次（`critic_updates_before_actor: 2`）                                                     |
+| 评测            | fixed-v3 test 60 题 × 4 次，policy temperature 0；训练前和每 10 步一次，共 5 次                                                            |
+| user / NL judge | DeepSeek-Flash 默认 thinking                                                                                                               |
 
-- 选 mix 而不是 v2：v2 里约七成题对 Qwen3.5 几乎全对，SAO 中 advantage 接近 0，rollout 预算大多浪费；critic 500
+- 选 mix 而不是 v2：v2 里约七成题对 Qwen3.5 几乎全对，SAO 中 advantage 接近 0，rollout 预算大多浪费；critic 510
   也是在这份分布上训练的。不另跑 v2 的 SAO，也不跑 GRPO 对照。
 - 用最后一步而不是验证最好的 checkpoint：critic 的验证集就是 SAO 报分的 test 60 题，按它挑中间步等于用 test 选模型。
 - 评测频率：原配置每 5 步一次会评 9 次、约 2160 条 episode，和训练本身一样多，所以改为每 10 步一次。
@@ -3416,11 +3434,12 @@ train，再走原来的按领域调度和打乱；要求每道题被调度的次
 
 **启动**：worktree `tau2-training-20261014-sao-mix/src-fccceaa1`，脚本
 `launch_sao_pack.sh NAME {smoke|formal}`（副本在 `scripts/critic-data/`）。脚本检查 worktree 的
-HEAD、设 `PYTHONPATH`、确认 500 已完成，并先跑 `check_critic_head.py`。smoke 跑 2 步，不在训练前评测，在第 2
+HEAD、设 `PYTHONPATH`、确认 510 已完成，并先跑 `check_critic_head.py`。smoke 跑 2 步，不在训练前评测，在第 2
 步评测并存档。check-config（critic 临时换成 499 的最终 checkpoint）：每 epoch 1280 条，smoke 2 步，formal 40
 步、2560 条 episode，验证集 60 题，head 预检通过。
 
-**队列**：smoke 排在 500 之后；正式任务先挂起，看过 smoke 的结果再放进队列。
+**队列**：smoke（511）排在 510 之后；正式任务（512）先挂起，看过 smoke 的结果再放进队列。SAO 每步更新 actor 后都要经 xccl 把权重推给
+SGLang，这正是 506 和 `sao-mixed-v1` 出错的路径；smoke 在第 1 步就会经过这里，先看它是否通过。
 
 ### 16.15 用户模拟器评测总表（2026-10-12 起维护）
 

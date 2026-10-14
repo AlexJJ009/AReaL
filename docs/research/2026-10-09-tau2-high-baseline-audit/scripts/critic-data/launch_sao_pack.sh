@@ -16,7 +16,7 @@ SRC="$ROOT/src-$SHA"
 OUT="$ROOT/$NAME"
 CACHE=/data_storage/yl_test/lgx/data-1/code/_cache
 PACK=/data_storage/yl_test/lgx/data-1/dataset/tau2/tau2-areal-pack-20261013-critic-mix-v1
-CRITIC_RUN=/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-training-20261013-critic-head/critic-head-qwen35-mix
+CRITIC_RUN=/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-training-20261013-critic-head/critic-head-qwen35-mix-r2
 case $MODE in
   smoke)  MODE_OVR=(total_train_steps=2 evaluator.eval_before_train=false evaluator.freq_steps=2 saver.freq_steps=2) ;;
   formal) MODE_OVR=(evaluator.freq_steps=10) ;;
