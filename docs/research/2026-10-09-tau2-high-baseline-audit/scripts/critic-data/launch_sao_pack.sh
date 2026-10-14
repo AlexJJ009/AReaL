@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# SAO on the critic-mix pack (README 16.14.6). Qwen3.5-4B actor, critic = final
-# checkpoint of critic run 500 (critic-head-qwen35-mix), read from its summary.json.
+# SAO on the critic-mix pack (README 16.14.6). Qwen3.5-4B actor, critic = step-55
+# checkpoint of critic run 510 (critic-head-qwen35-mix-r2), chosen by the user on
+# its fixed-v3 test validation (Airline EV 0.179), i.e. selected on the SAO test set.
 # Train: mix pack 221 + official fixed train 99 = 320 tasks (Airline 180, Retail 140),
 # 4 episodes per task per epoch, 2 epochs, batch 64 -> 40 steps, 2560 episodes.
 # critic_updates_before_actor=2 and critic lr 5e-6 come from config_sao.yaml.
@@ -24,12 +25,9 @@ case $MODE in
 esac
 test ! -e "$OUT/exit-code.txt" || { echo "refusing to overwrite $OUT"; exit 2; }
 [[ "$(git -C "$SRC" rev-parse --short=8 HEAD)" == "$SHA" ]] || { echo "src HEAD is not $SHA"; exit 2; }
-CRITIC=$(python3 -c "
-import json, sys
-s = json.load(open('$CRITIC_RUN/tau2-critic-fit-evidence/summary.json'))
-if s.get('status') != 'completed' and s.get('completed_steps') != s.get('full_planned_steps'):
-    sys.exit('critic run 500 is not complete: %s' % s.get('status'))
-print(s['final_critic_checkpoint'])")
+CRITIC=$CRITIC_RUN/checkpoints/root/tau2-critic-head/critic-head-qwen35-mix-r2/critic/epoch2epochstep14globalstep54
+test -f "$CRITIC/model.safetensors" || { echo "missing critic checkpoint $CRITIC"; exit 2; }
+test -f "$CRITIC_RUN/tau2-critic-fit-evidence/validation-step-000055.json" || { echo "missing step-55 validation"; exit 2; }
 mkdir -p "$OUT"
 cd "$SRC"
 # The shared .venv has areal.pth -> the main worktree; put the pinned tree first.
