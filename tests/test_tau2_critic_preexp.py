@@ -667,3 +667,47 @@ def test_hypothesis_table_synthetic_inputs_cannot_claim_scientific_support():
     )
     assert result["H1"]["synthetic_cutoff_check"] == "成立"
     assert {decision["status"] for decision in result.values()} == {"不确定"}
+
+
+@pytest.mark.parametrize(
+    "labels,mass",
+    [
+        ([0, 0, 0, 0, 1], [1, 1, 1, 1, 10]),
+        ([0, 0, 0, 0, 0, 0, 0, 0, 0, 1], [1] * 9 + [9]),
+    ],
+)
+def test_planted_prevalence_weighted_and_unweighted_ranges_both_enforced(labels, mass):
+    """Passing one pooled prevalence does not compensate for failing the other."""
+    with pytest.raises(ValueError, match="20|60|prevalence"):
+        preexp.validate_planted_prevalence(
+            torch.tensor(labels).float(), torch.tensor(mass).float()
+        )
+
+
+def test_planted_prevalence_domain_determined_signal_rejected():
+    """An acceptable pooled 40% still fails for constant labels in each domain."""
+    with pytest.raises(ValueError, match="domain|5|95|prevalence"):
+        preexp.validate_planted_prevalence(
+            torch.tensor([1.0] * 4 + [0.0] * 6),
+            torch.ones(10),
+            domains=["retail"] * 4 + ["airline"] * 6,
+        )
+
+
+def test_planted_prevalence_each_domain_weighted_and_unweighted_checked():
+    """A skewed token mass cannot hide an almost constant domain signal."""
+    labels = torch.tensor([0.0, 1.0, 0.0, 1.0])
+    mass = torch.tensor([100.0, 1.0, 1.0, 100.0])
+    with pytest.raises(ValueError, match="domain|5|95|prevalence"):
+        preexp.validate_planted_prevalence(
+            labels, mass, domains=["retail"] * 2 + ["airline"] * 2
+        )
+
+
+def test_planted_prevalence_balanced_domains_pass():
+    """Nonconstant, balanced domains satisfy both pooled and domain guards."""
+    assert preexp.validate_planted_prevalence(
+        torch.tensor([0.0, 1.0, 0.0, 1.0]),
+        torch.ones(4),
+        domains=["retail"] * 2 + ["airline"] * 2,
+    ) == pytest.approx(0.5)

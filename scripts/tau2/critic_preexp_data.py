@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -171,14 +172,18 @@ def load_pool(
 
 PLANTED_RULES = (
     "error",
-    "sorry",
-    "cancel",
-    "refund",
-    "reservation",
-    "order",
-    "flight",
-    "thank",
+    "error or not found",
+    "error or not found or invalid or cannot",
 )
+LABEL_SEMANTICS = "completed_post_prompt_tool_return_case_insensitive_substring"
+
+
+class PlantedRuleSelectionError(ValueError):
+    """No admissible rule; retain every candidate's diagnostic rates."""
+
+    def __init__(self, report: dict[str, Any]):
+        self.report = report
+        super().__init__("No planted rule passes pooled 20–60% and per-domain 5–95%")
 
 
 def visible_prefix_texts(
@@ -234,50 +239,191 @@ def visible_prefix_texts(
     ]
 
 
-def prefix_labels(row: dict[str, Any], positions: Any, tokenizer: Any, rule: str):
-    """A label depends only on visible tokens <= the causal prefix position."""
+def completed_tool_returns(
+    row: dict[str, Any], tokenizer: Any, last_position: int
+) -> list[tuple[int, str]]:
+    """Return (inclusive message end, payload) from stored observation tokens.
+
+    The exporter marks both user and tool input as observation. Qwen renders
+    tool replies as user messages containing tool_response wrappers. Decode only
+    complete observation messages, never the initial prompt or generated text.
+    """
     import torch
 
-    return torch.tensor(
-        [
-            float(rule in text)
-            for text in visible_prefix_texts(row, positions, tokenizer)
-        ]
+    ids = torch.as_tensor(row["input_ids"]).reshape(-1).tolist()
+    roles = row.get("token_roles")
+    if roles is None and "action_origin_mask" in row:
+        origin = torch.as_tensor(row["action_origin_mask"]).reshape(-1).tolist()
+        roles = []
+        seen_action = False
+        for active in origin:
+            if active:
+                roles.append("assistant")
+                seen_action = True
+            else:
+                roles.append("observation" if seen_action else "prompt")
+    if roles is None or len(roles) != len(ids):
+        raise ValueError("Planted labels require token-aligned token_roles")
+    if set(roles) - {"prompt", "assistant", "observation"}:
+        raise ValueError("Unsupported token_roles for planted labels")
+    start_id = tokenizer.convert_tokens_to_ids("<|im_start|>")
+    end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+    if start_id is None or end_id is None or start_id == end_id:
+        raise ValueError("Planted labels require Qwen message delimiters")
+    prompt_end = next((i for i, role in enumerate(roles) if role != "prompt"), len(ids))
+    if "prompt_len" in row and int(row["prompt_len"]) != prompt_end:
+        raise ValueError("prompt_len disagrees with token_roles")
+    messages = []
+    start = None
+    for i in range(prompt_end, min(last_position + 1, len(ids))):
+        if roles[i] != "observation":
+            start = None
+            continue
+        if ids[i] == start_id:
+            start = i
+        elif ids[i] == end_id and start is not None:
+            text = tokenizer.decode(
+                ids[start + 1 : i],
+                skip_special_tokens=False,
+                clean_up_tokenization_spaces=False,
+            )
+            role, separator, body = text.partition("\n")
+            if separator and role == "tool":
+                messages.append((i, body.lower()))
+            elif separator and role == "user":
+                # Require the whole body to be the template's tool envelope;
+                # quoted wrappers inside an ordinary user message do not count.
+                payloads = re.findall(
+                    r"<tool_response>(.*?)</tool_response>", body, re.S
+                )
+                remainder = re.sub(
+                    r"<tool_response>.*?</tool_response>", "", body, flags=re.S
+                )
+                if payloads and not remainder.strip():
+                    messages.extend((i, payload.lower()) for payload in payloads)
+            start = None
+    return messages
+
+
+def _first_tool_match(messages: list[tuple[int, str]], rule: str) -> int | None:
+    if rule not in PLANTED_RULES:
+        raise ValueError(f"Unsupported planted rule: {rule}")
+    needles = rule.split(" or ")
+    return next(
+        (end for end, text in messages if any(word in text for word in needles)), None
+    )
+
+
+def prefix_labels(row: dict[str, Any], positions: Any, tokenizer: Any, rule: str):
+    """Position p=t-1 is positive only after a matching tool message ends <=p."""
+    import torch
+
+    positions = torch.as_tensor(positions, dtype=torch.long)
+    messages = (
+        completed_tool_returns(row, tokenizer, int(positions.max()))
+        if positions.numel()
+        else []
+    )
+    first = _first_tool_match(messages, rule)
+    return (
+        (positions >= first).float()
+        if first is not None
+        else torch.zeros_like(positions, dtype=torch.float32)
     )
 
 
 def select_planted_rule(rows: list[dict[str, Any]], tokenizer: Any) -> dict[str, Any]:
-    """Choose a visible-text rule using training positions only, without rewards."""
+    """Select in registered order, checking both rates pooled and within domain.
+
+    Token mass is the extraction estimator: each sampled prefix carries N/K
+    action tokens. Also report exact full-action prevalence and actual 0->1 flips.
+    """
     from scripts.tau2.critic_features import selected_positions
 
-    totals = Counter()
-    weighted_totals = Counter()
-    n = 0
-    token_mass = 0
+    domains = sorted({row["domain"] for row in rows if row["_split"] == "train"})
+    if not domains:
+        raise ValueError("No training trajectories for planted rule selection")
+    totals = {
+        rule: {domain: Counter() for domain in [*domains, "pooled"]}
+        for rule in PLANTED_RULES
+    }
     for row in rows:
         if row["_split"] != "train":
             continue
         positions, count = selected_positions(row, train_k=128, seed=SEED)
-        for text in visible_prefix_texts(row, positions, tokenizer):
-            for rule in PLANTED_RULES:
-                label = int(rule in text)
-                totals[rule] += label
-                weighted_totals[rule] += label * count / len(positions)
-        n += len(positions)
-        token_mass += count
-    rates = {rule: totals[rule] / n for rule in PLANTED_RULES}
-    weighted_rates = {
-        rule: weighted_totals[rule] / token_mass for rule in PLANTED_RULES
-    }
-    for rule in PLANTED_RULES:
-        if 0.2 <= rates[rule] <= 0.6 and 0.2 <= weighted_rates[rule] <= 0.6:
-            return {
-                "rule": rule,
-                "training_token_mass_base_rate": weighted_rates[rule],
-                "candidate_token_mass_rates": weighted_rates,
-                "training_token_base_rate": rates[rule],
-                "candidate_rates": rates,
-                "selection_split": "train",
-                "label_semantics": "lowercase_substring_in_tokens_through_prefix_position",
+        actions = action_positions(row)
+        messages = completed_tool_returns(row, tokenizer, int(actions[-1]))
+        for rule in PLANTED_RULES:
+            first = _first_tool_match(messages, rule)
+            positives = int((positions >= first).sum()) if first is not None else 0
+            exact = int((actions >= first).sum()) if first is not None else 0
+            for domain in (row["domain"], "pooled"):
+                stats = totals[rule][domain]
+                stats.update(
+                    trajectories=1,
+                    sampled_prefixes=len(positions),
+                    action_tokens=count,
+                    positive_prefixes=positives,
+                    positive_token_mass=positives * count / len(positions),
+                    exact_positive_action_tokens=exact,
+                    flipped_trajectories=int(0 < exact < count),
+                )
+    candidates = {}
+    for rule, by_domain in totals.items():
+        candidates[rule] = {}
+        for domain, counts in by_domain.items():
+            candidates[rule][domain] = {
+                **counts,
+                "token_mass_rate": counts["positive_token_mass"]
+                / counts["action_tokens"],
+                "sampled_prefix_rate": counts["positive_prefixes"]
+                / counts["sampled_prefixes"],
+                "exact_action_token_rate": counts["exact_positive_action_tokens"]
+                / counts["action_tokens"],
+                "trajectory_flip_rate": counts["flipped_trajectories"]
+                / counts["trajectories"],
             }
-    raise ValueError(f"No planted rule has training base rate 20–60%: {rates}")
+    passing = []
+    for rule, stats in candidates.items():
+        if all(
+            (0.2 <= rates[key] <= 0.6)
+            if domain == "pooled"
+            else (0.05 <= rates[key] <= 0.95)
+            for domain, rates in stats.items()
+            for key in ("token_mass_rate", "sampled_prefix_rate")
+        ):
+            passing.append(rule)
+    chosen = passing[0] if passing else None
+    report = {
+        "rule": chosen,
+        "status": "selected" if chosen else "no_candidate_passes",
+        "candidate_order": list(PLANTED_RULES),
+        "candidate_domain_rates": candidates,
+        "candidate_rates": {
+            rule: stats["pooled"]["sampled_prefix_rate"]
+            for rule, stats in candidates.items()
+        },
+        "candidate_token_mass_rates": {
+            rule: stats["pooled"]["token_mass_rate"]
+            for rule, stats in candidates.items()
+        },
+        "passing_candidates": passing,
+        "selection_split": "train",
+        "label_semantics": LABEL_SEMANTICS,
+        "token_mass_semantics": "sampled prefixes weighted by trajectory action_tokens / sampled_prefixes",
+        "flip_semantics": "both 0 and 1 occur among all action positions of a trajectory",
+        "acceptance": {
+            "pooled": [0.2, 0.6],
+            "each_domain": [0.05, 0.95],
+            "rates": ["token_mass_rate", "sampled_prefix_rate"],
+        },
+    }
+    if chosen is None:
+        raise PlantedRuleSelectionError(report)
+    report["training_token_mass_base_rate"] = candidates[chosen]["pooled"][
+        "token_mass_rate"
+    ]
+    report["training_token_base_rate"] = candidates[chosen]["pooled"][
+        "sampled_prefix_rate"
+    ]
+    return report

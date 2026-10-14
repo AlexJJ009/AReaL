@@ -19,7 +19,10 @@ from scripts.tau2.critic_features import (
     selected_positions,
 )
 from scripts.tau2.critic_preexp_data import (
+    LABEL_SEMANTICS,
+    PLANTED_RULES,
     SEED,
+    PlantedRuleSelectionError,
     load_pool,
     prefix_labels,
     select_planted_rule,
@@ -237,6 +240,15 @@ def verify_cache(
         manifest["depth"]
     ):
         raise ValueError("Cache intermediate layer depth mismatch")
+    rule = manifest.get("planted_rule", {})
+    if (
+        rule.get("label_semantics") != LABEL_SEMANTICS
+        or rule.get("status") != "selected"
+        or rule.get("rule") not in PLANTED_RULES
+    ):
+        raise ValueError(
+            "Cache planted rule semantics/status mismatch; regenerate labels"
+        )
     expected = {r["_trajectory_id"]: r for r in rows}
     observed = {}
     numeric_expected = {}
@@ -496,12 +508,18 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, local_files_only=True)
     if args.mode == "rule":
         started = time.perf_counter()
-        rule = select_planted_rule(rows, tokenizer)
+        failure = None
+        try:
+            rule = select_planted_rule(rows, tokenizer)
+        except PlantedRuleSelectionError as error:
+            rule, failure = error.report, error
         rule["cpu_wall_seconds"] = time.perf_counter() - started
         rule["cpu_timing_excludes_source_readback"] = True
         rule["tokenizer_path"] = str(args.tokenizer.resolve())
         rule["pool_manifest_sha256"] = pool["pool_manifest_sha256"]
         args.output.write_text(json.dumps(rule, indent=2) + "\n")
+        if failure is not None:
+            raise failure
         return
     if args.checkpoint is None or not args.checkpoint.is_dir():
         parser.error("Requires an existing local checkpoint directory")
@@ -511,6 +529,8 @@ def main() -> None:
     if (
         rule["pool_manifest_sha256"] != pool["pool_manifest_sha256"]
         or rule["selection_split"] != "train"
+        or rule.get("label_semantics") != LABEL_SEMANTICS
+        or rule.get("status") != "selected"
     ):
         raise ValueError("Planted rule provenance mismatch")
     import torch

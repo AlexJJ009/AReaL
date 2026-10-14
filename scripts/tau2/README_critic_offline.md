@@ -67,13 +67,18 @@ training CV. E4 chooses rates independently for each batch/budget. H2 compares t
 baseline at step 80 against the same r510 validation trajectories, while primary reports
 use all 120 validation trajectories. H2 failure marks simulations as reference evidence.
 
-E8 selects a literal visible-prefix text rule on training prefixes only, records all
-candidate rates, and refuses a selected rate outside 20–60%. Validation uses the same
-rule on its own prefixes. E6 task means count trajectories once, regardless of length;
-its 2/6-trajectory strata refer to training task groups, since validation tasks are
-separate. Paired bootstrap always moves the two validation trajectories of a task
-together. The shared ridge is the declared primary for ambiguous shared/domain
-hypothesis comparisons; both heads are reported, and validation never selects one.
+E8 labels only complete post-prompt tool returns: `token_roles=observation` plus Qwen
+tool-response envelopes identify them; system, user and assistant text are excluded. It
+tries `error`, then `error or not found`, then `error or not found or invalid or cannot`
+(case-insensitive substrings), using training prefixes only. Both sampled-prefix and
+token-mass rates must be 20–60% pooled and 5–95% within each domain. All candidate
+domain rates and trajectory flip fractions are recorded even when no rule passes; that
+case stops selection. Validation uses the selected rule on its own prefixes. E6 task
+means count trajectories once, regardless of length; its 2/6-trajectory strata refer to
+training task groups, since validation tasks are separate. Paired bootstrap always moves
+the two validation trajectories of a task together. The shared ridge is the declared
+primary for ambiguous shared/domain hypothesis comparisons; both heads are reported, and
+validation never selects one.
 
 E9 exports `ridge-head.pt` for `offline_critic_fit --head-init` and a head-only
 `ridge-head-sao/` bundle for the SAO preflight. The bundle contains no backbone and must

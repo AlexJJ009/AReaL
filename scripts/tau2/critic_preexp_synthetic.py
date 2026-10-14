@@ -12,7 +12,14 @@ import torch
 
 from scripts.tau2.critic_features import SCHEMA, selected_positions
 from scripts.tau2.critic_head_sim import aggregate_metrics, official_metric_row
-from scripts.tau2.critic_preexp_data import SEED, array_hash, load_pool, sha256
+from scripts.tau2.critic_preexp_data import (
+    SEED,
+    array_hash,
+    load_pool,
+    prefix_labels,
+    select_planted_rule,
+    sha256,
+)
 from scripts.tau2.critic_preexp_extract import token_metadata, verify_cache
 
 
@@ -20,7 +27,18 @@ class SyntheticTokenizer:
     """Only synthetic token IDs; never loads model weights or contacts a service."""
 
     def decode(self, ids, **_kwargs):
-        return " ".join("Error" if token == 9 else "word" for token in ids)
+        tokens = {
+            9: "Error",
+            10: "<|im_start|>",
+            11: "user\n",
+            12: "<tool_response>\n",
+            13: "\n</tool_response>",
+            14: "<|im_end|>",
+        }
+        return "".join(tokens.get(token, "word") for token in ids)
+
+    def convert_tokens_to_ids(self, token):
+        return {"<|im_start|>": 10, "<|im_end|>": 14}.get(token)
 
 
 def make_row(task: int, run: str, index: int, *, validation: bool) -> dict:
@@ -29,8 +47,24 @@ def make_row(task: int, run: str, index: int, *, validation: bool) -> dict:
     label = float((task + index // (60 if validation else 320)) % 4 != 0)
     planted = index % 2 == 0
     return {
-        "input_ids": [9 if planted else 1, *([2] * 12)],
-        "loss_mask": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0, 1, 0],
+        "input_ids": [
+            9 if domain == "retail" else 1,
+            2,
+            10,
+            11,
+            12,
+            9 if planted else 1,
+            13,
+            14,
+            *([2] * 5),
+        ],
+        "loss_mask": [0, 1, *([0] * 6), *([1] * 5)],
+        "token_roles": [
+            "prompt",
+            "assistant",
+            *(["observation"] * 6),
+            *(["assistant"] * 5),
+        ],
         "attention_mask": [1] * 13,
         "reward": label,
         "domain": domain,
@@ -119,18 +153,20 @@ def make_fixture(out: Path) -> dict:
     pool, rows = load_pool(manifest_path, synthetic=True)
     tokenizer = SyntheticTokenizer()
     rule = {
-        "rule": "error",
-        "training_token_base_rate": 0.5,
-        "selection_split": "train",
+        **select_planted_rule(rows, tokenizer),
         "pool_manifest_sha256": pool["pool_manifest_sha256"],
         "synthetic": True,
     }
+    (out / "planted-rule.json").write_text(json.dumps(rule, indent=2) + "\n")
     generator = torch.Generator().manual_seed(SEED)
     # Identical token ordering across all layers; label-correlated synthetic signal.
     signal = torch.randn(len(rows) * 6, 8, generator=generator) * 0.25
     for index, row in enumerate(rows):
         signal[index * 6 : (index + 1) * 6, 0] += 2 * row["reward"] - 1
-        signal[index * 6 : (index + 1) * 6, 1] += 1 if row["input_ids"][0] == 9 else -1
+        positions, _ = selected_positions(row, train_k=128, seed=SEED)
+        signal[index * 6 : (index + 1) * 6, 1] += (
+            2 * prefix_labels(row, positions, tokenizer, rule["rule"]) - 1
+        )
     cache_paths = {}
     for name, layer in [
         ("base-final", "final"),

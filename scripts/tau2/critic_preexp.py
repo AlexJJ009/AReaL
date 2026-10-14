@@ -237,14 +237,25 @@ def position_group(progress, first=False):
     return f"{index * 20}-{(index + 1) * 20}%"
 
 
-def validate_planted_prevalence(labels, mass):
+def validate_planted_prevalence(labels, mass, domains=None):
     if not torch.all((labels == 0) | (labels == 1)):
         raise ValueError("Planted prefix labels must be binary")
     fraction = float((labels * mass).sum() / mass.sum())
-    if not 0.2 <= fraction <= 0.6:
-        raise ValueError(
-            f"Planted signal prevalence {fraction:g} outside20–60%; change rule and record deviation"
-        )
+    if not (0.2 <= fraction <= 0.6 and 0.2 <= float(labels.mean()) <= 0.6):
+        raise ValueError("Planted signal prevalence outside pooled 20–60%")
+    if domains is not None:
+        if len(domains) != len(labels):
+            raise ValueError("Planted label domains are not aligned")
+        for domain in sorted(set(domains)):
+            selected = torch.tensor([value == domain for value in domains])
+            weighted = float(
+                (labels[selected] * mass[selected]).sum() / mass[selected].sum()
+            )
+            sampled = float(labels[selected].mean())
+            if not (0.05 <= weighted <= 0.95 and 0.05 <= sampled <= 0.95):
+                raise ValueError(
+                    f"Planted signal prevalence for domain {domain} outside 5–95%"
+                )
     return fraction
 
 
@@ -1319,7 +1330,7 @@ class Preexperiment:
 
     def run_E8(self):
         labels = torch.tensor(self.fields["planted_label"]).float()
-        fraction = validate_planted_prevalence(labels, self.mass)
+        fraction = validate_planted_prevalence(labels, self.mass, self.fields["domain"])
         probes, _ = self.probes(labels, planted=True, kinds=("ridge",))
         simulations = [
             self.simulate(lr=5e-6, labels=labels, replay=True, planted=True)[0]
