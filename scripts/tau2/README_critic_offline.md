@@ -7,7 +7,92 @@ FSDP replay need GPUs; probes and head simulation run on CPU.
 Set `PYTHONPATH` to this checkout even when using another checkout's Python environment.
 Keep all outputs outside the source checkout and original run directories.
 
-## Extract features
+## Registered pre-experiment (E1–E9)
+
+Use `critic_preexp_extract` and `critic_preexp` for the frozen 2026-10-14 protocol. The
+older entry points below remain general diagnostics and do not implement its complete
+selection and experiment requirements. The protocol document is authoritative; these
+tools never edit it.
+
+Every registered command requires the audited `pool-manifest.json` and its `.sha256`
+sidecar. The loader verifies source hashes, identities, labels and masks, rejects
+train/validation task overlap, and restores r510's numeric rollout order. Cache merge
+checks the manifest-selected trajectories and every sampled position. Training uses up
+to 128 uniformly sampled action prefixes per trajectory with seed 20261014; validation
+retains all action prefixes. Each sampled training token carries its original action
+count divided by retained count as loss weight.
+
+E1 stores the final value-head input and decoder hidden states 8, 16 and 24 for the
+32-layer base model. Hidden-state index 8 is the output of decoder block 7, matching
+`output_hidden_states[8]`; similarly for 16 and 24. These correspond to 25%, 50% and 75%
+depth. Final features include the final norm. The trained backbone must come from
+`critic/epoch2epochstep14globalstep54`, not the sibling `default/` actor checkpoint. The
+cache retains source ID, task, domain, run, action-token progress and turn index. When
+original turn IDs are unavailable, turn indices mean contiguous action-mask spans.
+
+```bash
+export PYTHONPATH="$PWD"
+export CUDA_VISIBLE_DEVICES='' HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
+# POOL, BASE, TRAINED, ART and AREAL_PYTHON are absolute local paths.
+"$AREAL_PYTHON" -m scripts.tau2.critic_preexp_extract \
+  --mode estimate --pool "$POOL" --output "$ART/extraction-estimate.json"
+```
+
+The eight-GPU wrapper is `scripts/tau2/launch_critic_preexp.sh`, taking positional
+arguments `PYTHON WORKTREE POOL BASE_CHECKPOINT TRAINED_CRITIC OUTPUT`. It launches one
+process per GPU with disjoint trajectory shards, first for the base and then for the
+trained backbone, and merges all five caches. It never submits a pueue job. Run it only
+inside the allocated `gpu8` slot after the existing SAO job. Its estimate assumes
+aggregate throughput, not per-GPU throughput; CPU text decoding and initialization time
+are additional. Retaining process parts and merged caches doubles feature disk use.
+
+After extraction, the complete CPU command is:
+
+```bash
+CUDA_VISIBLE_DEVICES='' "$AREAL_PYTHON" -m scripts.tau2.critic_preexp \
+  --pool-manifest "$POOL" --features "$ART/e1/caches/base-final/manifest.json" \
+  --layer-cache "base-layer-8=$ART/e1/caches/base-layer-8/manifest.json" \
+  --layer-cache "base-layer-16=$ART/e1/caches/base-layer-16/manifest.json" \
+  --layer-cache "base-layer-24=$ART/e1/caches/base-layer-24/manifest.json" \
+  --layer-cache "r510-final=$ART/e1/caches/r510-final/manifest.json" \
+  --r510-reference-json "$R510/tau2-critic-fit-evidence/validation-step-000080.json" \
+  --out "$ART/results" --threads 4
+```
+
+This writes `E2.json` through `E9.json`, paired 20,000-draw task-bootstrap intervals,
+seed summaries, the head initialization artifacts, `hypothesis-decisions.json` and
+`results-table-draft.md`. `--experiments E2 E9` selects named experiments; the full run
+is the default. All regularization and learning-rate choices use task-grouped five-fold
+training CV. E4 chooses rates independently for each batch/budget. H2 compares the
+baseline at step 80 against the same r510 validation trajectories, while primary reports
+use all 120 validation trajectories. H2 failure marks simulations as reference evidence.
+
+E8 selects a literal visible-prefix text rule on training prefixes only, records all
+candidate rates, and refuses a selected rate outside 20–60%. Validation uses the same
+rule on its own prefixes. E6 task means count trajectories once, regardless of length;
+its 2/6-trajectory strata refer to training task groups, since validation tasks are
+separate. Paired bootstrap always moves the two validation trajectories of a task
+together. The shared ridge is the declared primary for ambiguous shared/domain
+hypothesis comparisons; both heads are reported, and validation never selects one.
+
+E9 exports `ridge-head.pt` for `offline_critic_fit --head-init` and a head-only
+`ridge-head-sao/` bundle for the SAO preflight. The bundle contains no backbone and must
+not be used as a full checkpoint. The runner executes both consumer CLIs and checks
+exact readback. The standalone CPU loader check is:
+
+```bash
+CUDA_VISIBLE_DEVICES='' "$AREAL_PYTHON" -m scripts.tau2.offline_critic_fit \
+  --check-head-init --head-init "$ART/results/ridge-head.pt" --checkpoint "$BASE"
+```
+
+For a CPU dry run, first generate a fixture with
+`python -m scripts.tau2.critic_preexp_synthetic --out "$ART/synthetic-fixture"`, then
+use its pool, five cache manifests and `synthetic-r510-step80.json` in the command above
+with `--synthetic`. It keeps 2774/120 trajectories and 747/60 task groups but uses six
+action tokens and eight feature dimensions. It executes all registered arms and
+bootstrap draws; synthetic values cannot establish H1–H8.
+
+## Legacy single-cache feature extraction
 
 ```bash
 export PYTHONPATH="$PWD"
