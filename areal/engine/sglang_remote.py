@@ -37,6 +37,7 @@ from areal.infra.utils.launcher import TRITON_CACHE_PATH
 from areal.utils import perf_tracer, stats_tracker
 from areal.utils.logging import getLogger
 from areal.utils.network import format_host_for_url
+from areal.utils.offload import strip_tms_env_vars
 
 logger = getLogger("SGLangRemote")
 
@@ -47,6 +48,7 @@ class SGLangBackend:
     @staticmethod
     def build_server_env(env: Mapping[str, str]) -> dict[str, str]:
         _env = dict(env)
+        strip_tms_env_vars(_env)
         triton_cache_path = _env.get("TRITON_CACHE_PATH", TRITON_CACHE_PATH)
         _env["TRITON_CACHE_PATH"] = os.path.join(triton_cache_path, str(uuid.uuid4()))
         return _env
