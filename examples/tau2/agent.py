@@ -416,7 +416,7 @@ class Tau2Runner:
         agent_policy_doc = env.get_policy()
         tools: list[Tool] = env.get_tools()
         try:
-            user_tools = env.get_user_tools()
+            user_tools = env.get_user_tools(include=task.user_tools)
         except Exception:
             user_tools = []
         if self.econfig.add_thinking_tool:

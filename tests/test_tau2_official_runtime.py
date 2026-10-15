@@ -49,6 +49,34 @@ def test_official_loader_matches_all_three_domains():
         assert len(test) == OFFICIAL_SPLIT_SNAPSHOTS[domain]["test"]
 
 
+@pytest.mark.parametrize("include", [None, [], ["check_status_bar"]])
+def test_user_simulator_receives_only_task_user_tools(include):
+    from tau2.registry import registry
+
+    runner = Tau2Runner(
+        econfig=Tau2EnvConfig(
+            domain="telecom",
+            user_llm="test-user",
+            user_llm_base_url="https://user.invalid/v1",
+        ),
+        gen_args={},
+        agent_base_url="http://policy.invalid/v1",
+        agent_api_key="policy-test",
+        user_api_key="user-test",
+    )
+    env = registry.get_env_constructor("telecom")()
+    task = registry.get_tasks_loader("telecom")("base")[0].model_copy(
+        update={"user_tools": include}
+    )
+    _, user = runner._get_agent_and_user(task, env, None)
+
+    expected = {tool.name for tool in env.get_user_tools(include=include)}
+    assert {tool.name for tool in user.tools or []} == expected
+    if include is None:
+        assert expected == {tool.name for tool in env.get_user_tools()}
+        assert len(expected) > 1
+
+
 def test_fixed_variant_trains_without_the_test_twins():
     train = get_tau2_dataset("retail", split="train", variant="fixed")
     test = get_tau2_dataset("retail", split="test", variant="fixed")

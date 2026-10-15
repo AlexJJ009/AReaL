@@ -42,7 +42,7 @@ from areal.utils.printing import tabulate_stats
 
 logger = logging.getLogger("Tau2Train")
 
-TASK_SETS = ("test", "base")
+TASK_SETS = ("test", "base", "full")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -60,7 +60,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         choices=TASK_SETS,
         default="test",
         help="test: official test split only. base: the official leaderboard set "
-        "(train+test), with per-split scores reported separately.",
+        "(train+test), with per-split scores reported separately. "
+        "full: all 2285 official Telecom tasks (Telecom only).",
     )
     parser.add_argument(
         "--temperature",
@@ -171,7 +172,9 @@ def build_eval_rows(
     if task_set not in TASK_SETS:
         raise ValueError(f"Unsupported task set: {task_set}")
     domains = normalize_domains(config.domains)
-    splits = ("test",) if task_set == "test" else ("test", "train")
+    if task_set == "full" and domains != ("telecom",):
+        raise ValueError("The full task set supports Telecom only")
+    splits = {"test": ("test",), "base": ("test", "train"), "full": ("full",)}[task_set]
     tasks = []
     for split in splits:
         # Base needs the full official train pool; tune mode would carve out dev.
@@ -190,13 +193,14 @@ def build_eval_rows(
                 raise ValueError(f"{domain} train+test does not equal official base")
     rows = expand_trials(tasks, repeats)
     expected = (
-        sum(
+        2285
+        if task_set == "full"
+        else sum(
             int(OFFICIAL_SPLIT_SNAPSHOTS[domain][split])
             for domain in domains
             for split in splits
         )
-        * repeats
-    )
+    ) * repeats
     if len(rows) != expected:
         raise ValueError(
             f"Official {task_set} coverage mismatch: {len(rows)} != {expected}"

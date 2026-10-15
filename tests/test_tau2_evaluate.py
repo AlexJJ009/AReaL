@@ -34,6 +34,52 @@ def test_script_imports_without_running_main():
     assert callable(tau2_evaluate.run)
 
 
+def test_full_telecom_rows_cover_every_task_four_times():
+    config = SimpleNamespace(domains=["telecom"], seed=42, experiment_mode="formal")
+    rows = tau2_evaluate.build_eval_rows(config, 4, "full")
+
+    from tau2.registry import registry
+
+    official_ids = set(registry.get_task_splits_loader("telecom")()["full"])
+    assert len(official_ids) == 2285
+    assert len(rows) == len({r["source_id"] for r in rows}) == 9140
+    for trial in range(4):
+        assert {r["task_id"] for r in rows if r["trial"] == trial} == official_ids
+    assert {r["split"] for r in rows} == {"full"}
+    selected = sorted(official_ids)[:2]
+    smoke = tau2_evaluate.select_tasks(
+        rows, ",".join(f"telecom:{tid}" for tid in selected)
+    )
+    assert len(smoke) == 8
+    assert {r["task_id"] for r in smoke} == set(selected)
+    args = tau2_evaluate.parse_args(
+        [
+            "--config",
+            "c",
+            "--model-path",
+            "m",
+            "--output-root",
+            "o",
+            "--task-set",
+            "full",
+        ]
+    )
+    assert args.task_set == "full"
+
+
+@pytest.mark.parametrize("domains", [["airline"], ["telecom", "retail"]])
+def test_full_task_set_non_telecom_domain_rejected(domains):
+    with pytest.raises(ValueError, match="full.*Telecom only"):
+        tau2_evaluate.build_eval_rows(SimpleNamespace(domains=domains), 4, "full")
+
+
+def test_full_task_set_incomplete_coverage_rejected(monkeypatch):
+    monkeypatch.setattr(tau2_evaluate, "get_tau2_dataset", lambda **_: [])
+    config = SimpleNamespace(domains=["telecom"], seed=42, experiment_mode="formal")
+    with pytest.raises(ValueError, match="coverage mismatch"):
+        tau2_evaluate.build_eval_rows(config, 4, "full")
+
+
 @pytest.mark.parametrize(
     "temperature_args, expected", [([], 0.0), (["--temperature", "1"], 1.0)]
 )
