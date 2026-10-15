@@ -32,6 +32,7 @@ gconfig:
   n_samples: 1
 
 actor:
+  per_episode_microbatching: true
   path: ${oc.env:TAU2_ACTOR_PATH,Qwen/Qwen3-4B-Instruct-2507@cdbee75f17c01a7cc42f958dc650907174af0554}
   eps_clip_higher: 0.2
   reward_norm: null
@@ -58,6 +59,7 @@ actor:
       env_vars: {}
 
 critic:
+  per_episode_microbatching: true
   backend: ${actor.backend}
   experiment_name: ${experiment_name}
   trial_name: ${trial_name}
