@@ -11,15 +11,17 @@ Recuris Table 1 里 Qwen3.5-4B 的 68.0 / 75.3 是不加 harness 的基线（sto
 evaluator、retail/airline environment 和我们 pinned 的 b7ea907 逐字节相同，用户 guideline 和数据 `diff`
 为空；口径同为 base 全量、4 trials、max_steps 200、max_errors 10、失败 episode 排除。
 
-| 我们的用户       | 领域    | 我们 | 按题 bootstrap 95% | Recuris | 差    |
-| ---------------- | ------- | ---- | ------------------ | ------- | ----- |
-| Doubao 2.1 Turbo | Retail  | 65.1 | \[59.2, 70.8\]     | 68.0    | −2.9  |
-| Doubao 2.1 Turbo | Airline | 78.3 | \[68.8, 87.0\]     | 75.3    | +3.0  |
-| DeepSeek-Flash   | Retail  | 85.1 | \[80.5, 89.3\]     | 68.0    | +17.1 |
-| DeepSeek-Flash   | Airline | 81.0 | \[72.0, 89.5\]     | 75.3    | +5.7  |
+| 我们的用户（口径）                       | 领域    | 我们 | 按题 bootstrap 95% | Recuris | 差    |
+| ---------------------------------------- | ------- | ---- | ------------------ | ------- | ----- |
+| DeepSeek-Flash（official，base 集）      | Retail  | 84.0 | \[79.4, 88.2\]     | 68.0    | +16.0 |
+| DeepSeek-Flash（official，base 集）      | Airline | 76.5 | \[67.0, 85.0\]     | 75.3    | +1.2  |
+| Doubao 2.1 Turbo（fixed v3，test 60 题） | Retail  | 65.0 | \[54.4, 75.0\]     | 68.0    | −3.0  |
 
-结论：两边都用 Doubao 时差距在误差内，看不出谁高；我们"偏高"只发生在 DeepSeek 用户的 Retail，原因是
-[user-simulator.md §1](user-simulator.md) 的用户行为差异。 剩余不确定：Doubao 2.0 Pro（Recuris）与 2.1
+Turbo 一行只有 Retail 可比：Airline 在 fixed 下有转人工规则，与 Recuris 的 official 口径不同，也不是 base 全量。
+
+结论：Airline 的 official 分数与 Recuris 接近。Retail 随用户模拟器变化：Doubao 类用户下我们的 65.0 与 Recuris 的
+68.0 在误差内，看不出谁高；我们"偏高"只发生在 DeepSeek 用户的 Retail，原因是
+[user-simulator.md §1](user-simulator.md) 的用户行为差异。剩余不确定：Doubao 2.0 Pro（Recuris）与 2.1
 Turbo（我们）的差别无法复现；Recuris 没公开 4B 的部署参数（推理框架、tool parser、thinking）。
 
 **早期核查中仍成立的两点（2026-10-09）**：
@@ -72,10 +74,12 @@ mean@4 同口径。
 - "榜单上 Retail 普遍高于 Airline"只对 Legacy 行成立（16/16，中位数高 16.8pp）。这些是 tau2 0.1.x 或原版 τ-bench，
   v1.0.0 修了 airline 27 题、retail 26 题（`CHANGELOG.md:175-237`），前端标明不可直接比较。当前 standard 行只有
   3/8 是 Retail 更高，中位数 Retail 反而低 2.9pp。
-- 所以 Airline > Retail 本身不算倒挂。我们的问题是 Doubao 用户让 Retail 掉了 20pp；DeepSeek 用户下的排序（Retail 更高）
-  和 GPT-5.2 (none)、Qwen3.5-397B 一致。
-- 榜上没有 ≤8B 的模型。4B non-thinking 在 Airline 上 0.81，接近 Opus 4.5 的 84、远高于 GPT-5.2 (none) 的
-  52.5，说明我们的 用户模拟器可能比 gpt-5.2 更好说话。要和榜单对齐，需要用 gpt-5.2（reasoning low）做一次用户。
+- 所以 Airline > Retail 本身不算倒挂。我们的 Retail 分数随用户模拟器变化：Doubao 2.1 Turbo 用户比 DeepSeek 低
+  15.6pp（fixed-v3 test， [user-simulator.md §2](user-simulator.md)）；DeepSeek
+  用户下的排序（Retail 更高） 和 GPT-5.2 (none)、Qwen3.5-397B 一致。
+- 榜上没有 ≤8B 的模型。4B non-thinking 在 official Airline 上 0.765，比 Opus 4.5 的 84.0 低 7pp、远高于
+  GPT-5.2 (none) 的 52.5，说明我们的 用户模拟器可能比 gpt-5.2 更好说话。要和榜单对齐，需要用 gpt-5.2（reasoning
+  low）做一次用户。
 
 ## 4 仍有效的早期核查
 

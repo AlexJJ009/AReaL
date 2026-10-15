@@ -60,10 +60,10 @@ per-user 的 clip 宽度也能改，但它的作用是限制单步更新幅度�
 | 用户 B：难应付 | B 不主动说订单号，agent 有一半概率没有追问，于是改错了订单                | 0.5    |
 
 两类用户都是 τ² 里实际出现的情形，不是极端构造。A 就是 [user-simulator.md §1](../user-simulator.md) 的 Doubao
-提前结束（例如 `retail:6:trial1`），Doubao 用户在确认轮次里同一句结束的比例是 16.3%，DeepSeek 是
-3.2%（[analysis.md §2](analysis.md) 问题 A）。B 是 [analysis.md §1](analysis.md)
-说的"用户不主动给信息，agent 应该追问"；这一类在现有数据里还没有单独计数。唯一刻意的地方是让 A、B 的成功率都等于
-0.5：两者平均结果一样，才能看清"只看平均结果"会漏掉什么（第 4 步）。比例不相等时结论不变，见第 4 步。
+提前结束（样例见 [v3 REPORT §4.1](../user-sim-case-study-v3/REPORT.md)），Doubao 2.1 Turbo
+用户在确认轮次里同一句结束的比例是 22.3%，DeepSeek 是 5.9%（[analysis.md §2](analysis.md) 问题 A）。B 是
+[analysis.md §1](analysis.md) 说的"用户不主动给信息，agent 应该追问"；这一类在现有数据里还没有单独计数。唯一刻意的地方是让 A、B
+的成功率都等于 0.5：两者平均结果一样，才能看清"只看平均结果"会漏掉什么（第 4 步）。比例不相等时结论不变，见第 4 步。
 
 我们希望的结果是：少从 A 的对话里学（A 的成败与 agent 无关），照常从 B 的对话里学（agent 在 B 身上失败，是因为缺"追问"这项能力，正该学）。
 
@@ -495,8 +495,8 @@ $g_{\text{SAO}}$ 和 $g_w$，再把 batch 随机分成两半、各算一次梯�
 - 评测按用户类型分别报告，并报告最差用户组的成功率；如果它比 baseline 低，就是第 1 条假设被违反；
 - 在训练前先做一个能失败的检查：用 persona 构造已知提前结束率不同的用户（例如 0%、20%、50%），用现有 critic 跑一批对话，看
   $\hat\sigma_u^2$ 能否把它们按提前结束率排对序。排不对，说明这个估计量在 τ² 上不可用，方法要改；这一步需要 critic 先有正的 EV（现在 SAO
-  critic 的 EV 为负，[initial-audit.md §2.4](../initial-audit.md)）。再加一组"不主动给信息"的
-  persona，检查它的 $\hat\sigma_u^2$ 是否明显低于提前结束组，用来检验第 4 步说的 A/B 区分。
+  critic 的 EV 在 0 附近，[critic/](../critic/README.md)）。再加一组"不主动给信息"的 persona，检查它的
+  $\hat\sigma_u^2$ 是否明显低于提前结束组，用来检验第 4 步说的 A/B 区分。
 
 ## 与related-work.md §2 baseline 的对应
 

@@ -22,8 +22,8 @@
 EV 的定义和"上限"的含义见 `ev-ceiling-explainer.md`。这里补充验证报告里 EV 的具体算法，后面的分析都建立在它上面：
 
 - **在哪些位置算**：一条验证轨迹里，agent 说的每一个 token 都有一个 critic 预测 $V_t$，目标都是这条轨迹最后的成败 $R$（0 或 1）。EV
-  把所有这些 token 放在一起算，长轨迹占的权重更大。它不是"只看第一个 token"，第一个 token 只是
-  [ev-ceiling.md](ev-ceiling.md) 算上限时用的位置。
+  把所有这些 token 放在一起算，长轨迹占的权重更大。它不是"只看对话开头"，[ev-ceiling.md](ev-ceiling.md) 算上限时假设 critic
+  只知道题目身份。
 - **扣掉了整体偏移**：如果 critic 对所有 token 都多预测 0.3，EV 不受影响，这部分单独记在"偏移"一栏。所以 EV 只衡量 critic
   能不能区分"这条比那条更可能成功"，以及区分的幅度对不对。
 - **"单点 EV"**：指某一步的 checkpoint 在这 60 条验证轨迹上算出来的那一个数，例如"第 55 步 Airline 0.179"。

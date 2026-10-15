@@ -5,7 +5,7 @@
 ## Context
 
 DeepSeek 关 thinking 后三次输出逐字相同，经 LiteLLM 传也有效；Doubao 关掉后仍有细微差别。关掉 thinking 后 DeepSeek
-用户反而更好（test 60 合计 0.742 / 0.583，对比开 thinking 时 Retail 0.825 / 0.525），原因待 case study
+用户反而更好（test 60 合计 0.738 / 0.567，对比开 thinking 时 Retail 0.819 / 0.525），原因待 case study
 确认。闭源模型多数不支持关 thinking 或设 temperature（[user-simulator.md §2](../user-simulator.md)）。
 
 ## Decision

@@ -109,10 +109,15 @@ gold replay 验证。
 - Retail 有 17 条原本成功的 episode 被转人工规则清零，其中 13 条在有 gold
   写操作的题上（1、32、43、46、47、51、53、93、94、101）。 抽读到的都是写操作已经完成后，用户提出 agent
   做不了的要求，比如"收不到邮件，拿不到退货单""能不能加急退款"，agent 才转人工。这符合 Retail policy 的"超出能力范围时转人工"。
-- Airline 有 63 条被清零，其中 14 条在有写操作的题上（24、32、35、37、39）。抽读到的是在回避拒绝：35 的用户明确说 "I don't want
+- Airline 有 59 条被清零，其中 12 条在有写操作的题上（24、32、35、37、39）。抽读到的是在回避拒绝：35 的用户明确说 "I don't want
   to be transferred"，agent 应该拒绝全额退款，却转了人工；当时将 37、39 归为同类。所以 Airline 不设领域级例外。v3 逐条核查纠正了
   37：NQNU5R 已飞，policy 第 141 行明确要求转人工，故补该题 gold；35、39 的处理不变。
 - 代价：两个领域的规则不一致；例外的依据是抽读，不是 evaluator 能检查的条件。
+
+**转人工漏洞的量级**（Qwen3.5-4B step 0、DeepSeek 用户、base 集 164 题，超出上下文的 episode 记 0 分）：Airline 在
+official 上 0.745（[step0-evaluations.md §3](step0-evaluations.md) 的 official 运行），在 fixed
+v2 上 0.350，差约 39pp。其中转人工规则清零了 200 条 Airline episode 里 73 条原本成功的（36.5pp），其余约 3pp 是 #411 的
+NL 断言计分和运行间噪声。别的文档里出现的 31.5、34.8、约 30pp 等数字量的是别的东西（按各文档说明），不要和这个差距直接比较。
 
 ### 1.4 训练集去重
 
@@ -217,10 +222,8 @@ Retail 4 题（10、12、26、50）。Airline 有 23 题、Retail 有 7 题没�
 
 ### 3.1 起因
 
-2026-10-09 的 `step0-base-t0-doubao21turbo` 跑到 74/656 个 episode 时中止。原因是 Doubao 用户第一句就
-stop，policy 一次都没被调用（2026-10-13 查明这类开场就结束来自方舟服务异常，见
-[user-simulator.md §2](user-simulator.md)），旧代码把这种 episode 当导出错误处理，连续重试失败后中止整轮。官方 tau2
-会正常给这个 episode 打分。修复后整个调度层改为照搬官方 runner，见
+2026-10-09 的一次评测跑到 74/656 个 episode 时中止。原因是用户第一句就 stop，policy 一次都没被调用，旧代码把这种 episode
+当导出错误处理，连续重试失败后中止整轮。官方 tau2 会正常给这个 episode 打分。修复后整个调度层改为照搬官方 runner，见
 [ADR 0009](../../decisions/0009-official-tau2-runner-semantics.md) 和
 [PRD](../../prd/2026-10-09-tau2-official-runner.md)。
 

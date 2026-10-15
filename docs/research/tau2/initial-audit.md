@@ -10,8 +10,7 @@ temperature=1、每题 8 次）。全部结论来自已有记录的重算，没�
 原始数据根目录：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-training-20260927-nonthinking`。
 核查脚本在本目录 `scripts/`，大体积中间结果保留在
 `/data_storage/yl_test/lgx/data-1/code/_worktrees/AReaL/codex-sao-math/docs/_local/scratch/claude-verify-20261009/`（不入库）。
-[benchmark-variants.md §3.1](benchmark-variants.md)的 Doubao
-首轮探测、[recuris-and-leaderboard.md §4](recuris-and-leaderboard.md)的高分核查证据归档在
+[recuris-and-leaderboard.md §4](recuris-and-leaderboard.md)的高分核查证据归档在
 `/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/audits/tau2-scratch-archive-20261010/`。
 
 ## 1 初始分数为什么高
@@ -64,8 +63,11 @@ gold 固定为 "no longer needed"，用户多数时候选 "ordered by mistake"�
 
 ### 2.4 SAO critic
 
-- explained variance 46 步中 28 步为负，中位数 −0.068；epoch 1 中 20/23 步为负。
+- 这两次早期 SAO 运行里 critic 没有预训练：训练 batch 上的 explained variance 46 步中 28 步为负，中位数
+  −0.068；epoch 1 中 20/23 步为负。
 - critic 梯度范数 46 步全部超过 1.0，每步都被裁剪（critic lr 5e-6）。
+- 之后单独训练 critic（运行 499、510）的验证 EV 在 Airline 约 0 到 +0.18，Retail 约
+  0，没有可靠的预测能力（[critic/](critic/README.md)）。
 
 ## 3 对 Codex 先前调研的勘误
 

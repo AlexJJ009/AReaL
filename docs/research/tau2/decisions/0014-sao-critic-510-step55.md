@@ -1,6 +1,6 @@
 # SAO 使用 critic 510 第 55 步的 checkpoint（看 test 挑的）
 
-- 状态：已采纳（用户，2026-10-14）；SAO 运行中
+- 状态：已采纳（用户，2026-10-14）；SAO 534 已完成（[sao-runs.md](../sao-runs.md)）
 
 ## Context
 

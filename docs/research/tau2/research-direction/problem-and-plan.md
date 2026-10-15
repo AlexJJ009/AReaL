@@ -37,8 +37,8 @@ persona（配合与不配合、好与坏），以及按概率注入某种固定�
 
 **证据现状。**
 
-- 已有：同一 actor 在修过的 test 集上换五个用户模拟器，总分 mean@4 从 0.583 到 0.758（最强与最弱之差的 95% CI 为 \[7.1,
-  27.9\] 个百分点；中间几档两两分不开），385 个失败里 168
+- 已有：同一 actor 在修过的 test 集上换五个用户模拟器，总分 mean@4 从 0.579 到 0.758（最强与最弱之差 17.9pp，按题配对
+  bootstrap 的 95% CI 为 \[7.9, 28.3\]；中间几档两两多半分不开），385 个失败里 168
   个归用户（[user-simulator.md §2](../user-simulator.md)）；旧 GRPO 训练中，成功−失败组内对比有 28.6% 是"成功 vs
   用户失败"，Retail 41.8%（[capability-gaps.md §1.3](../capability-gaps.md)，official 旧数据）。
 - 没有：用户错误伤害训练结果的直接证据，以及上面第 2 种伤害是否发生。计划见下一步。
@@ -118,7 +118,8 @@ ds v4.1 再找一个弱的 user model。
 
 - **问题存在**。训练里约 29% 的组内对比是"agent 做得对，但用户出了错"（Retail
   42%，[capability-gaps.md §1.3](../capability-gaps.md)），换一个用户模型 Retail 就差
-  20pp（[user-simulator.md §1](../user-simulator.md)）。
+  15.6pp（DeepSeek 对 Doubao 2.1 Turbo）到 20.0pp（GLM 5.3 对 Turbo 或 Qwen
+  自部署；[user-simulator.md §2](../user-simulator.md)）。
 - **"用户不好"其实包含两个性质不同的问题**（[analysis.md §2](analysis.md)）：
   1. 用户的随机性让 reward 变得嘈杂。这是降方差的问题，经典 RL 有成熟方法，不算缺口。
   1. 用户系统性地不按应有的方式表现，导致 agent 学到错误的行为。这是优化目标被带偏的问题，我们有数据支撑，检索中没看到有人直接做。
@@ -136,8 +137,8 @@ ds v4.1 再找一个弱的 user model。
   的审稿（`appendix-math-review-codex.md`）还指出核心估计量有设计错误：最后一次行动的位置是事后选的，提前结束的用户
   $\mathbb{E}[e^2] = \rho(1-\rho)^2$，反而可能被加权。理论没能在动手前拦住这个错误。
 - LLM 上的 RL 论文通常的写法是：一个前序工作失败的现象，一个越简单越好的修正，加消融实验。理论最多是一个短命题和一个示意例子。太长的推导审稿人不会细看，也说服不了人。
-- 推导越来越重，很可能说明问题切入得还不够准。目前的现象证据只有两个用户模拟器（DeepSeek、Doubao）、一个
-  benchmark，主要的失败机制只有一种（Doubao 在确认的同一句里结束，[user-simulator.md §1](../user-simulator.md)）。
+- 推导越来越重，很可能说明问题切入得还不够准。目前的现象证据是五个用户模拟器、一个 benchmark，主要的失败机制是 Doubao
+  在确认的同一句里结束（[user-simulator.md §1](../user-simulator.md)），Qwen 自部署用户则不按任务条件走。
 
 **[appendix-method-draft-16.11.md](appendix-method-draft-16.11.md) 保留什么。**
 后续压缩成一页时，只留四条改变过设计的规则：改 critic 只降方差、要降权只能乘系数；残差均值会被 critic
@@ -182,14 +183,14 @@ AReaL-tau2-data，因为它经过我们的筛选，换用户模拟器后的差�
 **用户模拟器（2026-10-12 选定）。** actor 固定为 Qwen3.5-4B，先在 test 60 题上各跑 step 0 评测（policy 与用户
 temperature 0，每题 4 次），再做 case study。按能力从弱到强：
 
-| 模拟器                   | 档位            | 接入方式                              | 状态                                                                             |
-| ------------------------ | --------------- | ------------------------------------- | -------------------------------------------------------------------------------- |
-| Qwen3.5-4B（训练前版本） | 弱              | 本机 SGLang，占 1 张卡（必要时 2 张） | 待部署；4B 可能演不好用户，case study 里单独归为"模拟器失效"                     |
-| Doubao 2.1 Turbo         | 中下            | Ark API                               | 已有 base 集结果（[step0-evaluations.md §2](../step0-evaluations.md)，official） |
-| DeepSeek-Flash           | 中上            | DeepSeek API（`deepseek-flash`）      | 已有；若换成 V4.1，需确认是否同一 endpoint，否则算新模拟器                       |
-| GLM 5.3                  | 中上 / 强，开源 | 待定                                  | endpoint 待接入                                                                  |
-| Claude Haiku 5.5         | 强，闭源        | 待定                                  | endpoint 待接入，型号名在接入时核实                                              |
-| GPT-5.6 Luna             | 强，闭源        | 待定                                  | endpoint 待接入                                                                  |
+| 模拟器                   | 档位            | 接入方式                              | 状态                                                                                                                   |
+| ------------------------ | --------------- | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Qwen3.5-4B（训练前版本） | 弱              | 本机 SGLang，占 1 张卡（必要时 2 张） | 已有 fixed-v3 test 结果（[user-simulator.md §2](../user-simulator.md)）；演不好用户，case study 里单独归为"模拟器失效" |
+| Doubao 2.1 Turbo         | 中下            | Ark API                               | 已有 fixed-v3 test 结果（[user-simulator.md §2](../user-simulator.md)）                                                |
+| DeepSeek-Flash           | 中上            | DeepSeek API（`deepseek-flash`）      | 已有；若换成 V4.1，需确认是否同一 endpoint，否则算新模拟器                                                             |
+| GLM 5.3                  | 中上 / 强，开源 | 火山订阅接口                          | 已有 fixed-v3 test 结果（[user-simulator.md §2](../user-simulator.md)）                                                |
+| Claude Haiku 5.5         | 强，闭源        | 待定                                  | endpoint 待接入，型号名在接入时核实                                                                                    |
+| GPT-5.6 Luna             | 强，闭源        | 待定                                  | endpoint 待接入                                                                                                        |
 
 不选最强一档（如 GPT-5.6 Sol）：强用户的偏差方向是替 agent 做判断、把失败救回来，用 Haiku / Luna 这一档就能观察到，没必要多花钱。
 
@@ -197,12 +198,9 @@ temperature 0，每题 4 次），再做 case study。按能力从弱到强：
 [training-setup.md §2](../training-setup.md) 的布局（rollout 3、评测 1、actor 4）上从 rollout 里让出 1
 张给用户。用户侧会不会成为吞吐瓶颈，先在 smoke test 里测，不够再加到 2 张。
 
-**启动前必须先解决：NL judge 和用户模拟器绑在一起。** `examples/tau2/agent.py` 的
-`_bind_nl_assertion_evaluator` 把 NL 断言的 judge 设成 `user_llm`，换用户就等于同时换 judge。fixed v2 下
-test 60 题里有 19 题（Airline 9、Retail 10）的 reward 含非空 NL
-断言；[user-simulator.md §1](../user-simulator.md)估计 Doubao 下 judge 最多影响约 1pp，但那是 official
-变体（Airline 不计 NL）、用户还是大模型的结果。用 4B 做用户时，judge 也变成 4B，结果不可比。需要加一个独立的 judge 配置，固定为
-DeepSeek-Flash、temperature 0，所有模拟器共用。
+**NL judge 与用户模拟器分开配置（已完成，[decision 0002](../decisions/0002-nl-judge-decoupled.md)）。**
+固定为 DeepSeek-Flash、temperature 0，所有模拟器共用。fixed v2 下 test 60 题里有 19 题（Airline 9、Retail
+10）的 reward 含非空 NL 断言，所以换用户时 judge 不能跟着换。
 
 **启动前的检查：** 每个新模拟器先跑 5～10 题 smoke test，确认能正常扮演用户、judge 调用走的是固定模型；再从已有评测日志按每条 episode
 的用户侧 token 量估算费用，批准后上全量。
@@ -212,7 +210,7 @@ DeepSeek-Flash、temperature 0，所有模拟器共用。
 
 | actor             | step 0 评测（所有用户模拟器） | 训练       | 理由                                                                                                                                                                                                                                                   |
 | ----------------- | ----------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Qwen3.5-4B        | 测                            | 主 actor   | SAO 和 critic 只在它上面跑通过（[infra-issues.md §2](../infra-issues.md)）；用户模拟器的影响已观察到（Retail 0.851 对 0.651）。DeepSeek 下 Retail 提升空间小（fixed 0.849），Airline 0.388 和弱用户下有空间                                            |
+| Qwen3.5-4B        | 测                            | 主 actor   | SAO 和 critic 只在它上面跑通过（[infra-issues.md §2](../infra-issues.md)）；用户模拟器的影响已观察到（Retail 0.806 对 0.650）。DeepSeek 下 Retail 提升空间小（fixed 0.844），Airline 0.350 和弱用户下有空间                                            |
 | Qwen3-4B-Instruct | 测                            | 第二 actor | 提升空间大（fixed 0.225 / 0.410），组内有对有错的题最多（[capability-gaps.md §2.2](../capability-gaps.md)）。训练前要先处理"工具调用写成正文"（M17），否则提升里混着格式修复；Qwen3 的 critic 路径要先验证（[infra-issues.md §2](../infra-issues.md)） |
 | Qwen3-4B-Thinking | 测                            | 不训练     | 训练要求 `enable_thinking=false`（[step0-evaluations.md §6.1](../step0-evaluations.md)）；每轮生成中位数 956 token，是 Instruct 的 11 倍，API 用户下的长对话训练成本高                                                                                 |
 
@@ -221,7 +219,7 @@ Qwen3-Instruct 上重复。
 
 **要先想清楚的两点：**
 
-- **现象必须出在训练上，不只是评测上**。"换 Doubao 后 Retail 从 0.851 降到 0.651"是评测差异，说明 benchmark
+- **现象必须出在训练上，不只是评测上**。"换 Doubao 2.1 Turbo 后 Retail 从 0.806 降到 0.650"是评测差异，说明 benchmark
   分数受用户模拟器影响，但还不是 RL 的问题。论文要的现象是：用不同模拟器训练，得到的提升差别很大，甚至变差。这需要训练实验，最小版本是 2×2：用 DeepSeek 和
   Doubao 各训练一次，两个模型都在两个模拟器上评测。
 - **"稳定提升"要交叉评测才有说服力**。如果在 Doubao 上训练、也只在 Doubao 上评测，提升可能只是学会了应付 Doubao
@@ -272,7 +270,7 @@ Mao"的障碍不存在。
 **代价和风险：**
 
 - **更依赖 critic**。$\beta = 0$ 时 advantage 全由 critic 的差分构成，critic 不准就有偏；$\beta$
-  取中间值是折中。critic 先要有正的 EV（[initial-audit.md §2.4](../initial-audit.md)），这一前提与
+  取中间值是折中。critic 先要有正的 EV（[critic/](../critic/README.md)），这一前提与
   [appendix-method-draft-16.11.md](appendix-method-draft-16.11.md) 相同。
 - **代码改两处**：critic 在每个 agent 轮结束、用户回复前的位置多训练一个点（目标仍是 $R$）；GAE 在用户回复处换成
   $\tilde\delta$。现在的 value 是"看到这个 token 之前"的预测（`actor.py:226` 把 mask 左移一位），所以 $U_t$ 要取

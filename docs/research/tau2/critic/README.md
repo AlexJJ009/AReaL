@@ -7,7 +7,7 @@ head、数据配比、EV 上限和 case study。
 - [value-head.md](value-head.md)：优化器与 value head（决策见
   [ADR 0012](../decisions/0012-critic-head-init.md)）。
 - [ev-ceiling.md](ev-ceiling.md)：只按题目身份预测时的 EV 上限。
-- [ev-ceiling-explainer.md](ev-ceiling-explainer.md)：解释方差（EV）与"第一个 token 的上限"。
+- [ev-ceiling-explainer.md](ev-ceiling-explainer.md)：解释方差（EV）与"按题目身份预测的上限"。
 - [data-mix.md](data-mix.md)：critic 训练数据配比（决策见
   [ADR 0013](../decisions/0013-critic-data-mix.md)）。
 - [ev-case-study.md](ev-case-study.md)：critic EV case study；对应

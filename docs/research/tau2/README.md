@@ -4,30 +4,35 @@
 训练却看不出效果。分数高在哪里、训练为什么无效、用户模拟器的质量对训练有多大影响。对象：GRPO `formal-v2`、SAO
 `mixed-v1`/`mixed-v4-disk`，以及之后的 fixed 变体上的 step 0 评测、critic 和 SAO 实验。
 
-**状态（2026-10-14）**：初始分数、失败分类、benchmark 变体、训练数据筛选和用户模拟器影响的核查已完成；critic 的 EV 一直在 0 附近，原因见
-[critic/](critic/README.md)；SAO 正式运行（mix pack + critic 510 第 55 步）见
+**状态（2026-10-15）**：初始分数、失败分类、benchmark 变体、训练数据筛选和用户模拟器影响的核查已完成；评测对超出 32K 上下文的 episode
+首次超出即记 0
+分，已有评测已按此重算（[issues/2026-10-15-eval-context-overflow-excluded.md](issues/2026-10-15-eval-context-overflow-excluded.md)）；critic
+的 EV 一直在 0 附近，原因见 [critic/](critic/README.md)；SAO 正式运行（mix pack + critic 510 第 55 步）见
 [sao-runs.md](sao-runs.md)。研究方向暂停方法推导，先找准现象（[research-direction/](research-direction/README.md)）。
 
 ## 结论
 
 **初始分数高（Retail/Airline 约 80%，Telecom 100%）的主因是模型本身能完成多数任务，加上 benchmark
-自身的评分盲区；不是数据或评测代码被改过，也不是用户模拟器代劳。**
+自身的评分盲区；不是数据或评测代码被改过，也不是用户模拟器代劳。** Qwen3.5-4B step 0，DeepSeek 用户，官方 base 集：Airline
+0.765，Retail 0.840（[step0-evaluations.md §2](step0-evaluations.md)）。
 
-**2026-10-10 更正**：[initial-audit.md §1](initial-audit.md)
-"用户模拟器过度配合：否"只说明用户没有代劳；用户模拟器的选择本身决定 Retail 分数。 同一份代码下，DeepSeek 用户 Retail 0.851、Doubao 用户
-0.651，差距主要来自 Doubao
-在确认的同一句话里结束对话（[recuris-and-leaderboard.md](recuris-and-leaderboard.md)）。
-
-**2026-10-13 更新**：在修过的 fixed-v3 test
-集上换了五个用户模拟器（[user-simulator.md §2](user-simulator.md)），actor 不变，总分 mean@4 从
-0.583（Qwen3.5-4B 自部署）到 0.758（GLM 5.3）。385 个失败里 168 个由用户造成；Doubao 的头号问题仍是确认的同一句里结束（Turbo
-41 个），Qwen 用户主要是不按任务条件走。早先记录的"Doubao 开场第一句就结束"是方舟服务异常，v3 五组运行里都是 0。
-
-**训练看不出效果，原因是评测噪声大于训练带来的变化、有效学习信号少、权重几乎没有朝一致方向移动**。现有证据只能说"无法判断训练是否有效"，不能说"训练变差"。
-
-**2026-10-10 补充：航空的高分里约 30pp 是转人工得来的**。航空任务按 DB + COMMUNICATE 打分，在"应该拒绝"的任务上，agent
-转人工也能拿满分（[failure-taxonomy.md §3](failure-taxonomy.md)）。这是官方评分的漏洞，同样的 DB reward
+**航空的高分里约 36.5pp 是转人工得来的。** 航空任务按 DB + COMMUNICATE 打分，在"应该拒绝"的任务上，agent
+转人工也能拿满分（[failure-taxonomy.md §3](failure-taxonomy.md)）。同一模型、同一用户，Airline 在 official 上
+0.745，在 fixed v2 上 0.350，差 39pp，其中转人工规则清零的占
+36.5pp（[benchmark-variants.md §1.3](benchmark-variants.md)）。这是官方评分的漏洞，同样的 DB reward
 用于训练时会奖励转人工。
+
+**用户模拟器的选择本身决定 Retail 分数。** [initial-audit.md §1](initial-audit.md)
+"用户模拟器过度配合：否"只说明用户没有代劳。在修过的 fixed-v3 test
+集上换五个用户模拟器（[user-simulator.md §2](user-simulator.md)），actor 不变，总分 mean@4 从
+0.579（Qwen3.5-4B 自部署）到 0.758（GLM 5.3），差 17.9pp；Retail 上 Doubao 2.1 Turbo 比
+DeepSeek-Flash 低 15.6pp。385 个失败里 168 个由用户造成；Doubao 的头号问题是确认的同一句里结束对话（Turbo 41 个），Qwen
+用户主要是不按任务条件走。
+
+**训练看不出效果，原因是评测噪声大于训练带来的变化、有效学习信号少、权重几乎没有朝一致方向移动**：同配置重测的总分波动 2–3pp，Airline 约 5pp。GRPO
+`formal-v2` 和早期 SAO 的证据只能说"无法判断训练是否有效"，不能说"训练变差"。SAO 534（mix pack + critic 510）的评测在 32K
+上下文限制下显示：训练让对话变长，超出 32K 的 episode 从第 0 步的 4 条增到第 40 步的 76 条（共 240 条），Airline mean@4 从
+0.475 降到 0.263；第 10 步 Airline 比第 0 步高 0.113，但区间包含 0（[sao-runs.md](sao-runs.md)）。
 
 ## 仍未完成
 

@@ -9,7 +9,10 @@
 AReaL 训练数据，用来判断这份数据对某个模型有没有训练信号。
 
 **共同口径**：policy temperature 0；DeepSeek-Flash 做用户模拟器和 NL judge（temperature 0）；每题 4
-次；Airline / Retail 用 `benchmark_variant=fixed`（fixed v2 数据，§4）。"有对有错"的题，GRPO
+次；Airline / Retail 用 `benchmark_variant=fixed`（fixed v2 数据，§4）。超出 32K 上下文的 episode
+第一次出现就记 0
+分并计入（[ADR 0009](../../decisions/0009-official-tau2-runner-semantics.md)），Qwen3.5 的运行已用
+`scripts/rescore/rescore.py` 按此重算，Qwen3-2507 的运行几乎没有这类 episode。"有对有错"的题，GRPO
 的组内才有分数差异；训练时按 temperature 1 采样，这类题会更多，但还没测过。
 
 **评测入口**：
@@ -25,8 +28,8 @@ AReaL 训练数据，用来判断这份数据对某个模型有没有训练信�
 
 | 模型                   | 领域                       | 变体                | mean@4 | pass^4 | 4 次全对 | 有对有错 | 4 次全错 | 来源 |
 | ---------------------- | -------------------------- | ------------------- | -----: | -----: | -------: | -------: | -------: | ---- |
-| Qwen3.5-4B             | Airline                    | fixed v2            |  0.388 |  0.229 |       11 |       19 |       20 | §4   |
-| Qwen3.5-4B             | Retail                     | fixed v2            |  0.849 |  0.634 |       73 |       39 |        2 | §4   |
+| Qwen3.5-4B             | Airline                    | fixed v2            |  0.350 |  0.160 |        8 |       22 |       20 | §4   |
+| Qwen3.5-4B             | Retail                     | fixed v2            |  0.844 |  0.625 |       70 |       40 |        2 | §4   |
 | Qwen3.5-4B             | Telecom                    | official            |  1.000 |  1.000 |      114 |        0 |        0 | §6.2 |
 | Qwen3-4B-Instruct-2507 | Airline                    | fixed v2            |  0.225 |  0.060 |        3 |       21 |       26 | §6.2 |
 | Qwen3-4B-Instruct-2507 | Retail                     | fixed v2            |  0.410 |  0.096 |       11 |       72 |       31 | §6.2 |
@@ -36,7 +39,8 @@ AReaL 训练数据，用来判断这份数据对某个模型有没有训练信�
 | Qwen3-4B-Thinking-2507 | Telecom                    | official            |  0.373 |  0.246 |       28 |       25 |       61 | §6.2 |
 | （下一个模型）         | Airline / Retail / Telecom | fixed v2 / official |      — |      — |        — |        — |        — |      |
 
-Airline / Retail 在 official 变体下的分数见 §6.2；official 与 fixed 的差别见
+Qwen3.5 Retail 有 2 条 episode 缺记录（`MissingAttemptRecord`），所属 2 题不计入后三列（共 112 题）。Airline /
+Retail 在 official 变体下的分数见 §6.2；official 与 fixed 的差别见
 [failure-taxonomy.md §3](failure-taxonomy.md)、§4。
 
 **表 B：筛选后的 AReaL-tau2-data**（Airline / Retail 用 pack v2，648
@@ -45,9 +49,9 @@ Airline / Retail 在 official 变体下的分数见 §6.2；official 与 fixed �
 
 | 模型                   | 领域                       | pack        | 题数 | mean@4 | pass^4 | 4 次全对 | 有对有错 | 4 次全错 | 来源                                    |
 | ---------------------- | -------------------------- | ----------- | ---: | -----: | -----: | -------: | -------: | -------: | --------------------------------------- |
-| Qwen3.5-4B             | Airline                    | v2          |  380 |  0.926 |  0.818 |      311 |       63 |        6 | §5                                      |
+| Qwen3.5-4B             | Airline                    | v2          |  380 |  0.918 |  0.800 |      304 |       70 |        6 | §5                                      |
 | Qwen3.5-4B             | Retail                     | v2          |  268 |  0.976 |  0.922 |      247 |       21 |        0 | §5                                      |
-| Qwen3.5-4B             | Telecom                    | telecom v0  |  261 |  0.993 |  0.973 |      254 |        7 |        0 | [training-data.md §6](training-data.md) |
+| Qwen3.5-4B             | Telecom                    | telecom v0  |  261 |  0.992 |  0.973 |      254 |        7 |        0 | [training-data.md §6](training-data.md) |
 | Qwen3-4B-Instruct-2507 | Airline                    | v2          |  380 |  0.593 |  0.289 |      110 |      211 |       59 | 本节                                    |
 | Qwen3-4B-Instruct-2507 | Retail                     | v2          |  268 |  0.787 |  0.459 |      123 |      138 |        7 | 本节                                    |
 | Qwen3-4B-Instruct-2507 | Telecom                    | telecom v1  |  261 |  0.380 |  0.222 |       58 |       94 |      109 | 本节                                    |
@@ -56,11 +60,11 @@ Airline / Retail 在 official 变体下的分数见 §6.2；official 与 fixed �
 | Qwen3-4B-Thinking-2507 | Telecom                    | telecom v1  |  261 |  0.307 |  0.176 |       46 |       64 |      151 | 本节                                    |
 | （下一个模型）         | Airline / Retail / Telecom | 当前 latest |      |        |        |          |          |          |                                         |
 
-Qwen3.5 的 Telecom 用的是 v0。v1 只在 50 题里改了一句"要恰好 2 GB"，Qwen3.5 在 v0 上已经 0.993，所以没有重评。
+Qwen3.5 的 Telecom 用的是 v0。v1 只在 50 题里改了一句"要恰好 2 GB"，Qwen3.5 在 v0 上已经 0.992，所以没有重评。
 
 **读表**（2026-10-12，表 B 的四个 Qwen3 运行都没有 infra 排除）：
 
-- **Qwen3.5-4B 在 AReaL 数据上没有训练信号**：v2 的 648 题里只有 84 题有对有错（13%），Telecom 261 题里只有 7 题。
+- **Qwen3.5-4B 在 AReaL 数据上没有训练信号**：v2 的 648 题里只有 91 题有对有错（14%），Telecom 261 题里只有 7 题。
 - **在 v2 上，Instruct 的信号最多，Thinking 的分数更高**：
   - Instruct 有 349 题有对有错（54%），4 次全错 66 题；
   - Thinking 的 mean@4 是 Airline 0.740、Retail 0.913，比 Instruct（0.593、0.787）高，有对有错 230
@@ -82,36 +86,28 @@ Qwen3.5 的 Telecom 用的是 v0。v1 只在 50 题里改了一句"要恰好 2 G
 **费用**：表 B 的四个 Qwen3 运行共用了约 108 CNY 的 DeepSeek 余额，其中 Telecom 占大头：Telecom 对话长，一个模型跑 261 题
 × 4，用户侧约 150M prompt token。
 
-## 2 官方 runner 口径下的 step 0 评测（同日补充）
+## 2 官方 runner 口径下的 step 0 评测（2026-10-09）
 
-两组都用 commit `31634dee`：未训练的 Qwen3.5-4B（non-thinking），base 集（Airline 50 + Retail 114 题，不含
-Telecom），policy temperature 0，每题 4 次，用户模拟器 temperature 0、无回复上限，32K context，评测不设单次回复上限。
+用 commit `31634dee`：未训练的 Qwen3.5-4B（non-thinking），base 集（Airline 50 + Retail 114 题，不含
+Telecom），policy temperature 0，每题 4 次，DeepSeek-Flash 用户模拟器 temperature 0、无回复上限，32K
+context，评测不设单次回复上限。
 
-| 用户模拟器       | 领域    | episode（排除） | mean@4 = pass^1 | pass^2 | pass^4  |
-| ---------------- | ------- | --------------- | --------------- | ------ | ------- |
-| DeepSeek-Flash   | 合计    | 656（0）        | 0.838           | 0.752  | 0.646   |
-| DeepSeek-Flash   | Airline | 200（0）        | 0.810           | 0.733  | 0.660   |
-| DeepSeek-Flash   | Retail  | 456（0）        | 0.851           | 0.760  | 0.640   |
-| Doubao 2.1 Turbo | 合计    | 656（2）        | 0.691           | 0.548  | 0.426\* |
-| Doubao 2.1 Turbo | Airline | 200（1）        | 0.783           | 0.703  | 0.633\* |
-| Doubao 2.1 Turbo | Retail  | 456（1）        | 0.651           | 0.480  | 0.336\* |
+| 用户模拟器     | 领域    | episode（排除） | mean@4 = pass^1 | pass^2 | pass^4 |
+| -------------- | ------- | --------------- | --------------- | ------ | ------ |
+| DeepSeek-Flash | 合计    | 656（0）        | 0.817           | 0.717  | 0.598  |
+| DeepSeek-Flash | Airline | 200（0）        | 0.765           | 0.667  | 0.580  |
+| DeepSeek-Flash | Retail  | 456（0）        | 0.840           | 0.740  | 0.605  |
 
-\* Doubao 有 2 个 episode 在重试时遇到 Ark 账户欠费，被排除；pass^4 只在其余 162 题上算（Airline 49、Retail 113）。
+- 其中 17 条 episode 超出 32K 上下文（Airline 11、Retail 6），按首次超出记 0 分。
+- 更早、仍带 4096 token 回复上限的代码下同配置的评测是 0.794，新代码 0.817。区别是评测不再截断 4096 token 的回复（旧代码有 32 个
+  episode 被截断）和重试规则。两者和用户模拟器本身的随机性各占多少，没有逐题核对。
+- 换用户模拟器对 Retail 的影响见 [user-simulator.md §2](user-simulator.md)（fixed-v3 test 上的五个模拟器）。
 
-- 只换用户模拟器，Retail 从 0.851 降到 0.651，Airline 只差 0.03。Doubao 用户下的 Retail（0.651）已经接近 Recuris
-  报告的 68.0；Airline（0.783）仍高于 75.3。
-- 旧代码下同配置的 DeepSeek 评测是 0.794，新代码 0.838。区别是评测不再截断 4096 token 的回复（旧代码有 32 个 episode
-  被截断）和重试规则；本次无排除。两者和用户模拟器本身的随机性各占多少，没有逐题核对。
-- Doubao 评测里 3 个 episode 是用户第一句就
-  stop，按官方打分，没有中止评测。后来查明是方舟服务异常（[user-simulator.md §2](user-simulator.md)）。
-
-产物：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-eval-20261009/step0-base-t0-deepseek-official/`
-和
-`.../step0-base-t0-doubao21turbo-official/`（`summary.json`、`episodes.jsonl`、`trajectories/`）。
+产物：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-eval-20261009/step0-base-t0-deepseek-official/`（`summary.json`、`episodes.jsonl`、`trajectories/`）。
 
 复现脚本：`scripts/official-runner/fault_user_proxy.py`（PRD 第 6 节的故障注入
-smoke）、`scripts/official-runner/metrics_table.py` （从 `episodes.jsonl`
-重算[step0-evaluations.md §2](step0-evaluations.md)的 mean@4 / pass^1/2/4，在仓库根目录运行）。
+smoke）、`scripts/official-runner/metrics_table.py` （从 `episodes.jsonl` 重算 mean@4 /
+pass^1/2/4，在仓库根目录运行）、`scripts/rescore/rescore.py`（按首次超出上下文记 0 分重算，输入是 `trajectories/`）。
 
 ## 3 上一轮：official 与 fixed v1（2026-10-10）
 
@@ -124,42 +120,43 @@ fixed v1 是加入
 
 | 变体     | 领域 / 划分   | 题数 | 排除 | mean@4 = pass^1 | pass^2 | pass^4 |
 | -------- | ------------- | ---- | ---- | --------------- | ------ | ------ |
-| official | 合计          | 164  | 0    | 0.808           | 0.705  | 0.561  |
-| official | Airline       | 50   | 0    | 0.780           | 0.710  | 0.620  |
-| official | Airline train | 30   | 0    | 0.775           | 0.717  | 0.667  |
-| official | Airline test  | 20   | 0    | 0.787           | 0.700  | 0.550  |
-| official | Retail        | 114  | 0    | 0.820           | 0.703  | 0.535  |
-| official | Retail train  | 74   | 0    | 0.848           | 0.739  | 0.568  |
-| official | Retail test   | 40   | 0    | 0.769           | 0.637  | 0.475  |
-| fixed v1 | 合计          | 164  | 1    | 0.690           | 0.571  | 0.460  |
-| fixed v1 | Airline       | 50   | 1    | 0.428           | 0.297  | 0.224  |
-| fixed v1 | Airline train | 30   | 1    | 0.364           | 0.228  | 0.138  |
-| fixed v1 | Airline test  | 20   | 0    | 0.525           | 0.400  | 0.350  |
-| fixed v1 | Retail        | 114  | 0    | 0.805           | 0.692  | 0.561  |
-| fixed v1 | Retail train  | 74   | 0    | 0.845           | 0.750  | 0.635  |
-| fixed v1 | Retail test   | 40   | 0    | 0.731           | 0.583  | 0.425  |
+| official | 合计          | 164  | 0    | 0.793           | 0.682  | 0.537  |
+| official | Airline       | 50   | 0    | 0.745           | 0.653  | 0.560  |
+| official | Airline train | 30   | 0    | 0.725           | 0.633  | 0.567  |
+| official | Airline test  | 20   | 0    | 0.775           | 0.683  | 0.550  |
+| official | Retail        | 114  | 0    | 0.814           | 0.694  | 0.526  |
+| official | Retail train  | 74   | 0    | 0.841           | 0.727  | 0.554  |
+| official | Retail test   | 40   | 0    | 0.762           | 0.633  | 0.475  |
+| fixed v1 | 合计          | 164  | 0    | 0.662           | 0.528  | 0.396  |
+| fixed v1 | Airline       | 50   | 0    | 0.400           | 0.260  | 0.180  |
+| fixed v1 | Airline train | 30   | 0    | 0.325           | 0.183  | 0.100  |
+| fixed v1 | Airline test  | 20   | 0    | 0.512           | 0.375  | 0.300  |
+| fixed v1 | Retail        | 114  | 0    | 0.776           | 0.646  | 0.491  |
+| fixed v1 | Retail train  | 74   | 0    | 0.807           | 0.689  | 0.541  |
+| fixed v1 | Retail test   | 40   | 0    | 0.719           | 0.567  | 0.400  |
 
-fixed v1 排除了 1 条 episode，`airline:14:trial1`：4 次尝试都超过了 32K 上下文。它所在题的 pass^4 只按 3 次有效
-trial 无法计算，所以 Airline 的 pass^4 只在 49 题上算。
+超出 32K 上下文的 episode 按首次超出记 0 分计入：official 15 条（Airline 10、Retail 5），fixed v1 26
+条（Airline 13、Retail 13）。
 
 **fixed v1 的下降几乎全在 Airline，主要来自转人工规则**：
 
-- Airline 从 0.780 降到 0.428。fixed v1 运行中，转人工规则之前的分数是 0.744，规则把 199 条 episode 里 63
-  条原本成功的记为 0，扣了 31.7pp。剩下约 3.6pp 是 #411 新增的 NL 断言计分，这个量与下面的运行间噪声同级，不能单独确认。
-- Retail 几乎不变（0.820 → 0.805）。转人工规则扣了 17 条成功（3.7pp），规则之前的分数是 0.842，高于 official。
-- 这和 [failure-taxonomy.md §3](failure-taxonomy.md) 的估计（Airline 约 30pp
-  来自转人工）一致。也就是说，修复后这个 4B 模型的 Airline 真实水平约为 0.43，Airline train 只有 0.36。
+- Airline 从 0.745 降到 0.400。fixed v1 运行中，转人工规则之前的分数是 0.695，规则把 200 条 episode 里 59
+  条原本成功的记为 0，扣了 29.5pp。剩下约 5pp 是 #411 新增的 NL 断言计分加上运行间噪声（见下），不能单独确认。
+- Retail 0.814 → 0.776。转人工规则扣了 17 条成功（3.7pp），规则之前的分数是 0.814，与 official 持平。
+- 这和 [failure-taxonomy.md §3](failure-taxonomy.md) 的计数同一量级（official 评分下，约 31.5% 的
+  Airline episode 是在无写操作的任务上靠转人工拿满分）。也就是说，修复后这个 4B 模型的 Airline 真实水平约为 0.40，Airline train
+  只有 0.33。
 
-**训练信号的变化**：Airline train 的 30 题从 0.775 降到 0.364，GRPO 组内会出现更多有对比的组，训练有更多可学的东西。Retail
+**训练信号的变化**：Airline train 的 30 题从 0.725 降到 0.325，GRPO 组内会出现更多有对比的组，训练有更多可学的东西。Retail
 train 基本不变。
 
 **同一配置两次运行的差异**：
 
-- official 的 0.808 比 10-09 同配置的 0.838 低 3.0pp。按题配对 bootstrap 的 95% 区间是 \[−5.9,
-  −0.3\]pp（Airline \[−8.0, +1.5\]，Retail \[−6.4, +0.4\]）。
+- 本节 official 的 0.793 比 §2 同配置的 0.817 低 2.4pp。按题配对 bootstrap 的 95% 区间是 \[−5.3,
+  +0.5\]pp（Airline \[−7.5, +3.0\]，Retail \[−5.9, +0.9\]）。
 - 两次之间评测路径的代码没有改动：只增加了只对 fixed 生效的转人工规则、只对训练生效的超时处理，以及变体校验。
-- 164 题中有 64 题的 4 次平均分变了。temperature 0 仍然不是确定的：SGLang 的批处理和 DeepSeek API 都会引入差异。
-- 所以同一 checkpoint 重测本身就有约 3pp 的波动，与 [initial-audit.md §2.1](initial-audit.md) 节中两次 step
+- 164 题中有 69 题的 4 次平均分变了。temperature 0 仍然不是确定的：SGLang 的批处理和 DeepSeek API 都会引入差异。
+- 所以同一 checkpoint 重测本身就有 2–3pp 的波动，与 [initial-audit.md §2.1](initial-audit.md) 节中两次 step
   0 相差 4.58pp 是同一量级。比较训练前后，至少要看 test 上的配对差和区间，不能只看点估计。
 
 产物：`/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-eval-20261010/step0-base-t0-deepseek-{official,fixed}/`。对比脚本：`scripts/official-runner/variant_compare.py`。
@@ -172,32 +169,25 @@ train 基本不变。
 
 | 变体     | 领域 / 划分                   | 题数 | 排除 | mean@4 = pass^1 | pass^2 | pass^4 |
 | -------- | ----------------------------- | ---- | ---- | --------------- | ------ | ------ |
-| fixed v2 | 合计                          | 164  | 4    | 0.708           | 0.612  | 0.512  |
-| fixed v2 | Airline                       | 50   | 2    | 0.388           | 0.283  | 0.229  |
-| fixed v2 | Airline train                 | 30   | 2    | 0.356           | 0.233  | 0.179  |
-| fixed v2 | Airline test                  | 20   | 0    | 0.438           | 0.358  | 0.300  |
-| fixed v2 | Retail                        | 114  | 2    | 0.849           | 0.756  | 0.634  |
-| fixed v2 | Retail train                  | 74   | 2    | 0.868           | 0.782  | 0.667  |
-| fixed v2 | Retail 训练池（去重后 69 题） | 69   | 2    | 0.880           | 0.792  | 0.672  |
-| fixed v2 | Retail test                   | 40   | 0    | 0.812           | 0.708  | 0.575  |
+| fixed v2 | 合计                          | 164  | 2    | 0.694           | 0.592  | 0.481  |
+| fixed v2 | Airline                       | 50   | 0    | 0.350           | 0.233  | 0.160  |
+| fixed v2 | Airline train                 | 30   | 0    | 0.317           | 0.178  | 0.067  |
+| fixed v2 | Airline test                  | 20   | 0    | 0.400           | 0.317  | 0.300  |
+| fixed v2 | Retail                        | 114  | 2    | 0.844           | 0.750  | 0.625  |
+| fixed v2 | Retail train                  | 74   | 2    | 0.865           | 0.779  | 0.667  |
+| fixed v2 | Retail 训练池（去重后 69 题） | 69   | 2    | 0.877           | 0.790  | 0.672  |
+| fixed v2 | Retail test                   | 40   | 0    | 0.806           | 0.696  | 0.550  |
 
-排除 4 条，按题计算的 pass^4 因此只覆盖 160 题：
+排除的 2 条是 `retail:59:trial3`、`retail:99:trial3`：`MissingAttemptRecord`，见
+[proxy 的 session 容量泄漏](infra-issues.md)；按题计算的 pass^4 因此只覆盖 162 题。另有 16 条 episode（Airline
+14、Retail 2）超出 32K 上下文，按首次超出记 0 分计入。
 
-- `airline:10:trial3`、`airline:34:trial2`：4 次尝试都超过 32K 上下文，和 v1 的 `airline:14` 同类。
-- `retail:59:trial3`、`retail:99:trial3`：`MissingAttemptRecord`，见
-  [proxy 的 session 容量泄漏](infra-issues.md)。
+**Airline 和预期一致：基本不变**。0.400 → 0.350（−5.0pp）。fixed v2 对 Airline 只改了反向转人工规则，这条规则只影响
+airline:13， 这次没有清零任何 Airline episode。所以这 5pp 是运行间噪声，与 §3 测得的运行间波动（Airline 约
+5pp）同级。正向转人工规则在 Airline 清零了 73 条原本成功的 episode（v1 是 59 条）。
 
-**Airline 和预期一致：基本不变**。0.428 → 0.388（−4.0pp）。fixed v2 对 Airline 只改了反向转人工规则，这条规则只影响
-airline:13， 这次没有清零任何 Airline episode。所以这 4pp 是运行间噪声，在 §3 测得的约 3pp 的量级内。正向转人工规则在 Airline
-清零了 75 条原本成功的 episode（v1 是 63 条）。
-
-**Retail 没有降低，反而升高了**。0.805 → 0.849（+4.4pp）。按题分组归因（114 题，每组为 4 次平均分之和的变化）：
-
-| 题组                                                               | 题数 | v1 → v2  | 折合 Retail pp |
-| ------------------------------------------------------------------ | ---- | -------- | -------------- |
-| 20 道打了补丁的题                                                  | 20   | +3.50 题 | +3.1           |
-| v1 被正向规则清零、v2 按 Retail 例外恢复的题（1、32、43 等 10 题） | 10   | +2.25 题 | +2.0           |
-| 其余未改动的题                                                     | 84   | −0.75 题 | −0.7（噪声）   |
+**Retail 没有降低，反而升高了**。0.776 → 0.844（+6.8pp）。来源有三个：打了补丁的题、v1 被正向规则误清零而 v2 按 Retail
+例外恢复的题（1、32、43 等），以及运行间噪声：v1 的 Retail 有 13 条 episode 超出 32K 上下文，v2 只有 2 条，单这一项就差约 2.4pp。
 
 - **补丁让分数上升，是补丁本身的性质**。补丁去掉的是"做对了也判错"的失败：
 
@@ -210,18 +200,17 @@ airline:13， 这次没有清零任何 Airline episode。所以这 4pp 是运行
 - **本该降分的三题没有降**。57、65 改为必须查订单，但这个模型本来就会查：57 在 v1、v2 都是 4/4，65 从 3/4 升到 4/4。25 要求转人工，v2
   是 2/4，与 v1 相同。 "什么都不做也得分"的漏洞对这个模型的分数影响很小。
 
-- **Retail 例外恢复了 v1 误清零的分数**（+2.0pp），这和
-  [benchmark-variants.md §1.3](benchmark-variants.md) 的判断一致。正向规则在 Retail 不再清零任何
-  episode。反向规则清零了 2 条（retail train）。
+- **Retail 例外恢复了 v1 误清零的分数**，这和 [benchmark-variants.md §1.3](benchmark-variants.md)
+  的判断一致。正向规则在 Retail 不再清零任何 episode。反向规则清零了 2 条（retail train）。
 
 **训练集上的组内对比**（temperature 0，每题 4 次，按 train 池统计）：
 
-| 领域          | 题数 | v1：全对 / 全错 / 有对比 | v2：全对 / 全错 / 有对比     |
-| ------------- | ---- | ------------------------ | ---------------------------- |
-| Airline train | 30   | 4 / 11 / 15              | 5 / 12 / 13                  |
-| Retail 训练池 | 69   | 45 / 0 / 22              | 47 / 0 / 22（另 2 题有排除） |
+| 领域          | 题数 | v1：全对 / 全错 / 有对比 | v2：全对 / 全错 / 有对比                   |
+| ------------- | ---- | ------------------------ | ------------------------------------------ |
+| Airline train | 30   | 3 / 12 / 15              | 2 / 12 / 16                                |
+| Retail 训练池 | 69   | 39 / 0 / 30              | 45 / 0 / 22（另 2 题缺 1 次 trial 的记录） |
 
-- Retail 训练池有 47/69 题在 temperature 0 下 4 次全对。可学的空间主要在 Airline，以及 Retail 剩下的约 22 题。
+- Retail 训练池有 45/67 题在 temperature 0 下 4 次全对。可学的空间主要在 Airline，以及 Retail 剩下的约 22 题。
 - 训练用 temperature 1、每组 8 条，组内对比会比这里多。上一轮 GRPO（含 Telecom、官方数据）训练期 Retail reward 是
   0.868，72.5% 的组没有组内优势（[initial-audit.md §2.2](initial-audit.md)）。所以"Retail
   提升空间小"在训练里同样存在。
@@ -247,39 +236,39 @@ pass^k，以及转人工规则清零的条数。
 
 | 范围                   | 题数 | mean@4 = pass^1 |    pass^2 |    pass^4 | 4 次全对 | 有对有错 | 4 次全错 |
 | ---------------------- | ---: | --------------: | --------: | --------: | -------: | -------: | -------: |
-| v1 全部                |  813 |           0.912 |     0.859 |     0.783 |      637 |      161 |       15 |
-| v1 中 v2 保留的 648 题 |  648 |           0.934 |     0.887 |     0.815 |      528 |      114 |        6 |
-| v1 中 v2 丢掉的 165 题 |  165 |           0.827 |     0.747 |     0.661 |      109 |       47 |        9 |
-| **v2 合计**            |  648 |       **0.946** | **0.912** | **0.861** |      558 |       84 |        6 |
-| v2 Airline             |  380 |           0.926 |     0.881 |     0.818 |      311 |       63 |        6 |
+| v1 全部                |  813 |           0.903 |     0.844 |     0.763 |      620 |      177 |       16 |
+| v1 中 v2 保留的 648 题 |  648 |           0.926 |     0.875 |     0.799 |      518 |      123 |        7 |
+| v1 中 v2 丢掉的 165 题 |  165 |           0.814 |     0.723 |     0.618 |      102 |       54 |        9 |
+| **v2 合计**            |  648 |       **0.942** | **0.904** | **0.850** |      551 |       91 |        6 |
+| v2 Airline             |  380 |           0.918 |     0.868 |     0.800 |      304 |       70 |        6 |
 | v2 Airline keep        |  191 |           0.969 |     0.946 |     0.911 |      174 |       16 |        1 |
-| v2 Airline fix         |  189 |           0.882 |     0.816 |     0.725 |      137 |       47 |        5 |
+| v2 Airline fix         |  189 |           0.866 |     0.789 |     0.688 |      130 |       54 |        5 |
 | v2 Retail              |  268 |           0.976 |     0.955 |     0.922 |      247 |       21 |        0 |
 | v2 Retail keep         |   48 |           0.964 |     0.931 |     0.875 |       42 |        6 |        0 |
 | v2 Retail fix          |  220 |           0.978 |     0.961 |     0.932 |      205 |       15 |        0 |
 
 **结果**：
 
-- **丢掉的题分数更低**（0.827 对保留题的 0.934）。v1 里 4 次全错的 15 题，有 9 题在 v2 被丢掉，说明大部分全错的题是题本身有问题。v2 剩下
+- **丢掉的题分数更低**（0.814 对保留题的 0.926）。v1 里 4 次全错的 16 题，有 9 题在 v2 被丢掉，说明大部分全错的题是题本身有问题。v2 剩下
   6 题 4 次全错，都是 Airline（airline_361、365、437、505、710、871），还没看轨迹。
-- **同一批题，修过之后结果更稳**：有对有错从 114 降到 84，pass^4 从 0.815 升到 0.861，主要在 Retail（0.851 →
+- **同一批题，修过之后结果更稳**：有对有错从 123 降到 91，pass^4 从 0.799 升到 0.850，主要在 Retail（0.851 →
   0.922）。第三轮复核在指令里写明了"替谁办理"和地址写法，用户模拟器少了自由发挥的空间。
-- **单题的变化多是噪声**：648 题里 505 题分数不变，83 题升、59 题降。temperature 0 下 DeepSeek 用户仍有随机性，单题对比没有意义。
-- **最难的是修过的 Airline 题**（0.882，keep 是 0.969）：替换后的 gold 多是多步的改签、降舱。
+- **单题的变化多是噪声**：648 题里 497 题分数不变，87 题升、64 题降。temperature 0 下 DeepSeek 用户仍有随机性，单题对比没有意义。
+- **最难的是修过的 Airline 题**（0.866，keep 是 0.969）：替换后的 gold 多是多步的改签、降舱。
 
 **对后续实验设置的含义**：
 
-1. **v2 对 Qwen3.5-4B 太容易，不适合拿它直接做 RL**。86% 的题 4 次全对，GRPO 只有 84 题（13%）的组内有分数差异；按训练时
+1. **v2 对 Qwen3.5-4B 太容易，不适合拿它直接做 RL**。85% 的题 4 次全对，GRPO 只有 91 题（14%）的组内有分数差异；按训练时
    temperature 1 采样，差异会多一些，但这一点没测。
-1. **AReaL 的题比官方 test 容易得多**。同一模型、同一口径下，官方 fixed v2 base 集 Airline 0.388、Retail
-   0.849（§4），AReaL v2 是 0.926、0.976。AReaL 的 Airline 题多是单一预订上的一两步操作，官方 Airline
+1. **AReaL 的题比官方 test 容易得多**。同一模型、同一口径下，官方 fixed v2 base 集 Airline 0.350、Retail
+   0.844（§4），AReaL v2 是 0.918、0.976。AReaL 的 Airline 题多是单一预订上的一两步操作，官方 Airline
    题要在多个预订之间推理 policy。所以在 AReaL 上练出的分数提升，不一定能迁移到官方 Airline。
 1. **训练模型的候选是更弱的 Qwen3-4B-2507**（[capability-gaps.md §2.3](capability-gaps.md)）。它在官方
    fixed 上 Airline / Retail 只有 0.225–0.245 / 0.410–0.654，v2 的难度对它可能正合适。下一步先用本节口径在 v2 上评测
    Instruct 和 Thinking 两个版本，看有对有错的题有多少。DeepSeek 费用参照本节：Qwen3.5 跑 648 题约 26M prompt
    token，Thinking 的对话更长，会更多。
 1. **Telecom**：Qwen3.5-4B 在官方 Telecom 上 456/456
-   全对（[capability-gaps.md §2.1](capability-gaps.md)），AReaL Telecom 也一样容易（0.993，见
+   全对（[capability-gaps.md §2.1](capability-gaps.md)），AReaL Telecom 也一样容易（0.992，见
    [training-data.md §6](training-data.md)）。按上一条，Telecom 只对更弱的模型有用。
 
 ## 6 Qwen3-4B-2507 的 step 0 评测（2026-10-11）
@@ -340,10 +329,10 @@ mean@4 = pass^1。
 
 | 模型          | 变体     | 领域    | pass^1 | pass^2 | pass^4 | test  | train |
 | ------------- | -------- | ------- | ------ | ------ | ------ | ----- | ----- |
-| Qwen3.5-4B    | official | Airline | 0.780  | 0.710  | 0.620  | 0.787 | 0.775 |
-| Qwen3.5-4B    | official | Retail  | 0.820  | 0.703  | 0.535  | 0.769 | 0.848 |
-| Qwen3.5-4B    | fixed v2 | Airline | 0.388  | 0.283  | 0.229  | 0.438 | 0.356 |
-| Qwen3.5-4B    | fixed v2 | Retail  | 0.849  | 0.756  | 0.634  | 0.812 | 0.867 |
+| Qwen3.5-4B    | official | Airline | 0.745  | 0.653  | 0.560  | 0.775 | 0.725 |
+| Qwen3.5-4B    | official | Retail  | 0.814  | 0.694  | 0.526  | 0.762 | 0.841 |
+| Qwen3.5-4B    | fixed v2 | Airline | 0.350  | 0.233  | 0.160  | 0.400 | 0.317 |
+| Qwen3.5-4B    | fixed v2 | Retail  | 0.844  | 0.750  | 0.625  | 0.806 | 0.865 |
 | Qwen3.5-4B    | official | Telecom | 1.000  | 1.000  | 1.000  | 1.000 | 1.000 |
 | Instruct-2507 | fixed    | Airline | 0.225  | 0.107  | 0.060  | 0.200 | 0.242 |
 | Instruct-2507 | fixed    | Retail  | 0.410  | 0.235  | 0.096  | 0.438 | 0.395 |
@@ -376,7 +365,7 @@ temperature 0 下各题 4 次的结果分布（全对 / 有对有错 / 全错）
 
 | 运行              | Retail 条数 | Retail mean@4 | 去掉这些 episode 后 |
 | ----------------- | ----------- | ------------- | ------------------- |
-| Qwen3.5 fixed v2  | 12          | 0.848         | 0.871               |
+| Qwen3.5 fixed v2  | 12          | 0.844         | 0.867               |
 | Instruct fixed    | 42          | 0.410         | 0.452               |
 | Thinking fixed    | 41          | 0.654         | 0.718               |
 | Instruct official | 48          | 0.445         | 0.498               |
@@ -387,7 +376,9 @@ temperature 0 下各题 4 次的结果分布（全对 / 有对有错 / 全错）
 - 这些 episode 不该作为负样本进入训练，与 [capability-gaps.md §1.3](capability-gaps.md) 第 2 项是同一个问题。
 
 **转人工漏洞（[failure-taxonomy.md §3](failure-taxonomy.md)）。** Thinking 在 Airline 大量转人工：fixed
-规则清零 95 条，其中 57 条在 official 评分下是 1 分。official 0.655 与 fixed 0.245 之间的 41pp
-差距就来自这里。Instruct 很少转人工，而是直接执行修改，所以两个变体只差 10pp。
+规则清零 95 条，其中 57 条在 official 评分下是 1 分。Thinking 的 official 0.655 与 fixed 0.245 之间的 41pp
+差距就来自这里（Qwen3.5-4B 的同类差距约 39pp，见
+[benchmark-variants.md §3](benchmark-variants.md)）。Instruct 很少转人工，而是直接执行修改，所以两个变体只差
+10pp。
 
 **没有发现新的题目缺陷。** 精读过的失败轨迹都能对应到 agent 的具体错误。

@@ -4,10 +4,11 @@
 
 ## Context
 
-官方评分对"应该拒绝"的任务，agent 转人工也能拿满分，Airline 高分里约 30pp
-来自这里（[failure-taxonomy.md](../failure-taxonomy.md)）。加两条规则后，Retail 有 17 条原本成功的 episode
-被清零，其中 13 条在有 gold 写操作的题上；抽读到的都是写操作完成后用户提出 agent 做不了的要求，agent 才转人工，符合 Retail policy
-的"超出能力范围时转人工"。Airline 被清零 63
+官方评分对"应该拒绝"的任务，agent 转人工也能拿满分，official 评分下约 31.5% 的 Airline episode
+是靠这一条拿满分（[failure-taxonomy.md](../failure-taxonomy.md)）；official 到 fixed 的 Airline 总差距约
+39pp（[benchmark-variants.md §1.3](../benchmark-variants.md)）。加两条规则后，Retail 有 17 条原本成功的
+episode 被清零，其中 13 条在有 gold 写操作的题上；抽读到的都是写操作完成后用户提出 agent 做不了的要求，agent 才转人工，符合 Retail
+policy 的"超出能力范围时转人工"。Airline 被清零 59
 条，抽读到的是在回避拒绝（[benchmark-variants.md §1.3](../benchmark-variants.md)）。
 
 ## Decision

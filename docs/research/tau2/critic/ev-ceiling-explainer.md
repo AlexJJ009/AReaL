@@ -1,4 +1,4 @@
-# 解释方差（EV）与"第一个 token 的上限"
+# 解释方差（EV）与"按题目身份预测的上限"
 
 本文解释 [ev-ceiling.md](ev-ceiling.md) 里"Retail 的 EV 上限只有 0.20"是什么意思、为什么关心
 EV，以及这个上限是怎么算出来的。数字来自 [ev-ceiling.md](ev-ceiling.md) 的实验 475：Qwen3.5-4B 当
@@ -51,12 +51,12 @@ $$
 + \underbrace{\mathbb{E}_i\left[p_i(1-p_i)\right]}_{\text{题内 } W}
 $$
 
-对话刚开始的第一个 token，critic 只看得到题面，用户后面会说什么还没发生。它能做的最好预测是 $V = p_i$：
+如果 critic 只知道是哪道题（对话刚开始，只看得到题面），用户后面会说什么还没发生。它能做的最好预测是 $V = p_i$：
 
 - 题间的波动能被这个预测解释掉；
 - 题内的波动取决于还没发生的事，再好的 critic 也解释不了，是它必然留下的残差。
 
-所以第一个 token 的 EV 最高只能到：
+所以只按题目身份预测的 EV 最高只能到：
 
 $$
 \text{上限} = \frac{\text{题间}}{\text{总波动}} = \frac{T - W}{T}
@@ -98,14 +98,14 @@ $$
 
 题内的随机性主要来自哪一侧？[ev-ceiling.md](ev-ceiling.md) 做过对照：
 
-- policy 改为 greedy 解码，题内方差没有变小（0.124 对 0.104）；
-- 把用户换成豆包，题内方差更大（0.175）。
+- policy 改为 greedy 解码，题内方差没有变小（0.117 对 0.104）；
+- 把用户换成 Doubao 2.1 Turbo，题内方差更大（0.161 对 DeepSeek 的 0.101，v3 数据）。
 
 所以它主要来自**用户模拟器**，而不是 policy 的采样。
 
 ## 6. 局限
 
-- **只管第一个 token。** 对话往后走，critic 能看到用户实际说了什么、agent 调了什么工具，预测可以更准。验证报告里的 EV 是所有 token
+- **只按题目身份预测。** 对话往后走，critic 能看到用户实际说了什么、agent 调了什么工具，预测可以更准。验证报告里的 EV 是所有 token
   的平均，理论上可以超过这个上限。所以 Retail 上限低只说明"光凭题目学不到多少"，不等于"Retail 学不到"。critic 能否利用对话中途的信息，是
   critic EV case study（`issues/2026-10-14-critic-ev-case-study.md`）要回答的问题之一。
 - **估计本身有噪声。** 每题只跑 4 次，Retail 只有 40 题，所以 95% 区间很宽（按题 bootstrap 得到）。

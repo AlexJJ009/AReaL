@@ -5,8 +5,8 @@
 
 ## 1 Retail 训练信号不足：社区的做法（2026-10-10 调研）
 
-**问题**：fixed v2 下，Retail 训练池 69 题里有 47 题在 temperature 0 下 4
-次全对（[step0-evaluations.md §4](step0-evaluations.md)）。
+**问题**：fixed v2 下，Retail 训练池 69 题里有 45 题在 temperature 0 下 4 次全对（另有 2 题缺 1 次 trial
+的记录）（[step0-evaluations.md §4](step0-evaluations.md)）。
 
 - 对 GRPO 来说，全对的组 advantage 为 0，没有梯度。
 - 对 PPO / SAO 来说，critic 能给全对轨迹的中间步骤非零的 advantage。但这些题上从来没有失败样本，critic 学不到"哪里会失败"，信号很弱。所以
@@ -224,33 +224,33 @@ AReaL-SEA 论文）：
    0，DeepSeek-Flash 做用户和 NL judge，每题 4 次， `benchmark_variant=fixed`，`sglang:d8p1t1`，并发
    256，代码固定在 `1b17bc3f`。
 
-   - 3252 条 episode 中 3251 条有分。排除的 1 条是 `retail_524` 的上下文超过 32K。DeepSeek 用户侧实际用了 33M
-     prompt token、5.0M completion token。
+   - 3252 条 episode 全部有分，其中 44 条（Airline 40、Retail 4）超出 32K 上下文，按首次超出记 0 分。DeepSeek
+     用户侧实际用了 33M prompt token、5.0M completion token。
    - 产物：`tau2-eval-20261011-areal-pack/step0-areal-pack-v1-t0-deepseek/`。
 
    | 范围         | 题数 | mean@4 = pass^1 | pass^2 | pass^4 | 4 次全对 | 有对有错 | 4 次全错 |
    | ------------ | ---: | --------------: | -----: | -----: | -------: | -------: | -------: |
-   | 合计         |  813 |           0.912 |  0.859 |  0.783 |      637 |      161 |       15 |
-   | Airline      |  490 |           0.896 |  0.837 |  0.755 |      370 |      106 |       14 |
-   | Airline keep |  305 |           0.932 |  0.891 |  0.830 |      253 |       46 |        6 |
-   | Airline fix  |  185 |           0.838 |  0.749 |  0.630 |      117 |       60 |        8 |
-   | Retail       |  323 |           0.936 |  0.891 |  0.827 |      267 |       55 |        1 |
+   | 合计         |  813 |           0.903 |  0.844 |  0.763 |      620 |      177 |       16 |
+   | Airline      |  490 |           0.884 |  0.817 |  0.727 |      356 |      119 |       15 |
+   | Airline keep |  305 |           0.924 |  0.880 |  0.816 |      249 |       49 |        7 |
+   | Airline fix  |  185 |           0.818 |  0.714 |  0.578 |      107 |       70 |        8 |
+   | Retail       |  323 |           0.933 |  0.885 |  0.817 |      264 |       58 |        1 |
    | Retail keep  |  112 |           0.902 |  0.839 |  0.759 |       85 |       26 |        1 |
-   | Retail fix   |  211 |           0.954 |  0.918 |  0.863 |      182 |       29 |        0 |
+   | Retail fix   |  211 |           0.949 |  0.909 |  0.848 |      179 |       32 |        0 |
 
-   - **可用性**：798 / 813 题至少通过一次，说明 gold 可以达到。4 次全错的 15 题（Airline 14 道，Retail 只有
+   - **可用性**：797 / 813 题至少通过一次，说明 gold 可以达到。4 次全错的 16 题（Airline 15 道，Retail 只有
      retail_353）不能直接认定为题错，要看轨迹。
-   - **这份数据对当前模型偏容易**：同一模型、同一口径下，官方 fixed v2 base 集是 0.708（Airline 0.388，Retail 0.849，见
-     [step0-evaluations.md §4](step0-evaluations.md)），这里是 0.912。 temperature 0 下，78% 的题
+   - **这份数据对当前模型偏容易**：同一模型、同一口径下，官方 fixed v2 base 集是 0.694（Airline 0.350，Retail 0.844，见
+     [step0-evaluations.md §4](step0-evaluations.md)），这里是 0.903。 temperature 0 下，76% 的题
      4 次全对。
-   - **Retail 的 fix 比 keep 还高**（0.954 对 0.902）：fix
-     往往是在指令里写明支付方式、变体、航班，让用户能直接说出唯一答案。这正是修复要做的，但也让题变容易了。 Airline 的 fix 反而低于 keep（0.838 对
-     0.932），因为替换后的 gold 多是多步的改签、降舱。
+   - **Retail 的 fix 比 keep 还高**（0.949 对 0.902）：fix
+     往往是在指令里写明支付方式、变体、航班，让用户能直接说出唯一答案。这正是修复要做的，但也让题变容易了。 Airline 的 fix 反而低于 keep（0.818 对
+     0.924），因为替换后的 gold 多是多步的改签、降舱。
 
 1. **失败轨迹复核**（pueue 任务 439，Codex gpt-6.1-sol，规则见 `EVAL_REVIEW.md`）。任务 438 因为 codex 等待
    stdin 挂了 4 小时，没有产出，入口加了 `< /dev/null` 后重跑。
 
-   - 4 次全错的 15 题：9 道是 agent 的错，题本身没问题；6 道是题的错。
+   - 复核的 4 次全错的 15 题：9 道是 agent 的错，题本身没问题；6 道是题的错。
    - 从"有对有错"的 161 题里随机抽的 40 题：15 道是 agent 的错，25 道是题或用户模拟器的错。
 
 ## 4 v1 pack 审查（2026-10-11，结论：不能直接训练）
@@ -391,7 +391,7 @@ decisions 文件），`scratch/`（Codex 的验证文件和 Claude 抽审），`
   动作放在对应的一方（agent 或用户）重放（`0634cfe6`）。
 
 **评测 v0**（Qwen3.5-4B，口径同 [step0-evaluations.md §5](step0-evaluations.md)，代码
-`6d477635`，261 题 × 4）：mean@4 0.993，pass^2 0.987，pass^4 0.973；254 题 4 次全对，7 题有对有错，没有 4
+`6d477635`，261 题 × 4）：mean@4 0.992，pass^2 0.985，pass^4 0.973；254 题 4 次全对，7 题有对有错，没有 4
 次全错的题。DeepSeek 用户侧用了 157M prompt token，是 v2 的 6 倍：排障对话轮数多，每轮都带完整历史。
 
 **Codex 审题**：
@@ -412,7 +412,7 @@ decisions 文件），`scratch/`（Codex 的验证文件和 Claude 抽审），`
   GB，用户若少充也能解决问题，却拿不到分。改成"要恰好 2 GB"。
 
 **v1 pack**：`_cache/tau2-areal-telecom-pack-20261011-v1`，261 题（50 题改了指令，195 题改了
-reward_basis），全部 gold 1 分、空轨迹 0 分。v1 只改了 50 题的一句话，Qwen3.5 在 v0 上已经 0.993，所以没有用 Qwen3.5
+reward_basis），全部 gold 1 分、空轨迹 0 分。v1 只改了 50 题的一句话，Qwen3.5 在 v0 上已经 0.992，所以没有用 Qwen3.5
 重评。
 
 **对后续实验的含义**：Telecom 对 Qwen3.5-4B 没有训练信号。Qwen3-4B-2507 在官方 Telecom 上约

@@ -1,5 +1,9 @@
 # 三种用户模拟器下的失败归因：哪些是用户模拟器的问题，哪些是 agent 要补的能力
 
+> 状态：本报告是 v2 数据上的 case study，其中 Doubao 一组是方舟服务异常期间的运行，已被
+> [user-sim-case-study-v3/](../user-sim-case-study-v3/REPORT.md)（五个模拟器，服务正常）取代。保留它是因为
+> fixed-v3 的补丁依据在第 6 节；Doubao 相关的数字不要引用。
+
 2026-10-12。标注：Codex（gpt-6.1-sol，pueue 477）逐条完成；复核与重写：Claude，按类别读了代表轨迹，见第 2.4 节。Codex
 的原始报告保留在 `_artifacts/AReaL/codex-sao-math/user-sim-20261012/case-study/REPORT.md`。
 
@@ -180,11 +184,9 @@ M14。致败原因仍归用户，因为任务说明明确要求用户不提供�
   [doubao retail:9 t0](/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/doubao-base-u0p0/trajectories/retail:9:trial0/71f2b6e3b65e4db189d47dfa37bebbb5.json)：agent
   问候 "Hi! How can I help you today?"，用户第 1 条回复只有 `###OUT-OF-SCOPE###`。这道题的任务说明是完整的：身份
   mei_kovacs_8020、邮编 28236、要换水瓶和台灯，没有缺信息。10 个 U4a 都出现在 Doubao 下，涉及 retail:9（3 次）、108（2
-  次）、42、56、65、71 和 airline:32。**原因未查明**：可能和 Doubao 的 thinking
-  有关，比如推理用完了输出预算、正文为空，但这只是猜测，需要看原始响应才能确认。
-- **2026-10-12 补充：U4a 很可能是方舟服务端异常。** 同样代码和配置下，充值后的 Doubao 重跑（pueue 488，240 个
-  episode）开场就结束的是 0 个，空回复重试 0 次；账户临近欠费时的一次运行（486）是 10 个，还出现过一条无关的"电商商品信息提取结果"。所以这 10 个
-  U4a 不宜算作 Doubao 作为用户模拟器的能力问题（[user-simulator.md §2](../user-simulator.md)）。
+  次）、42、56、65、71 和 airline:32。这 10 个 U4a 来自方舟服务端异常（账户临近欠费时的运行，还出现过一条无关的"电商商品信息提取结果"），不是
+  Doubao 作为用户模拟器的行为；账户充值后的重跑（pueue 488，240 个 episode）开场就结束的是 0
+  个（[user-simulator.md §2](../user-simulator.md)）。
 - **U4b，缩小目标后结束（3 个）。**
   [doubao retail:108 t3](/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/user-sim-20261012/api-user/doubao-base-u0p0/trajectories/retail:108:trial3/9711cd545660412aae8f0b00fe3e6a5f.json)：任务是退掉除平板以外的物品，用户把目标改成了"问一下能退多少钱"，得知金额
   346.93 后就发了 STOP。
@@ -241,7 +243,7 @@ instead?"，agent 才转去用 modify，最后成功了。gold 的做法正是 m
 
 | 缺口                                 | 代码                 | 本次 DeepSeek / Doubao / Qwen | [capability-gaps.md §1.2](../capability-gaps.md)（官方 base 集）  | 三个模拟器下同一题都出现       |
 | ------------------------------------ | -------------------- | ----------------------------- | ----------------------------------------------------------------- | ------------------------------ |
-| 资格判断正确，却用转人工代替拒绝     | M2a                  | 21 / 20 / 18                  | 头号缺口，Airline 34.8pp                                          | airline:24、26、31、35、45、48 |
+| 资格判断正确，却用转人工代替拒绝     | M2a                  | 21 / 20 / 18                  | 头号缺口，占 Airline 完成 episode 的 34.8%                        | airline:24、26、31、35、45、48 |
 | 误解工具能力或订单状态               | M14                  | 9 / 7 / 10                    | 已有                                                              | airline:44                     |
 | 报错后不问用户就改参数重写           | M15                  | 4 / 2 / 2                     | 已有                                                              | retail:36                      |
 | 支付 / 退款路由                      | M5                   | 2 / 3 / 5                     | 已有                                                              | airline:18                     |

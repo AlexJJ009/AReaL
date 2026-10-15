@@ -38,7 +38,7 @@ Status。编号只在本目录内有效。原因和证据留在链接的分析�
   初始化为训练集均值，同一学习率。状态：已采纳（2026-10-13，`7da3a4f3`、`275548de`）。
 - [0013](0013-critic-data-mix.md) critic 训练数据配比：简单题降采样，保留全部有信号题。状态：已采纳（2026-10-13）。
 - [0014](0014-sao-critic-510-step55.md) SAO 使用 critic 510 第 55 步的 checkpoint（看 test
-  挑的）。状态：已采纳（用户，2026-10-14）；SAO 运行中。
+  挑的）。状态：已采纳（用户，2026-10-14）；SAO 534 已完成。
 - [0015](0015-sao-eval-save-every-10-steps.md) SAO 正式运行每 10
   步评测并存档。状态：已采纳（用户，2026-10-14；`b8d95027`）。
 - [0016](0016-sglang-mem-fraction-0.5.md) critic mix 重跑把 SGLang `mem_fraction_static` 降到
