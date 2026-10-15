@@ -105,8 +105,10 @@ def update_critic_before_actor(
             if isinstance(row[key], torch.Tensor):
                 row[key] = row[key].detach().clone()
     critic_reports = []
-    for _ in range(updates):
-        report = critic.ppo_update(copy.deepcopy(fixed))
+    for update_index in range(1, updates + 1):
+        report = critic.ppo_update(
+            copy.deepcopy(fixed), critic_update_index=update_index
+        )
         require_single_update(report, "critic")
         critic_reports.append(report)
         critic.step_lr_scheduler()

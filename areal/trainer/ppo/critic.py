@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import functools
+from contextlib import nullcontext
 from typing import Any
 
 import torch
@@ -43,8 +44,18 @@ class PPOCritic:
 
     @trace_perf("ppo_critic.ppo_update", category="compute")
     @stats_tracker.scope_func_wrapper("ppo_critic")
-    def ppo_update(self, data: list[dict[str, Any]]) -> dict[str, float]:
-        return batched_call(self._ppo_update, data, unpack=False)
+    def ppo_update(
+        self, data: list[dict[str, Any]], *, critic_update_index: int | None = None
+    ) -> dict[str, float]:
+        # SAO update 1 sees the fresh batch before fitting; later updates see
+        # the same targets after earlier steps. Scope on the worker (also over
+        # RPC), including denominators, so no updates' forward stats are pooled.
+        with (
+            stats_tracker.scope(f"critic_update_{critic_update_index}")
+            if critic_update_index is not None
+            else nullcontext()
+        ):
+            return batched_call(self._ppo_update, data, unpack=False)
 
     @trace_perf("ppo_critic.grad_norm", category="compute")
     @stats_tracker.scope_func_wrapper("critic_diagnostic")
@@ -85,6 +96,8 @@ class PPOCritic:
         )
         if self.config.eps_clip is not None:
             scalars["eps_clip"] = self.config.eps_clip
+        # Multiple optimizer minibatches mix predictions from different weights.
+        scalars["critic_single_minibatch"] = self.config.ppo_n_minibatches == 1
         stats_tracker.scalar(**scalars)
         ########## Logging code ends ##########
 
