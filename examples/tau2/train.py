@@ -156,9 +156,22 @@ def validate_tau2_recipe(
         )
     if config.train_batch_episodes is None:
         raise ValueError("train_batch_episodes must be frozen explicitly")
-    prompt_groups = validate_episode_batch(
-        config.algorithm, config.train_batch_episodes
-    )
+    flexible_grpo = config.algorithm == "grpo" and bool(config.train_task_packs)
+    if flexible_grpo:
+        samples = config.gconfig.n_samples
+        if (
+            samples < 2
+            or config.train_batch_episodes <= 0
+            or config.train_batch_episodes % samples
+        ):
+            raise ValueError(
+                "Multi-pack GRPO requires n_samples >= 2 dividing train_batch_episodes"
+            )
+        prompt_groups = config.train_batch_episodes // samples
+    else:
+        prompt_groups = validate_episode_batch(
+            config.algorithm, config.train_batch_episodes
+        )
     if config.train_dataset.batch_size != prompt_groups:
         raise ValueError(
             "train_dataset.batch_size is the prompt-group count and must equal "
@@ -178,7 +191,7 @@ def validate_tau2_recipe(
             "domain_effective_episodes must cover selected domains exactly"
         )
     expected_samples = 8 if config.algorithm == "grpo" else 1
-    if config.gconfig.n_samples != expected_samples:
+    if not flexible_grpo and config.gconfig.n_samples != expected_samples:
         raise ValueError(
             f"{config.algorithm} requires gconfig.n_samples={expected_samples}"
         )
@@ -245,14 +258,17 @@ def validate_tau2_recipe(
             and actor.reward_bias == 0.0
             and actor.reward_norm is None
             and actor.adv_norm is None
-            and config.critic.eps_clip is None
+            and (
+                config.critic.eps_clip is None
+                or (bool(config.train_task_packs) and config.critic.eps_clip == 0.5)
+            )
             and actor.ppo_n_minibatches == 1
             and config.critic.ppo_n_minibatches == 1
         )
         if not required:
             raise ValueError(
                 "SAO requires the paper Direct DIS bounds, raw gamma=1 rewards, "
-                "dual lambdas, unclipped critic MSE, one minibatch, and two "
+                "dual lambdas, unclipped critic MSE (or PPO-matched value clip=0.5), one minibatch, and two "
                 "critic updates before the actor"
             )
     elif config.algorithm == "ppo":
@@ -291,6 +307,11 @@ def validate_tau2_recipe(
             rejection.lower,
         ) != ("token", "mask", "ratio", 5.0, None):
             raise ValueError("Async GRPO requires token ratio rejection above 5")
+    if config.train_task_packs and config.algorithm == "sao":
+        from scripts.tau2.train_critic_head import validate_head_config
+
+        if config.critic.path == config.actor.path:
+            validate_head_config(config)
     return domains
 
 
@@ -408,7 +429,9 @@ def resolve_actor_snapshot(config: Tau2PPOConfig) -> str:
     config.vllm.model = snapshot
     if config.ref is not None and config.ref.path == source:
         config.ref.path = snapshot
-    if config.algorithm == "ppo" and config.critic is not None:
+    if config.critic is not None and (
+        config.algorithm == "ppo" or bool(config.train_task_packs)
+    ):
         config.critic.path = (
             snapshot
             if config.critic.path == source
@@ -510,11 +533,14 @@ def main(
     )
     if _dataset_split(config.train_dataset, "train") != "train":
         raise ValueError("Gradient training must use official train tasks")
-    if config.algorithm == "ppo":
+    matched_pool = config.algorithm == "ppo" or bool(config.train_task_packs)
+    if matched_pool:
         from examples.tau2.ppo_data import build_ppo_train_dataset
 
         if train_rows_hook is not None or config.train_task_pack is not None:
-            raise ValueError("PPO uses train_task_packs through the standard entry")
+            raise ValueError(
+                "Multi-pack recipes use train_task_packs through the standard entry"
+            )
         train_dataset = build_ppo_train_dataset(config, dataset_kwargs)
     elif train_rows_hook is None:
         train_dataset = get_tau2_dataset(
@@ -541,13 +567,13 @@ def main(
         config.total_train_steps = available_steps
     if not 0 < config.total_train_steps <= available_steps:
         raise ValueError("total_train_steps exceeds the configured dataset and epochs")
-    if config.algorithm == "ppo":
+    if matched_pool:
         if (
             config.experiment_mode == "formal"
             and config.total_train_steps != available_steps
         ):
             raise ValueError(
-                "Formal PPO must consume complete epochs for uniform task coverage"
+                "Formal multi-pack policy must consume complete epochs for uniform task coverage"
             )
         if (
             config.experiment_mode == "qualification"
@@ -561,7 +587,7 @@ def main(
     resolve_effective_episodes(config, len(train_dataset))
     valid_dataset = None
     if config.valid_dataset is not None:
-        if config.algorithm == "ppo":
+        if matched_pool:
             from examples.tau2.ppo_data import build_ppo_eval_dataset
 
             valid_dataset = build_ppo_eval_dataset(config, dataset_kwargs)
@@ -574,9 +600,7 @@ def main(
         and valid_dataset is None
     ):
         raise ValueError("Formal/tune τ² SAO requires a validation dataset")
-    if (
-        train_rows_hook is not None or config.algorithm == "ppo"
-    ) and valid_dataset is not None:
+    if (train_rows_hook is not None or matched_pool) and valid_dataset is not None:
         train_ids = {
             (row["domain"], row["task_id"], row.get("task_pack"))
             for row in train_dataset
@@ -596,7 +620,7 @@ def main(
     )
     trainer_cls = (
         Tau2PPOTrainer
-        if config.algorithm == "ppo"
+        if config.algorithm == "ppo" or (matched_pool and config.algorithm == "sao")
         else Tau2AsyncEvalTrainer
         if use_native_async_eval
         else PPOTrainer

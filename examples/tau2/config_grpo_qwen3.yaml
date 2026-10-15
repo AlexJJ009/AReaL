@@ -1,0 +1,46 @@
+# Qwen3 GRPO with PPO's pool/evaluation and the historical GRPO loss recipe.
+# Default: 2 * ceil(747 / 8) = 188 steps, 11952 episodes.
+# launch_qwen3.sh also provides matched: ceil(747 / 16) = 47 steps, 5976 episodes.
+defaults:
+  - config_ppo
+  - _self_
+
+experiment_name: tau2-grpo-qwen3
+algorithm: grpo
+total_train_epochs: 2
+train_batch_episodes: 64
+critic: null
+# No colocated critic; keep upstream GRPO's expandable allocator, without TMS.
+enable_offload: false
+
+gconfig:
+  n_samples: 8
+
+actor:
+  eps_clip: 0.2
+  eps_clip_higher: 0.28
+  reward_norm:
+    mean_level: group
+    std_level: group
+    group_size: ${gconfig.n_samples}
+  adv_norm: null
+  critic_gae_lambda: null
+  scheduling_spec:
+    - task_type: worker
+      port_count: 2
+      gpu: 1
+      cpu: 2
+      mem: 64
+      cmd: python3 -m areal.infra.rpc.rpc_server
+      env_vars:
+        PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+        AREAL_OPENAI_CACHE_MISMATCH_DUMP_DIR: ${cluster.fileroot}/tau2-prefix-mismatches
+        AREAL_OPENAI_CACHE_MISMATCH_DUMP_LIMIT: "3"
+
+train_dataset:
+  batch_size: 8
+
+stats_logger:
+  wandb:
+    project: ${oc.env:TAU2_WANDB_PROJECT,areal-tau2-grpo}
+    tags: [tau2, async-grpo, qwen3-4b-instruct, proposed]
