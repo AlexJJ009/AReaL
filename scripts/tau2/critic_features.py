@@ -195,6 +195,11 @@ def selected_positions(row: dict[str, Any], *, train_k: int, seed: int):
     return positions[indices], len(positions)
 
 
+def critic_backbone(model):
+    """Return the decoder shared by Qwen3 token classification and Qwen3.5."""
+    return getattr(model.model, "language_model", model.model)
+
+
 def extract_score_inputs(model, row: dict[str, Any], positions=None):
     """Get the exact token critic score input without evaluating a vocabulary head."""
     import torch
@@ -210,7 +215,7 @@ def extract_score_inputs(model, row: dict[str, Any], positions=None):
     ).reshape(1, -1)
     model.eval()
     with torch.inference_mode():
-        outputs = model.model.language_model(
+        outputs = critic_backbone(model)(
             input_ids=input_ids,
             attention_mask=attention,
             use_cache=False,
