@@ -31,6 +31,35 @@ def _config(monkeypatch, tmp_path):
     return config
 
 
+def test_per_episode_microbatch_config_reaches_head_critic_and_dump(
+    monkeypatch, tmp_path
+):
+    """The opt-in survives structured loading, worker config conversion and dumps."""
+    from dataclasses import asdict
+
+    from omegaconf import OmegaConf
+
+    from examples.tau2.critic_head import Tau2HeadCriticConfig
+    from examples.tau2.utils import Tau2ActorConfig, Tau2CriticConfig
+
+    assert not Tau2ActorConfig().per_episode_microbatching
+    assert not Tau2CriticConfig().per_episode_microbatching
+    config = _config(monkeypatch, tmp_path)
+    assert config.actor.per_episode_microbatching
+    assert config.critic.per_episode_microbatching
+
+    head = Tau2HeadCriticConfig.from_critic(
+        config.critic, head_bias_init=config.critic_head_bias_init, head_lr=None
+    )
+
+    assert head.per_episode_microbatching
+    assert head.mb_spec.max_tokens_per_mb == 32768
+    dumped = OmegaConf.to_container(OmegaConf.structured(config), resolve=True)
+    assert dumped["actor"]["per_episode_microbatching"] is True
+    assert dumped["critic"]["per_episode_microbatching"] is True
+    assert asdict(head)["per_episode_microbatching"] is True
+
+
 def test_ppo_default_contract_accepts_full_critic_and_async_loss(monkeypatch, tmp_path):
     """The shipped PPO config must select the intended engine/loss and defaults."""
     config = _config(monkeypatch, tmp_path)

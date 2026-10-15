@@ -2524,10 +2524,13 @@ class FSDPEngine(TrainEngine):
             input_ = amend_position_ids(input_)
 
         mb_spec = self.config.mb_spec
-        if is_qwen3_5_model(self.model_config.model_type):
+        if is_qwen3_5_model(self.model_config.model_type) or getattr(
+            self.config, "per_episode_microbatching", False
+        ):
             # GatedDeltaNet/convolution do not reset their state at cu_seqlens.
-            # Keep one episode per forward; n_mbs is a hint, never permission
-            # to mix recurrent states. Report actual count from train_batch.
+            # Other models can opt into the same split to reduce logits peaks.
+            # Keep one episode per forward, using the actual local batch size.
+            # Report actual count from train_batch; retain the token-cap check.
             mb_spec = MicroBatchSpec.new(
                 mb_spec, n_mbs=input_["input_ids"].shape[0], granularity=1
             )

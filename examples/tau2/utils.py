@@ -16,6 +16,7 @@ from tau2.data_model.message import Message
 from tau2.data_model.simulation import RewardInfo
 from tau2.data_model.tasks import Task
 
+from areal.api.cli_args import PPOActorConfig, PPOCriticConfig
 from areal.trainer.async_eval import AsyncEvalPPOConfig
 from areal.trainer.rollout_batch import FiniteEpochBatcher  # noqa: F401
 
@@ -157,9 +158,27 @@ def nl_judge_metadata(econfig: Tau2EnvConfig) -> dict:
 
 
 @dataclass
+class Tau2ActorConfig(PPOActorConfig):
+    """Actor settings carried unchanged to FSDP workers."""
+
+    # FSDP only: keep each episode in its own microbatch under the token cap.
+    per_episode_microbatching: bool = False
+
+
+@dataclass
+class Tau2CriticConfig(PPOCriticConfig):
+    """Critic settings carried unchanged to FSDP workers."""
+
+    # FSDP only: applies to values, loss evaluation and gradient computation.
+    per_episode_microbatching: bool = False
+
+
+@dataclass
 class Tau2PPOConfig(AsyncEvalPPOConfig):
     """PPO configuration with Tau2-specific settings."""
 
+    actor: Tau2ActorConfig = field(default_factory=Tau2ActorConfig)
+    critic: Tau2CriticConfig | None = None
     econfig: Tau2EnvConfig = field(default_factory=Tau2EnvConfig)
     # OmegaConf structured configs cannot materialize ``Literal`` annotations
     # in the AReaL version used by the launcher, so validate the enum here.

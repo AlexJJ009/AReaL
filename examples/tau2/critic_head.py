@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from examples.tau2.utils import Tau2CriticConfig
+
 from areal.api.cli_args import PPOCriticConfig
 from areal.engine import FSDPPPOCritic
 from areal.models.transformers.token_critic import (
@@ -36,7 +38,7 @@ logger = logging.getLogger("Tau2Train")
 
 
 @dataclass
-class Tau2HeadCriticConfig(PPOCriticConfig):
+class Tau2HeadCriticConfig(Tau2CriticConfig):
     """Critic config carrying the head settings to the remote engine workers."""
 
     head_bias_init: float = 0.5
