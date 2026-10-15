@@ -342,26 +342,18 @@ def mini_experiment(store):
     return experiment
 
 
-def test_resident_features_exact_streaming_simulation_without_rereads(
-    cache, monkeypatch
-):
-    """Resident and legacy paths have identical gradients, final heads and EV rows."""
-    legacy = mini_experiment(pre.PreexpStore(cache, resident=False))
-    expected, expected_head = legacy.simulate(
+def test_cached_features_repeat_simulation_without_rereads(cache, monkeypatch):
+    """Repeated runs have identical gradients, heads and EV rows without shard I/O."""
+    experiment = mini_experiment(pre.PreexpStore(cache))
+    expected, expected_head = experiment.simulate(
         lr=1e-3, steps=6, batch=2, diagnostics=True
     )
-    resident_store = pre.PreexpStore(cache)
-    calls = []
-    original = torch.load
 
-    def load(path, **kwargs):
-        calls.append(str(path))
-        return original(path, **kwargs)
+    def no_load(*args, **kwargs):
+        pytest.fail("Simulation reread cached feature shards")
 
-    monkeypatch.setattr(torch, "load", load)
-    resident = mini_experiment(resident_store)
-    actual, head = resident.simulate(lr=1e-3, steps=6, batch=2, diagnostics=True)
-    assert len(calls) == 2
+    monkeypatch.setattr(torch, "load", no_load)
+    actual, head = experiment.simulate(lr=1e-3, steps=6, batch=2, diagnostics=True)
     assert actual == expected
     for a, b in zip(head, expected_head, strict=True):
         torch.testing.assert_close(a, b, rtol=0, atol=0)
@@ -370,7 +362,7 @@ def test_resident_features_exact_streaming_simulation_without_rereads(
         "weight": torch.tensor([[0.25, -0.5, 0.125]]),
         "bias": torch.tensor([0.625]),
     }
-    baseline, _ = resident.simulate(lr=0.0, steps=1, batch=2, initial_head=initial)
+    baseline, _ = experiment.simulate(lr=0.0, steps=1, batch=2, initial_head=initial)
     assert baseline["evaluations"][0]["weight_norm"] == pytest.approx(
         float(initial["weight"].norm())
     )

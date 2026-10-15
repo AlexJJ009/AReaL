@@ -304,40 +304,11 @@ def export_head(store, weight, bias, out, penalty):
 
 
 class PreexpStore(FeatureStore):
-    def __init__(self, manifest, *, resident=True):
-        # Intermediate hidden states deliberately differ from final score input.
-        self.path = Path(manifest)
-        self.manifest = json.loads(self.path.read_text())
-        if self.manifest.get("schema") != "tau2-critic-features-v1":
-            raise ValueError("Unsupported feature manifest")
-        semantics = self.manifest.get("feature_semantics", "")
-        if semantics not in (
-            "score_input_final_norm_shifted_action_prefix",
-            "intermediate_layer_output_shifted_action_prefix",
-        ):
-            raise ValueError("Unknown causal prefix feature semantics")
-        self.hidden_size = int(self.manifest["hidden_size"])
-        self.episodes = []
-        self.sampled_training = False
-        self._train = None
-        self.resident = resident
-        self._resident_shards = None
-
-    def shards(self, split=None):
-        """Hash/load each feature shard once; keep arithmetic and row order intact."""
-        if not self.resident:
-            yield from super().shards(split)
-            return
-        if self._resident_shards is None:
-            self._resident_shards = list(super().shards())
-        for x, shard, indices in self._resident_shards:
-            if split is not None:
-                indices = torch.tensor(
-                    [i for i, value in enumerate(shard["split"]) if value == split],
-                    dtype=torch.long,
-                )
-            if len(indices):
-                yield x[indices], shard, indices
+    # Intermediate hidden states deliberately differ from final score input.
+    _feature_semantics = (
+        "score_input_final_norm_shifted_action_prefix",
+        "intermediate_layer_output_shifted_action_prefix",
+    )
 
     @staticmethod
     def metadata(shard, index):
