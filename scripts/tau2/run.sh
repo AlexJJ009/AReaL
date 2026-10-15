@@ -11,7 +11,7 @@ Usage:
   scripts/tau2/run.sh qualification {mixed|airline|retail|telecom} [overrides...]
   scripts/tau2/run.sh data critic [overrides...]
   scripts/tau2/run.sh data critic-head [overrides...]   (biased, mean-initialised value head)
-  scripts/tau2/run.sh policy {mixed|airline|retail|telecom} {grpo|sao|ppo} [overrides...]
+  scripts/tau2/run.sh policy {mixed|airline|retail|telecom} {grpo|sao|ppo|sao-qwen3|grpo-qwen3} [overrides...]
   scripts/tau2/run.sh policy-pack {mixed|airline|retail} sao train_task_pack=/absolute/pack [overrides...]
     Requires econfig.benchmark_variant=fixed and equal repeats of the combined pool.
 
@@ -44,7 +44,7 @@ case "${SELECTOR}" in
 esac
 
 export AREAL_ALLOW_DEFAULT_ADMIN_KEY=1
-if [[ "${SELECTOR}" == "policy" && "${2:-}" == "ppo" ]]; then
+if [[ "${SELECTOR}" == "policy" && "${2:-}" =~ ^(ppo|sao-qwen3|grpo-qwen3)$ ]]; then
   export TAU2_ACTOR_PATH="${TAU2_ACTOR_PATH:-Qwen/Qwen3-4B-Instruct-2507@cdbee75f17c01a7cc42f958dc650907174af0554}"
 else
   export TAU2_ACTOR_PATH="${TAU2_ACTOR_PATH:-Qwen/Qwen3.5-4B@851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a}"
@@ -158,6 +158,17 @@ case "${SELECTOR}" in
     fi
     ALGORITHM="$1"
     shift
+    POLICY_CONFIG=""
+    case "$ALGORITHM" in
+      sao-qwen3|grpo-qwen3)
+        if [[ "$MODE" != mixed || "$SELECTOR" != policy ]]; then
+          echo 'Qwen3 matched recipes require policy mixed' >&2
+          exit 2
+        fi
+        POLICY_CONFIG="${REPO_ROOT}/examples/tau2/config_${ALGORITHM%-qwen3}_qwen3.yaml"
+        ALGORITHM="${ALGORITHM%-qwen3}"
+        ;;
+    esac
     if [[ "${ALGORITHM}" != "grpo" && "${ALGORITHM}" != "sao" && "${ALGORITHM}" != "ppo" ]]; then
       printf 'Unsupported tau2 policy algorithm in this entrypoint: %s\n' "${ALGORITHM}" >&2
       usage >&2
@@ -256,11 +267,11 @@ case "${SELECTOR}:${MODE}" in
       : "${TAU2_CRITIC_PATH:?Set TAU2_CRITIC_PATH to the restored critic checkpoint}"
       reject_sao_domain_identity_overrides "$@"
       exec "${PYTHON_BIN}" "${POLICY_ENTRY}" \
-        --config "${REPO_ROOT}/examples/tau2/config_sao.yaml" \
+        --config "${POLICY_CONFIG:-${REPO_ROOT}/examples/tau2/config_sao.yaml}" \
         "$@"
     fi
     exec "${PYTHON_BIN}" "${POLICY_ENTRY}" \
-      --config "${REPO_ROOT}/examples/tau2/config_grpo.yaml" \
+      --config "${POLICY_CONFIG:-${REPO_ROOT}/examples/tau2/config_grpo.yaml}" \
       "$@"
     ;;
   policy:airline|policy:retail|policy:telecom|policy-pack:airline|policy-pack:retail|policy-pack:telecom)

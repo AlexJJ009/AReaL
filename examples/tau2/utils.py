@@ -201,10 +201,10 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
     critic_task_pack: str | None = None
     # SAO pack wrapper only: combine these tasks with the official train split.
     train_task_pack: str | None = None
-    # PPO: disjoint task packs, alongside official fixed Airline/Retail train.
+    # PPO-matched policy recipes: packs plus official fixed Airline/Retail train.
     train_task_packs: list[str] = field(default_factory=list)
     samples_per_task_per_epoch: int = 1
-    # ADR-0012 backbone critic initialisation (PPO and critic-head): value-head bias
+    # ADR-0012 backbone critic initialisation (matched policies and critic-head): bias
     # init (the expected success rate) and head learning rate (None: critic lr).
     critic_head_bias_init: float | None = None
     critic_head_lr: float | None = None

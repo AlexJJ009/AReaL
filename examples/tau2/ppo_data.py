@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Uniform multi-pack PPO training and a fixed three-domain test set."""
+"""Shared PPO-matched multi-pack training and fixed three-domain test set."""
 
 from __future__ import annotations
 
@@ -56,7 +56,10 @@ def build_ppo_train_dataset(
     counts = Counter(r["domain"] for r in rows)
     if set(counts) != selected:
         raise ValueError("Every selected training domain requires tasks")
-    expected = {d: n * config.samples_per_task_per_epoch for d, n in counts.items()}
+    expected = {
+        d: n * config.samples_per_task_per_epoch * config.gconfig.n_samples
+        for d, n in counts.items()
+    }
     if (
         config.domain_effective_episodes
         and config.domain_effective_episodes != expected
@@ -66,7 +69,14 @@ def build_ppo_train_dataset(
         )
     config.domain_effective_episodes = expected
     scheduled = build_sampling_schedule(
-        rows, domain_effective_episodes=expected, algorithm="ppo", seed=config.seed
+        rows,
+        domain_effective_episodes={
+            d: n // config.gconfig.n_samples for d, n in expected.items()
+        },
+        # Schedule prompt groups with PPO's one-row rule; sampling expands each
+        # prompt later. This preserves PPO order for any proposed GRPO group size.
+        algorithm="ppo",
+        seed=config.seed,
     )
     if config.task_limit is not None and config.task_limit < len(scheduled):
         raise ValueError("task_limit must not truncate the PPO schedule")

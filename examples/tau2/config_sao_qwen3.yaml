@@ -1,0 +1,33 @@
+# Qwen3 SAO comparison against PPO v3. The Qwen3.5 SAO recipe stays unchanged.
+# Inherit PPO's model, data, cadence and head initialization. Retain the SAO
+# attention freeze and historical formal-run critic lr (pending confirmation).
+defaults:
+  - config_ppo
+  - _self_
+
+experiment_name: tau2-sao-qwen3
+algorithm: sao
+critic_updates_before_actor: 2
+
+actor:
+  recompute_logprob: false
+  use_decoupled_loss: false
+  rejection_sampling: null
+  adv_norm: null
+  gae_lambda: areal.trainer.ppo.lambda_fn.sao_length_adaptive_gae
+  gae_lambda_kwargs:
+    alpha: 1.5
+  use_direct_dis_loss: true
+  dis_epsilon_low: 0.3
+  dis_epsilon_high: 5.0
+
+critic:
+  freeze_critic_attention: true
+  optimizer:
+    # Single decision point: override critic.optimizer.lr=1e-5 to match PPO.
+    lr: 5.0e-06
+
+stats_logger:
+  wandb:
+    project: ${oc.env:TAU2_WANDB_PROJECT,areal-tau2-sao}
+    tags: [tau2, sao, qwen3-4b-instruct, frozen-critic-attention]
