@@ -3,14 +3,132 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
 
 from scripts.tau2 import critic_head_sim as sim
+from scripts.tau2 import critic_preexp as pre
 from scripts.tau2 import train_critic
+
+
+@pytest.fixture
+def feature_cache(tmp_path):
+    """Mixed splits and dtypes; validation episodes span both shards."""
+    records, expected = [], []
+    for index, dtype in enumerate((torch.bfloat16, torch.float32)):
+        features = (torch.arange(8).reshape(4, 2) + index).to(dtype)
+        shard = {
+            "features": features,
+            "split": ["train", "validation", "train", "validation"],
+            "trajectory_id": ["t0", "v0", "t1", "v1"],
+            "reward": torch.tensor([0.0, 0.0, 1.0, 1.0]),
+            "sampling_weight": torch.ones(4),
+            "original_action_count": [2] * 4,
+            "domain": ["retail"] * 4,
+            "task_id": ["t0", "v0", "t1", "v1"],
+            "run": ["fixture"] * 4,
+        }
+        path = tmp_path / f"shard-{index}.pt"
+        torch.save(shard, path)
+        records.append(
+            {"path": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        )
+        expected.append(features.float())
+    manifest = {
+        "schema": "tau2-critic-features-v1",
+        "hidden_size": 2,
+        "feature_semantics": "score_input_final_norm_shifted_action_prefix",
+        "shards": records,
+    }
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(manifest))
+    return path, expected
+
+
+@pytest.mark.parametrize("store_type", [sim.FeatureStore, pre.PreexpStore])
+def test_feature_store_repeated_passes_hash_and_load_each_shard_once(
+    feature_cache, monkeypatch, store_type
+):
+    """Partial iteration, split changes, training and evaluation never reread."""
+    path, expected = feature_cache
+    loads, hashes = [], []
+    original_load, original_hash = torch.load, hashlib.sha256
+
+    def load(path, **kwargs):
+        loads.append(Path(path).name)
+        return original_load(path, **kwargs)
+
+    def sha256(*args, **kwargs):
+        hashes.append(True)
+        return original_hash(*args, **kwargs)
+
+    monkeypatch.setattr(torch, "load", load)
+    monkeypatch.setattr(sim.hashlib, "sha256", sha256)
+    store = store_type(path)
+    next(store.shards("validation"))
+    parts = list(store.shards())
+    for (actual, _, indices), wanted in zip(parts, expected, strict=True):
+        torch.testing.assert_close(actual, wanted, rtol=0, atol=0)
+        assert indices.tolist() == [0, 1, 2, 3]
+    assert loads == ["shard-0.pt", "shard-1.pt"]
+    assert len(hashes) == 2
+
+    def no_io(*args, **kwargs):
+        pytest.fail("Feature shards were read after being cached")
+
+    monkeypatch.setattr(Path, "open", no_io)
+    training = store.training()
+    torch.testing.assert_close(
+        training[0], torch.cat([x[[0, 2]] for x in expected]), rtol=0, atol=0
+    )
+    assert training[3] == ["t0", "t1", "t0", "t1"]
+    assert store.training() is training
+    assert list(store.shards("absent")) == []
+    weight, bias = torch.tensor([0.125, -0.25]), torch.tensor(0.5)
+    first = store.evaluate(weight, bias)
+    assert first == store.evaluate(weight, bias)
+    assert [row["n_tokens"] for row in first["rows"]] == [2, 2]
+    if isinstance(store, pre.PreexpStore):
+        targets = store.evaluate_targets({"shared": (weight, bias)})
+        assert targets == store.evaluate_targets({"shared": (weight, bias)})
+        assert [row["n_tokens"] for row in targets["rows"]] == [2, 2]
+    assert len(loads) == len(hashes) == 2
+
+
+@pytest.mark.parametrize("store_type", [sim.FeatureStore, pre.PreexpStore])
+def test_feature_store_bad_checksum_rejected_before_loading(
+    feature_cache, monkeypatch, store_type
+):
+    """A resident reader must still reject corruption before deserializing."""
+    path, _ = feature_cache
+    manifest = json.loads(path.read_text())
+    manifest["shards"][0]["sha256"] = "0" * 64
+    path.write_text(json.dumps(manifest))
+
+    def no_load(*args, **kwargs):
+        pytest.fail("Corrupt feature shard reached torch.load")
+
+    monkeypatch.setattr(torch, "load", no_load)
+    store = store_type(path)
+    for _ in range(2):
+        with pytest.raises(ValueError, match="Feature shard hash mismatch"):
+            list(store.shards())
+
+
+@pytest.mark.parametrize("store_type", [sim.FeatureStore, pre.PreexpStore])
+def test_feature_store_wrong_hidden_size_rejected(feature_cache, store_type):
+    """Caching must not bypass the feature dimension guard."""
+    path, _ = feature_cache
+    manifest = json.loads(path.read_text())
+    manifest["hidden_size"] = 3
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="Incorrect feature shape"):
+        list(store_type(path).shards())
 
 
 def test_official_ev_unequal_trajectory_lengths_matches_online_evaluator(

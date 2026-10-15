@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """CPU probes and ordered AdamW replay on saved causal value-head features.
 
-Validation streams shards and reduces through the production critic metric code.
-Only training features are resident in memory. Sampling weights preserve episode
-token mass, but K sampled prefixes do not reproduce full-token gradients exactly.
+Feature shards are hash-checked and loaded once per store, then kept in CPU
+memory for training and validation through the production critic metric code.
+Sampling weights preserve episode token mass, but K sampled prefixes do not
+reproduce full-token gradients exactly.
 The backbone is fixed: this is an optimisation diagnostic, not a reproduction of
 the original run's backbone updates or its distributed numerical arithmetic.
 """
@@ -259,17 +260,16 @@ def cluster_bootstrap(
 
 
 class FeatureStore:
-    """Read the extraction manifest and stream CPU feature shards."""
+    """Cache each CPU feature shard on first access for all subsequent passes."""
+
+    _feature_semantics = ("score_input_final_norm_shifted_action_prefix",)
 
     def __init__(self, manifest: Path):
         self.path = Path(manifest)
         self.manifest = json.loads(self.path.read_text())
         if self.manifest.get("schema") != "tau2-critic-features-v1":
             raise ValueError("Unsupported feature manifest schema")
-        if (
-            self.manifest.get("feature_semantics")
-            != "score_input_final_norm_shifted_action_prefix"
-        ):
+        if self.manifest.get("feature_semantics") not in self._feature_semantics:
             raise ValueError("Features must be causal shifted-action score inputs")
         self.hidden_size = int(self.manifest["hidden_size"])
         self.episodes: list[dict[str, Any]] = []
@@ -277,25 +277,29 @@ class FeatureStore:
         self._train: (
             tuple[torch.Tensor, torch.Tensor, torch.Tensor, list[str]] | None
         ) = None
+        self._shards: dict[int, tuple[torch.Tensor, dict[str, Any]]] = {}
 
     def shards(
         self, split: str | None = None
     ) -> Iterator[tuple[torch.Tensor, dict[str, Any], torch.Tensor]]:
-        for record in self.manifest["shards"]:
-            path = Path(record["path"])
-            if not path.is_absolute():
-                path = self.path.parent / path
-            if "sha256" in record:
-                hasher = hashlib.sha256()
-                with path.open("rb") as source:
-                    while data := source.read(1024 * 1024):
-                        hasher.update(data)
-                if hasher.hexdigest() != record["sha256"]:
-                    raise ValueError(f"Feature shard hash mismatch: {path}")
-            shard = torch.load(path, map_location="cpu", weights_only=True)
-            x = shard["features"].float()
-            if x.ndim != 2 or x.shape[1] != self.hidden_size:
-                raise ValueError(f"Incorrect feature shape in {path}")
+        for index, record in enumerate(self.manifest["shards"]):
+            if index not in self._shards:
+                path = Path(record["path"])
+                if not path.is_absolute():
+                    path = self.path.parent / path
+                if "sha256" in record:
+                    hasher = hashlib.sha256()
+                    with path.open("rb") as source:
+                        while data := source.read(1024 * 1024):
+                            hasher.update(data)
+                    if hasher.hexdigest() != record["sha256"]:
+                        raise ValueError(f"Feature shard hash mismatch: {path}")
+                shard = torch.load(path, map_location="cpu", weights_only=True)
+                x = shard["features"].float()
+                if x.ndim != 2 or x.shape[1] != self.hidden_size:
+                    raise ValueError(f"Incorrect feature shape in {path}")
+                self._shards[index] = x, shard
+            x, shard = self._shards[index]
             if split is None:
                 indices = torch.arange(len(x))
             else:
@@ -367,8 +371,8 @@ class FeatureStore:
         logistic: bool = False,
         split: str = "validation",
     ) -> dict[str, Any]:
-        # Accumulate per-episode production rows; even a split episode across
-        # shards needs only scalar sums, not resident validation hidden states.
+        # Accumulate per-episode production rows, preserving shard order even
+        # when an episode spans multiple cached shards.
         accumulated: dict[str, dict[str, Any]] = {}
         expected_counts = {}
         for x, shard, indices in self.shards(split):

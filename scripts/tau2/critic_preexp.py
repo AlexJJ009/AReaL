@@ -286,22 +286,11 @@ def export_head(store, weight, bias, out, penalty):
 
 
 class PreexpStore(FeatureStore):
-    def __init__(self, manifest):
-        # Intermediate hidden states deliberately differ from final score input.
-        self.path = Path(manifest)
-        self.manifest = json.loads(self.path.read_text())
-        if self.manifest.get("schema") != "tau2-critic-features-v1":
-            raise ValueError("Unsupported feature manifest")
-        semantics = self.manifest.get("feature_semantics", "")
-        if semantics not in (
-            "score_input_final_norm_shifted_action_prefix",
-            "intermediate_layer_output_shifted_action_prefix",
-        ):
-            raise ValueError("Unknown causal prefix feature semantics")
-        self.hidden_size = int(self.manifest["hidden_size"])
-        self.episodes = []
-        self.sampled_training = False
-        self._train = None
+    # Intermediate hidden states deliberately differ from final score input.
+    _feature_semantics = (
+        "score_input_final_norm_shifted_action_prefix",
+        "intermediate_layer_output_shifted_action_prefix",
+    )
 
     @staticmethod
     def metadata(shard, index):
