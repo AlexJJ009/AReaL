@@ -17,7 +17,7 @@ if [[ "$MODE" == check-config ]]; then
   CHECK=(--check-config)
 fi
 case "$MODE" in
-  smoke) MODE_OVR=(experiment_mode=qualification total_train_epochs=1 total_train_steps=2 num_critic_only_steps=1) ;;
+  smoke) MODE_OVR=(experiment_mode=qualification total_train_epochs=1 total_train_steps=2 evaluator.eval_before_train=false) ;;
   formal) MODE_OVR=(experiment_mode=formal) ;;
   *) echo 'Mode must be smoke or formal' >&2; exit 2 ;;
 esac
@@ -37,4 +37,8 @@ cd "$REPO_ROOT"
 exec bash scripts/tau2/run.sh policy mixed ppo \
   "train_task_packs=$PACKS" \
   "samples_per_task_per_epoch=${TAU2_SAMPLES_PER_TASK:-1}" \
+  "evaluator.freq_steps=${TAU2_EVAL_EVERY:-10}" \
+  "saver.freq_steps=${TAU2_EVAL_EVERY:-10}" \
+  "recover.freq_steps=${TAU2_EVAL_EVERY:-10}" \
+  "num_critic_only_steps=${TAU2_CRITIC_WARMUP_STEPS:-0}" \
   "${DOMAIN_OVR[@]}" "${MODE_OVR[@]}" "${CHECK[@]}" "$@"

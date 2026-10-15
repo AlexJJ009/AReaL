@@ -321,7 +321,6 @@ def validate_ppo_contract(config: Tau2PPOConfig) -> None:
         and actor.reward_scaling == 1.0
         and actor.reward_bias == 0.0
         and actor.reward_norm is None
-        and actor.adv_norm is None
         and not actor.overlong_reward_penalty
         and not config.gconfig.reward_normalization
         and config.critic_updates_before_actor == 0
@@ -336,9 +335,24 @@ def validate_ppo_contract(config: Tau2PPOConfig) -> None:
     ):
         raise ValueError(
             "PPO requires clipped surrogate eps=0.2, raw gamma=lambda=1 GAE, "
-            "no DIS/SAO/extra normalization/KL, and a full-parameter critic "
+            "no DIS/SAO/reward normalization/KL, and a full-parameter critic "
             "with value clip=0.5"
         )
+    normalization = actor.adv_norm
+    if normalization is None or (
+        normalization.mean_level,
+        normalization.std_level,
+        normalization.mean_leave1out,
+        normalization.std_unbiased,
+        normalization.eps,
+    ) != ("batch", "batch", False, True, 1e-8):
+        raise ValueError("PPO requires batch action-token advantage whitening")
+    if critic.path == actor.path:
+        from scripts.tau2.train_critic_head import validate_head_config
+
+        validate_head_config(config)
+    if config.critic_head_lr is not None:
+        raise ValueError("PPO uses the same learning rate for critic head and backbone")
     rejection = actor.rejection_sampling
     if not (
         actor.use_decoupled_loss
@@ -370,13 +384,14 @@ def validate_ppo_contract(config: Tau2PPOConfig) -> None:
         and config.valid_dataset is not None
         and config.eval_gconfig.n_samples == 4
         and config.eval_gconfig.temperature == 0
-        and config.evaluator.eval_before_train
-        and config.evaluator.freq_steps == 10
+        and config.evaluator.eval_before_train == (config.experiment_mode == "formal")
+        and config.evaluator.freq_steps is not None
+        and config.evaluator.freq_steps > 0
         and config.evaluator.freq_epochs is None
         and config.evaluator.freq_secs is None
     ):
         raise ValueError(
-            "PPO requires fixed test + official Telecom, 4 repeats at temperature 0, before training and every 10 steps"
+            "PPO requires fixed test + official Telecom, 4 repeats at temperature 0, positive step cadence, step-0 eval only in formal"
         )
 
 
@@ -534,6 +549,13 @@ def main(
             raise ValueError(
                 "Formal PPO must consume complete epochs for uniform task coverage"
             )
+        if (
+            config.experiment_mode == "qualification"
+            and config.evaluator.freq_steps < config.total_train_steps
+        ):
+            raise ValueError(
+                "PPO smoke evaluates only at final step; cadence must cover all smoke steps"
+            )
         if config.num_critic_only_steps >= config.total_train_steps:
             raise ValueError("PPO warmup must leave at least one actor update")
     resolve_effective_episodes(config, len(train_dataset))
@@ -565,14 +587,20 @@ def main(
         }
         if train_ids & validation_ids:
             raise ValueError("Tau2 policy train/validation task split is not disjoint")
-    from examples.tau2.evaluation import Tau2AsyncEvalTrainer
+    from examples.tau2.evaluation import Tau2AsyncEvalTrainer, Tau2PPOTrainer
 
     use_native_async_eval = config.algorithm in ("grpo", "ppo") or (
         config.algorithm == "sao"
         and config.experiment_mode != "qualification"
         and valid_dataset is not None
     )
-    trainer_cls = Tau2AsyncEvalTrainer if use_native_async_eval else PPOTrainer
+    trainer_cls = (
+        Tau2PPOTrainer
+        if config.algorithm == "ppo"
+        else Tau2AsyncEvalTrainer
+        if use_native_async_eval
+        else PPOTrainer
+    )
     trainer_cls.validate_config(config)
     if options.check_config:
         if config.algorithm == "ppo":

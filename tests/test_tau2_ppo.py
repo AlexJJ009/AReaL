@@ -79,7 +79,7 @@ def test_ppo_contract_wrong_combinations_refuse(monkeypatch, tmp_path):
         ("evaluation_rollout.agent.tool_call_parser", "qwen3_coder"),
         ("eval_gconfig.temperature", 1.0),
         ("eval_gconfig.n_samples", 1),
-        ("evaluator.freq_steps", 5),
+        ("evaluator.freq_steps", 0),
         ("evaluator.eval_before_train", False),
     ]
     for path, value in invalid:
@@ -106,6 +106,7 @@ def test_ppo_preflight_runs_runtime_checks_and_saver_sync(monkeypatch, tmp_path)
         setattr(broken.saver, field, value)
         with pytest.raises(ValueError, match="Dedicated async eval"):
             Tau2AsyncEvalTrainer.validate_config(broken)
+    config.num_critic_only_steps = 1
     config.dynamic_bs = True
     with pytest.raises(ValueError, match="dynamic_bs=False"):
         Tau2AsyncEvalTrainer.validate_config(config)

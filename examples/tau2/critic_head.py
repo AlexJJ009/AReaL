@@ -15,6 +15,7 @@ it, so SAO loads the biased head without this module.
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
+from typing import TYPE_CHECKING
 
 import torch
 
@@ -25,6 +26,11 @@ from areal.models.transformers.token_critic import (
     value_head_has_bias,
 )
 from areal.utils import logging
+
+if TYPE_CHECKING:
+    from areal.api.alloc_mode import ModelAllocation
+    from areal.trainer.ppo.critic import PPOCriticController, PPOCriticControllerV2
+    from areal.trainer.rl_trainer import PPOTrainer
 
 logger = logging.getLogger("Tau2Train")
 
@@ -87,3 +93,24 @@ class Tau2HeadFSDPPPOCritic(FSDPPPOCritic):
             len(body),
         )
         return [{"params": body}, {"params": head, "lr": self.config.head_lr}]
+
+
+def create_head_critic(
+    trainer: PPOTrainer, critic_config: PPOCriticConfig, alloc: ModelAllocation
+) -> Tau2HeadFSDPPPOCritic | PPOCriticController | PPOCriticControllerV2:
+    """Carry ADR-0012 settings to FSDP workers for a fresh backbone critic."""
+    from areal.utils.environ import is_single_controller
+
+    if alloc.backend != "fsdp":
+        raise ValueError(f"head critic needs the fsdp backend, got {alloc.backend}")
+    config = Tau2HeadCriticConfig.from_critic(
+        critic_config,
+        head_bias_init=trainer.config.critic_head_bias_init,
+        head_lr=trainer.config.critic_head_lr,
+    )
+    if is_single_controller():
+        critic = Tau2HeadFSDPPPOCritic.as_controller(config, trainer.scheduler)
+    else:
+        critic = Tau2HeadFSDPPPOCritic(config=config)
+    critic.create_process_group(parallel_strategy=alloc.parallel)
+    return critic

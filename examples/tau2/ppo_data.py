@@ -99,6 +99,11 @@ def ppo_config_summary(config: Tau2PPOConfig, train: Dataset, valid: Dataset) ->
     return {
         "model": config.actor.path,
         "critic_init": config.critic.path,
+        "critic_head_init": (
+            {"weight": 0, "bias": config.critic_head_bias_init}
+            if config.critic.path == config.actor.path
+            else "checkpoint unchanged"
+        ),
         "parser": config.rollout.agent.tool_call_parser,
         "algorithm": config.algorithm,
         "loss": "clipped PPO (decoupled async correction)",
@@ -127,6 +132,17 @@ def ppo_config_summary(config: Tau2PPOConfig, train: Dataset, valid: Dataset) ->
         "eval_before_train": config.evaluator.eval_before_train,
         "eval_every_global_steps": config.evaluator.freq_steps,
         "saver_every_global_steps": config.saver.freq_steps,
+        "eval_steps": sorted(
+            {
+                *([0] if config.evaluator.eval_before_train else []),
+                *range(
+                    config.evaluator.freq_steps,
+                    config.total_train_steps + 1,
+                    config.evaluator.freq_steps,
+                ),
+                config.total_train_steps,
+            }
+        ),
         "max_head_offpolicyness": config.rollout.max_head_offpolicyness,
         "recompute_logprob": config.actor.recompute_logprob,
         "use_decoupled_loss": config.actor.use_decoupled_loss,

@@ -11,14 +11,12 @@ import argparse
 import sys
 
 from examples.tau2.critic_head import (
-    Tau2HeadCriticConfig,
-    Tau2HeadFSDPPPOCritic,
+    create_head_critic,
 )
 from examples.tau2.utils import Tau2PPOConfig
 from scripts.tau2 import train_critic
 
 from areal.api.cli_args import load_expr_config
-from areal.utils.environ import is_single_controller
 
 
 def validate_head_config(config) -> None:
@@ -33,20 +31,8 @@ def validate_head_config(config) -> None:
 
 class Tau2HeadCriticTrainer(train_critic.Tau2CriticOnlineTrainer):
     def _create_critic(self, critic_config, alloc):
-        if alloc.backend != "fsdp":
-            raise ValueError(f"head critic needs the fsdp backend, got {alloc.backend}")
         validate_head_config(self.config)
-        config = Tau2HeadCriticConfig.from_critic(
-            critic_config,
-            head_bias_init=self.config.critic_head_bias_init,
-            head_lr=self.config.critic_head_lr,
-        )
-        if is_single_controller():
-            critic = Tau2HeadFSDPPPOCritic.as_controller(config, self.scheduler)
-        else:
-            critic = Tau2HeadFSDPPPOCritic(config=config)
-        critic.create_process_group(parallel_strategy=alloc.parallel)
-        return critic
+        return create_head_critic(self, critic_config, alloc)
 
 
 def main(argv: list[str]) -> None:

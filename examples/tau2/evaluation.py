@@ -173,3 +173,14 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
             "checkpoint_selection": False,
             "metrics": metrics,
         }
+
+
+class Tau2PPOTrainer(Tau2AsyncEvalTrainer):
+    """Initialise only backbone critics; checkpoint overrides use the plain loader."""
+
+    def _create_critic(self, critic_config, alloc):
+        if critic_config.path == self.config.actor.path:
+            from examples.tau2.critic_head import create_head_critic
+
+            return create_head_critic(self, critic_config, alloc)
+        return super()._create_critic(critic_config, alloc)
