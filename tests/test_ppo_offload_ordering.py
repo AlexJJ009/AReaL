@@ -83,7 +83,7 @@ class _ResidencyEngine(_TrainEngine):
             row["returns"] = torch.ones(1)
         return result
 
-    def ppo_update(self, batch: list[dict]) -> dict:
+    def ppo_update(self, batch: list[dict], **kwargs) -> dict:
         self._compute("ppo_update")
         super().ppo_update(batch)
         return {
