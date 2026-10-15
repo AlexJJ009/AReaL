@@ -12,13 +12,14 @@ import json
 import math
 import os
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
 import torch
 from datasets import Dataset
 from omegaconf import OmegaConf
+from torch.utils.data import DistributedSampler
 
 from examples.tau2 import benchmark_variant, task_pack
 from examples.tau2.contracts import (
@@ -296,6 +297,7 @@ def validate_tau2_critic_config(
     train_rows: int | None = None,
     validation_rows: int | None = None,
 ) -> None:
+    _validate_train_shuffle(config)
     validate_config(config)
     if config.algorithm != "critic" or config.experiment_mode not in ("tune", "formal"):
         raise ValueError(
@@ -390,6 +392,63 @@ def validate_tau2_critic_config(
             )
 
 
+def _validate_train_shuffle(config: Tau2PPOConfig) -> None:
+    if not config.train_dataset.shuffle:
+        raise ValueError(
+            "Tau2 critic-only training requires train_dataset.shuffle=true "
+            "to shuffle the full pack + official pool every epoch"
+        )
+
+
+def critic_train_order_summary(
+    config: Tau2PPOConfig, dataset: Dataset
+) -> dict[str, Any]:
+    """Preview the same seed + epoch permutation used by the critic dataloader."""
+    # The single controller consumes the full logical pool (rank=0, world_size=1).
+    # Actor DP dispatch/replication happens after logical batches are selected.
+    sampler = DistributedSampler(
+        dataset,
+        num_replicas=1,
+        rank=0,
+        shuffle=config.train_dataset.shuffle,
+        seed=config.seed,
+        drop_last=False,
+    )
+    batch_size = config.train_dataset.batch_size
+    batch_count = math.ceil(len(dataset) / batch_size)
+    edges = sorted(
+        {*range(min(3, batch_count)), *range(max(0, batch_count - 3), batch_count)}
+    )
+    epochs = []
+    for epoch in range(int(config.total_train_epochs)):
+        sampler.set_epoch(epoch)
+        indices = list(sampler)
+        batches = []
+        for batch in edges:
+            counts = Counter(
+                ("pack" if row.get("task_pack") else "official", row["domain"])
+                for index in indices[batch * batch_size : (batch + 1) * batch_size]
+                for row in [dataset[index]]
+            )
+            batches.append(
+                {
+                    "batch": batch,
+                    "size": sum(counts.values()),
+                    "composition": [
+                        {"source": source, "domain": domain, "count": count}
+                        for (source, domain), count in sorted(counts.items())
+                    ],
+                }
+            )
+        epochs.append({"epoch": epoch, "batches": batches})
+    return {
+        "mechanism": "DistributedSampler: seed + epoch; full pool without replacement",
+        "seed": config.seed,
+        "batches_per_epoch": batch_count,
+        "epochs": epochs,
+    }
+
+
 def _expected_validation_rows(config: Tau2PPOConfig) -> int:
     domains = normalize_domains(config.domains)
     if config.experiment_mode == "formal":
@@ -466,6 +525,8 @@ def build_tau2_critic_datasets(
         )
         pack_rows = len(rows)
         official = [{**row, "task_pack": None} for row in train_dataset]
+        # Keep dataset membership/order stable for data audits and head priors.
+        # The training sampler shuffles this entire pool with seed + epoch.
         train_dataset = Dataset.from_list(rows + official)
     train_ids = {(str(row["domain"]), str(row["task_id"])) for row in train_dataset}
     validation_ids = {
@@ -478,7 +539,7 @@ def build_tau2_critic_datasets(
         "source": (
             "official_tau2_train_tasks"
             if config.critic_task_pack is None
-            else "task_pack_then_official_tau2_train_tasks"
+            else "task_pack_and_official_tau2_train_tasks"
         ),
         "task_pack": (
             None
@@ -1108,6 +1169,7 @@ class Tau2CriticOnlineTrainer(PPOTrainer):
     """PPOTrainer wrapper that preserves finite τ² task-tail coverage."""
 
     def _init_impl(self, config, *args, **kwargs):
+        _validate_train_shuffle(config)
         # The actor must stay frozen for the whole run: recovery then skips the
         # actor -> inference weight push, since inference already serves the
         # same HF snapshot (docs/research/tau2/critic/data-mix.md).
@@ -1293,6 +1355,7 @@ def main(
                 {
                     "config": OmegaConf.structured(config),
                     "data_summary": data_summary,
+                    "train_order": critic_train_order_summary(config, train_dataset),
                     "actor_source": config.actor.path,
                     "train_rows": len(train_dataset),
                     "validation_rows": len(validation_dataset),

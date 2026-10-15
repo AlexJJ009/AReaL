@@ -18,7 +18,7 @@ dynamic_group_filter: false
 critic_dev_fraction: 0.2
 critic_tasks_per_domain: null
 critic_rollouts_per_task: 1
-# Optional task pack trained before the official train split (fixed variant only).
+# Optional task pack shuffled together with official train tasks every epoch.
 critic_task_pack: null
 critic_head_bias_init: null
 critic_head_lr: null
@@ -241,7 +241,7 @@ econfig:
 train_dataset:
   scheduling_spec: null
   batch_size: 16
-  shuffle: false
+  shuffle: true
   pin_memory: true
   num_workers: 0
   path: tau2/train
