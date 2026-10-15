@@ -44,11 +44,10 @@ Per-request generation budget is `M = min(4096, 32768 - 1 - L)` in training and
 template. The 4096 cap bounds training rollout length; official τ² sets no reply cap, so
 evaluation drops it (2026-10-09, user decision). When `M <= 0` the proxy rejects the
 request with a typed error. In training the episode ends as `context_limit` with reward
-0 and no retry ([ADR 0001](0001-official-tau2-harness.md)). Evaluation follows the
-official runner instead: the error fails the attempt, is retried, and an episode that
-still overflows is excluded ([ADR 0009](0009-official-tau2-runner-semantics.md)).
-Hitting the cap in one reply does not end the episode. Only complete, valid tool calls
-are executed.
+0 and no retry ([ADR 0001](0001-official-tau2-harness.md)). Evaluation does the same:
+the episode is scored 0, counted, not retried, and reported as a `context_limit` episode
+([ADR 0009](0009-official-tau2-runner-semantics.md)). Hitting the cap in one reply does
+not end the episode. Only complete, valid tool calls are executed.
 
 Enforcement is at the final consumer, not the config: the template flag
 (`chat_template_kwargs` / `extra_body.chat_template_kwargs`) must pass through the local

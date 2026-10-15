@@ -1,19 +1,23 @@
 # 评测把 policy 超出上下文的 episode 当作基础设施错误排除（2026-10-15）
 
-**状态**：未修，待决定。
+**状态**：已修（代码提交见下）。评测与训练一致：超出 32K 上下文的 episode 记 0
+分并计入，不重试，单独报告条数（[ADR 0009](../../../decisions/0009-official-tau2-runner-semantics.md)）。
 
 **现象**：SAO 534 的第 30、40 步评测分别有 17、25 条 episode（共 240 条）报
-`context_length_exceeded`（`areal_context_limit: prompt_tokens=32836 exceeds max_total_tokens=32768`），全部被记为
-`Tau2InfrastructureError`，从 pass^k 中去掉。第 0–20 步几乎没有。不计这些 episode 时总体 pass^1 为
-0.785、0.775；按失败计为 0.738、0.704。
+`context_length_exceeded`（`areal_context_limit: prompt_tokens=32836 exceeds max_total_tokens=32768`），被记为
+`Tau2InfrastructureError` 并从 pass^k 中去掉，总体 pass^1 因此从 0.738、0.704 变成 0.785、0.775。
 
-**代码位置**：`examples/tau2/official_runner.py` 的 `official_metrics` 只用
-`status == COMPLETED` 的记录计算 pass^k，`INFRASTRUCTURE_ERROR` 只计数。超出上下文的 400 错误在
-`examples/tau2/agent.py` 里被包成 `Tau2InfrastructureError`。
+**原因**：评测照搬官方 `tau2 run` 的规则，provider 报错重试后排除。官方不设上下文窗口，不会遇到这种结局；我们为了成本把上下文限制在 32K，超出它是
+policy 自己的失败。
 
-**为什么是问题**：对话超出 32K 是 policy 的行为（循环、重复调用等），不是 API 或服务故障。排除它们会让训练后变长的 policy
-显得更好。训练侧已经按失败处理：上下文超限和墙钟超时记 0
-分（[training-setup.md §3](../training-setup.md)，[ADR 0011](../../../decisions/0011-tau2-lost-episodes-in-training.md)）。
+**受影响的已有评测**（被排除的超长 episode 条数）：
 
-**待查**：官方 tau2 在 agent 侧报上下文超限时是否记 0 分；改为记失败后，已有评测是否需要重算（可以离线重算，见
-[sao-runs.md](../sao-runs.md) 的结果一节）。
+| 评测                                                            | 条数        |
+| --------------------------------------------------------------- | ----------- |
+| `tau2-eval-20261010-fixed-v2/step0-base-t0-deepseek-fixed-v2`   | 2           |
+| `tau2-eval-20261010/step0-base-t0-deepseek-fixed`               | 1           |
+| `tau2-eval-20261011-areal-pack/step0-areal-pack-v1-t0-deepseek` | 1           |
+| SAO 534 第 20 / 30 / 40 步                                      | 1 / 17 / 25 |
+
+SAO 534 已按记 0 分重算（[sao-runs.md](../sao-runs.md)）。前三项每次最多 2 条，对结论没有影响，不重算。critic-only
+训练本来就把这类 episode 记 0 分保留，验证集没有出现，不受影响。

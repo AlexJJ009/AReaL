@@ -79,35 +79,39 @@ AReaL integration:
 - `episode_workflow_kwargs` sets `evaluation=True`, which selects the evaluation outcome
   rules below. Training keeps `evaluation=False`.
 
-Evaluation and training differ only where official τ² has no training mode:
+Evaluation and training differ only where official τ² has no training mode, except for
+the 32K context window, which official τ² does not have:
 
-| Event                                                                             | Evaluation (`evaluation=True`)                       | Training (`evaluation=False`)                                                         |
-| --------------------------------------------------------------------------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| Policy context exhausted (32K)                                                    | Exception → retries → excluded (official behaviour)  | `context_limit`, reward 0, kept ([ADR 0002](0002-tau2-policy-generation-protocol.md)) |
-| Wall clock (`eval_episode_timeout_seconds` 1800 / `episode_timeout_seconds` 1200) | Official `TIMEOUT`, scored 0 and counted             | `timeout`, truncated, reward 0, kept (2026-10-10)                                     |
-| Episode finished but over wall clock                                              | Kept and scored                                      | `timeout`, truncated, reward 0, kept (2026-10-10)                                     |
-| Any other exception                                                               | Retries ×3 → excluded                                | Retries ×3 → rejected; an incomplete GRPO group aborts                                |
-| User stop before any policy call                                                  | Scored, counted as policy-free                       | Rejected (no tokens to train on)                                                      |
-| Policy reply length                                                               | Bounded by the remaining 32K context only (official) | At most 4096 tokens ([ADR 0002](0002-tau2-policy-generation-protocol.md))             |
+| Event                                                                             | Evaluation (`evaluation=True`)                                                        | Training (`evaluation=False`)                                                         |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| Policy context exhausted (32K)                                                    | `context_limit`, scored 0 and counted, no retry; reported as `context_limit_episodes` | `context_limit`, reward 0, kept ([ADR 0002](0002-tau2-policy-generation-protocol.md)) |
+| Wall clock (`eval_episode_timeout_seconds` 1800 / `episode_timeout_seconds` 1200) | Official `TIMEOUT`, scored 0 and counted                                              | `timeout`, truncated, reward 0, kept (2026-10-10)                                     |
+| Episode finished but over wall clock                                              | Kept and scored                                                                       | `timeout`, truncated, reward 0, kept (2026-10-10)                                     |
+| Any other exception                                                               | Retries ×3 → excluded                                                                 | Retries ×3 → rejected; an incomplete GRPO group aborts                                |
+| User stop before any policy call                                                  | Scored, counted as policy-free                                                        | Rejected (no tokens to train on)                                                      |
+| Policy reply length                                                               | Bounded by the remaining 32K context only (official)                                  | At most 4096 tokens ([ADR 0002](0002-tau2-policy-generation-protocol.md))             |
 
-The 32K context stays for cost; the evaluation wall clock is a generous 1800 s against a
-measured p99 of 538 s and a maximum of 651 s (656 DeepSeek temperature-0 episodes). The
-user simulator gets only the official `temperature 0`; the local 512-token completion
-cap is removed. The policy's 4096-token reply cap applies to training only: in the
-DeepSeek temperature-0 base evaluation it truncated 48 of 8211 replies, in 32 of 656
-episodes. Not aligned: no seed is passed (user decision); the NL judge still uses the
-user-simulator model because no OpenAI key is available; the policy keeps
-`num_retries 0` behind the local proxy, with retries at the episode layer.
+The 32K context stays for cost. Because the window is our own limit and not part of the
+benchmark, a policy that exhausts it has failed the task in both modes; excluding the
+episode would raise the score of a policy that drifts into long loops. The evaluation
+wall clock is a generous 1800 s against a measured p99 of 538 s and a maximum of 651 s
+(656 DeepSeek temperature-0 episodes). The user simulator gets only the official
+`temperature 0`; the local 512-token completion cap is removed. The policy's 4096-token
+reply cap applies to training only: in the DeepSeek temperature-0 base evaluation it
+truncated 48 of 8211 replies, in 32 of 656 episodes. Not aligned: no seed is passed
+(user decision); the NL judge still uses the user-simulator model because no OpenAI key
+is available; the policy keeps `num_retries 0` behind the local proxy, with retries at
+the episode layer.
 
-2026-10-10 amendment: training no longer replays an over-budget episode. Replaying it
-kept only the episodes that finished in time, which removes slow, long trajectories from
-the training data; it is now kept as truncated with reward 0, like a context overflow.
+Training does not replay an over-budget episode: replaying it kept only the episodes
+that finished in time, which removes slow, long trajectories from the training data; it
+is now kept as truncated with reward 0, like a context overflow.
 
 ### Consequences
 
 - Good, because one provider hiccup or one odd simulated user no longer discards a
-  multi-hour evaluation, and our numbers follow the same exclusion rule as the official
-  leaderboard.
+  multi-hour evaluation, and infrastructure faults are excluded by the same rule as the
+  official leaderboard.
 - Good, because offline evaluation and in-training evaluation share one module and
   cannot drift apart.
 - Good, because every attempt, including failed and policy-free ones, leaves a readable
