@@ -1071,7 +1071,9 @@ def test_strict_train_batch_replays_a_rejected_episode_once(failures, budget, ou
     assert len(trainer._tau2_skipped.get(0, [])) == 2 - len(outcome)
 
 
-def test_task_pack_rows_precede_official_train_rows(monkeypatch, tmp_path):
+def test_task_pack_pool_preserves_source_identity_before_sampler_shuffle(
+    monkeypatch, tmp_path
+):
     _patched_tau2_datasets(monkeypatch)
     monkeypatch.setenv("TAU2_RUN_ROOT", str(tmp_path / "run"))
     pack = str(tmp_path / "pack")
@@ -1108,7 +1110,7 @@ def test_task_pack_rows_precede_official_train_rows(monkeypatch, tmp_path):
     assert sorted(row["task_id"] for row in rows[:5]) == ["a1", "a2", "a3", "r1", "r2"]
     assert {row["domain"] for row in rows[:5]} == {"airline", "retail"}
     assert len(validation_dataset) == 60
-    assert summary["source"] == "task_pack_then_official_tau2_train_tasks"
+    assert summary["source"] == "task_pack_and_official_tau2_train_tasks"
     assert summary["task_pack"]["train_rows"] == 5
     assert summary["train_rows"] == 109
 
