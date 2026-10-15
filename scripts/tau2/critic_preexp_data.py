@@ -45,7 +45,19 @@ def load_pool(
     """
     import torch
 
-    torch.set_num_threads(1)
+    previous_threads = torch.get_num_threads()
+    try:
+        torch.set_num_threads(1)
+        return _load_pool(path, synthetic=synthetic)
+    finally:
+        torch.set_num_threads(previous_threads)
+
+
+def _load_pool(
+    path: str | Path, synthetic: bool
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    import torch
+
     path = Path(path)
     digest = sha256(path)
     if path.with_name(path.name + ".sha256").read_text().split()[0] != digest:

@@ -151,6 +151,37 @@ def test_load_pool_exact_source_identity_and_reward(pool):
     assert manifest["pool_manifest_sha256"] == data.sha256(pool)
 
 
+@pytest.mark.parametrize("requested_threads", [2, 4])
+@pytest.mark.parametrize("invalid_manifest", [False, True])
+def test_load_pool_restores_caller_threads_on_success_and_error(
+    pool, monkeypatch, requested_threads, invalid_manifest
+):
+    """Pool validation uses one thread without changing later experiment fits."""
+    previous_threads = torch.get_num_threads()
+    observed_threads = []
+    original_sha = data.sha256
+
+    def record_threads(path):
+        observed_threads.append(torch.get_num_threads())
+        return original_sha(path)
+
+    monkeypatch.setattr(data, "sha256", record_threads)
+    if invalid_manifest:
+        pool.write_text(pool.read_text() + " ")
+    try:
+        torch.set_num_threads(requested_threads)
+        if invalid_manifest:
+            with pytest.raises(ValueError, match="Pool manifest SHA256"):
+                data.load_pool(pool, synthetic=True)
+        else:
+            _, rows = data.load_pool(pool, synthetic=True)
+            assert len(rows) == 2
+        assert observed_threads and set(observed_threads) == {1}
+        assert torch.get_num_threads() == requested_threads
+    finally:
+        torch.set_num_threads(previous_threads)
+
+
 def test_prefix_future_text_cannot_change_label():
     """A WRITE closing wrapper activates only when its final token is visible."""
     call = _tool_call("cancel_pending_order")
