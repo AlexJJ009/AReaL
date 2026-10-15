@@ -568,6 +568,14 @@ class PPOTrainer:
         )
 
     def _onload_model(self, engine, role: str) -> None:
+        # An offloaded critic may share the actor's GPUs even when actor.offload
+        # is false. Evict the other role before restoring either model, including
+        # after finalization restored the actor at the end of the previous step.
+        if self._should_offload_critic:
+            if role == "critic":
+                self._offload_model(self.actor, role="actor")
+            elif role == "actor":
+                self._offload_model(self.critic, role="critic")
         with (
             stats_tracker.record_timing(f"{role}_onload"),
             perf_tracer.trace_scope(
@@ -700,14 +708,11 @@ class PPOTrainer:
         actor resident would recreate the colocated peak that TMS is avoiding.
         """
         should_offload = (
-            not critic_only
-            and self.critic is not None
-            and self._should_offload_critic
-            and not self._should_offload_actor
+            not critic_only and self.critic is not None and self._should_offload_critic
         )
         if should_offload:
             self._offload_model(self.actor, role="actor")
-        return should_offload
+        return should_offload and not self._should_offload_actor
 
     def _end_critic_finalize_memory_window(self, actor_was_offloaded: bool) -> None:
         if actor_was_offloaded:
@@ -841,7 +846,7 @@ class PPOTrainer:
                         traj["values"] = v
                     self.critic.get_device_stats().log("critic values")
                     self._release_unused_cuda_cache(self.critic, role="critic")
-                # Critic stays onloaded — offloaded after ppo_update below
+                # The actor handoff below evicts an offloaded critic before logp.
 
             if self.ref is not None:
                 if self._should_offload_ref:
@@ -894,9 +899,9 @@ class PPOTrainer:
                 logger.info("[AWEX] colocate: offload weights...")
                 self.rollout.offload(tags=["weights"])
                 logger.info("[AWEX] colocate: offload done, onloading actor...")
-                self.actor.onload()
+                self._onload_model(self.actor, role="actor")
 
-            if self._should_offload_actor:
+            if self._should_offload_actor or self._should_offload_critic:
                 self._onload_model(self.actor, role="actor")
             if config.actor.should_compute_prox_logp():
                 with (
@@ -943,6 +948,8 @@ class PPOTrainer:
                 if config.critic_updates_before_actor:
                     from areal.trainer.ppo.update import update_critic_before_actor
 
+                    if self._should_offload_critic:
+                        self._onload_model(self.critic, role="critic")
                     update_report = update_critic_before_actor(
                         self.actor,
                         self.critic,
@@ -950,7 +957,7 @@ class PPOTrainer:
                         adv_batch,
                         config.critic_updates_before_actor,
                         before_actor_update=(
-                            (lambda: self._offload_model(self.critic, role="critic"))
+                            (lambda: self._onload_model(self.actor, role="actor"))
                             if self._should_offload_critic
                             else None
                         ),
@@ -986,6 +993,8 @@ class PPOTrainer:
                 logger.info(f"Memory snapshots saved to {snapshot_dir}")
 
             if self.critic is not None and not config.critic_updates_before_actor:
+                if self._should_offload_critic:
+                    self._onload_model(self.critic, role="critic")
                 with (
                     stats_tracker.record_timing("critic_train_step"),
                     perf_tracer.trace_scope(
@@ -1010,17 +1019,23 @@ class PPOTrainer:
             # buffers to fund the transient. Weights are identical on both
             # sides of the transfer, so the checkpoint content is unchanged.
             if self._is_v1_awex_colocate(config):
-                self._save_training_state(
-                    epoch=epoch,
-                    epoch_step=step,
-                    global_step=global_step,
-                )
+                restore_actor = self._begin_critic_finalize_memory_window(critic_only)
+                try:
+                    self._save_training_state(
+                        epoch=epoch,
+                        epoch_step=step,
+                        global_step=global_step,
+                    )
+                finally:
+                    # AWEX weight transfer below needs the actor resident.
+                    self._end_critic_finalize_memory_window(restore_actor)
 
             # pause inference for updating weights, save, and evaluation
             self.rollout.pause()
 
-            # Actor already onloaded; engine-internal _offload_aware_context
-            # calls in update_weights/save are no-ops.
+            # Ordinary PPO may have evicted the actor for the critic update.
+            # Engine-internal _offload_aware_context restores it temporarily for
+            # update_weights/save without keeping it resident alongside critic IO.
 
             with (
                 stats_tracker.record_timing("update_weights"),
