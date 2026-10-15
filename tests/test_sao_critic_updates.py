@@ -46,10 +46,10 @@ class TrainRole:
         self.optimizer_steps += 1
         self.events.append(f"{self.name}.optimizer.{self.optimizer_steps}")
 
-    def ppo_update(self, data):
+    def ppo_update(self, data, **kwargs):
         if self.name == "actor":
             self.advantages.append([row["advantages"].clone() for row in data])
-        return self.component.ppo_update(data)
+        return self.component.ppo_update(data, **kwargs)
 
     def step_lr_scheduler(self):
         self.events.append(f"{self.name}.scheduler")

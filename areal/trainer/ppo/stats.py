@@ -67,6 +67,28 @@ def derive_critic_update_metrics(stats: dict[str, Any]) -> dict[str, Any]:
             result[ev_key] = 1.0 - residual_variance / variance
             result[ev_defined_key] = 1.0
 
+    # Retire SAO's old unqualified merged EV rather than change its meaning.
+    # The explicit primary key compares the fresh-batch forward in PPO and SAO;
+    # indexed scopes retain each same-batch fit separately (including domains).
+    for scope in scopes:
+        parts = scope.split("/")
+        if parts[-1] == "critic_update_1":
+            primary_scope = "/".join(parts[:-1])
+        elif any(part.startswith("critic_update_") for part in parts):
+            continue
+        elif result.get(_stat_key(scope, "critic_single_minibatch")) == 1.0:
+            primary_scope = scope
+        else:
+            continue
+        for suffix in ("", "_defined"):
+            source = _stat_key(scope, f"critic_explained_variance{suffix}")
+            if source in result:
+                result[
+                    _stat_key(
+                        primary_scope, f"critic_explained_variance_pre_update{suffix}"
+                    )
+                ] = result[source]
+
     return result
 
 
