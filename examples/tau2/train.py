@@ -7,6 +7,7 @@ import random
 import sys
 import warnings
 from collections.abc import Callable, Iterable, Mapping
+from pathlib import Path
 from typing import Any
 
 from datasets import Dataset
@@ -254,6 +255,8 @@ def validate_tau2_recipe(
                 "dual lambdas, unclipped critic MSE, one minibatch, and two "
                 "critic updates before the actor"
             )
+    elif config.algorithm == "ppo":
+        validate_ppo_contract(config)
     elif config.critic is not None or actor.use_direct_dis_loss:
         raise ValueError("Non-SAO paths must not silently enable the SAO critic/DIS")
     if config.algorithm == "grpo":
@@ -291,6 +294,107 @@ def validate_tau2_recipe(
     return domains
 
 
+def validate_ppo_contract(config: Tau2PPOConfig) -> None:
+    """Standard clipped GAE PPO with the GRPO recipe's async correction."""
+    actor, critic = config.actor, config.critic
+    if (
+        actor.path
+        != "Qwen/Qwen3-4B-Instruct-2507@cdbee75f17c01a7cc42f958dc650907174af0554"
+    ):
+        raise ValueError(
+            "This PPO recipe requires the pinned Qwen3-4B-Instruct-2507 actor"
+        )
+    if critic is None or not critic.is_critic:
+        raise ValueError("PPO requires a learned scalar critic")
+    if not (
+        not actor.use_direct_dis_loss
+        and not actor.use_sapo_loss
+        and not actor.use_cispo_loss
+        and actor.eps_clip == 0.2
+        and actor.eps_clip_higher in (None, 0.2)
+        and actor.c_clip is None
+        and actor.m2_threshold is None
+        and actor.discount == 1.0
+        and actor.gae_lambda == 1.0
+        and not actor.gae_lambda_kwargs
+        and actor.critic_gae_lambda == 1.0
+        and actor.reward_scaling == 1.0
+        and actor.reward_bias == 0.0
+        and actor.reward_norm is None
+        and not actor.overlong_reward_penalty
+        and not config.gconfig.reward_normalization
+        and config.critic_updates_before_actor == 0
+        and not critic.freeze_critic_attention
+        and not critic.use_lora
+        and not critic.init_from_scratch
+        and critic.eps_clip == 0.5
+        and not critic.mask_no_eos_with_zero
+        and config.ref is None
+        and config.teacher is None
+        and actor.kl_ctl == 0
+    ):
+        raise ValueError(
+            "PPO requires clipped surrogate eps=0.2, raw gamma=lambda=1 GAE, "
+            "no DIS/SAO/reward normalization/KL, and a full-parameter critic "
+            "with value clip=0.5"
+        )
+    normalization = actor.adv_norm
+    if normalization is None or (
+        normalization.mean_level,
+        normalization.std_level,
+        normalization.mean_leave1out,
+        normalization.std_unbiased,
+        normalization.eps,
+    ) != ("batch", "batch", False, True, 1e-8):
+        raise ValueError("PPO requires batch action-token advantage whitening")
+    if critic.path == actor.path:
+        from scripts.tau2.train_critic_head import validate_head_config
+
+        validate_head_config(config)
+    if config.critic_head_lr is not None:
+        raise ValueError("PPO uses the same learning rate for critic head and backbone")
+    rejection = actor.rejection_sampling
+    if not (
+        actor.use_decoupled_loss
+        and actor.recompute_logprob
+        and actor.prox_logp_method == "recompute"
+        and actor.importance_sampling_level == "token"
+        and config.rollout.max_head_offpolicyness == 2
+        and rejection is not None
+        and (
+            rejection.level,
+            rejection.action,
+            rejection.metric,
+            rejection.upper,
+            rejection.lower,
+        )
+        == ("token", "mask", "ratio", 5.0, None)
+    ):
+        raise ValueError(
+            "Async PPO requires GRPO's recomputed decoupled loss, token ratio mask >5 and staleness=2"
+        )
+    if (
+        config.rollout.agent.tool_call_parser != "qwen25"
+        or config.evaluation_rollout.agent.tool_call_parser != "qwen25"
+    ):
+        raise ValueError("Qwen3 Instruct PPO requires qwen25 tool parser")
+    if not (
+        config.econfig.benchmark_variant == "fixed"
+        and config.experiment_mode in ("formal", "qualification")
+        and config.valid_dataset is not None
+        and config.eval_gconfig.n_samples == 4
+        and config.eval_gconfig.temperature == 0
+        and config.evaluator.eval_before_train == (config.experiment_mode == "formal")
+        and config.evaluator.freq_steps is not None
+        and config.evaluator.freq_steps > 0
+        and config.evaluator.freq_epochs is None
+        and config.evaluator.freq_secs is None
+    ):
+        raise ValueError(
+            "PPO requires fixed test + official Telecom, 4 repeats at temperature 0, positive step cadence, step-0 eval only in formal"
+        )
+
+
 def resolve_actor_snapshot(config: Tau2PPOConfig) -> str:
     """Bind every actor/tokenizer consumer to one immutable HF snapshot."""
 
@@ -304,6 +408,16 @@ def resolve_actor_snapshot(config: Tau2PPOConfig) -> str:
     config.vllm.model = snapshot
     if config.ref is not None and config.ref.path == source:
         config.ref.path = snapshot
+    if config.algorithm == "ppo" and config.critic is not None:
+        config.critic.path = (
+            snapshot
+            if config.critic.path == source
+            else (
+                str(Path(config.critic.path).resolve())
+                if Path(config.critic.path).is_dir()
+                else resolve_pinned_hf_snapshot(config.critic.path)
+            )
+        )
     return snapshot
 
 
@@ -396,7 +510,13 @@ def main(
     )
     if _dataset_split(config.train_dataset, "train") != "train":
         raise ValueError("Gradient training must use official train tasks")
-    if train_rows_hook is None:
+    if config.algorithm == "ppo":
+        from examples.tau2.ppo_data import build_ppo_train_dataset
+
+        if train_rows_hook is not None or config.train_task_pack is not None:
+            raise ValueError("PPO uses train_task_packs through the standard entry")
+        train_dataset = build_ppo_train_dataset(config, dataset_kwargs)
+    elif train_rows_hook is None:
         train_dataset = get_tau2_dataset(
             **dataset_kwargs,
             split="train",
@@ -421,18 +541,42 @@ def main(
         config.total_train_steps = available_steps
     if not 0 < config.total_train_steps <= available_steps:
         raise ValueError("total_train_steps exceeds the configured dataset and epochs")
+    if config.algorithm == "ppo":
+        if (
+            config.experiment_mode == "formal"
+            and config.total_train_steps != available_steps
+        ):
+            raise ValueError(
+                "Formal PPO must consume complete epochs for uniform task coverage"
+            )
+        if (
+            config.experiment_mode == "qualification"
+            and config.evaluator.freq_steps < config.total_train_steps
+        ):
+            raise ValueError(
+                "PPO smoke evaluates only at final step; cadence must cover all smoke steps"
+            )
+        if config.num_critic_only_steps >= config.total_train_steps:
+            raise ValueError("PPO warmup must leave at least one actor update")
     resolve_effective_episodes(config, len(train_dataset))
     valid_dataset = None
     if config.valid_dataset is not None:
-        valid_split = "test" if config.experiment_mode == "formal" else "dev"
-        valid_dataset = get_tau2_dataset(**dataset_kwargs, split=valid_split)
+        if config.algorithm == "ppo":
+            from examples.tau2.ppo_data import build_ppo_eval_dataset
+
+            valid_dataset = build_ppo_eval_dataset(config, dataset_kwargs)
+        else:
+            valid_split = "test" if config.experiment_mode == "formal" else "dev"
+            valid_dataset = get_tau2_dataset(**dataset_kwargs, split=valid_split)
     if (
         config.algorithm == "sao"
         and config.experiment_mode != "qualification"
         and valid_dataset is None
     ):
         raise ValueError("Formal/tune τ² SAO requires a validation dataset")
-    if train_rows_hook is not None and valid_dataset is not None:
+    if (
+        train_rows_hook is not None or config.algorithm == "ppo"
+    ) and valid_dataset is not None:
         train_ids = {
             (row["domain"], row["task_id"], row.get("task_pack"))
             for row in train_dataset
@@ -443,7 +587,31 @@ def main(
         }
         if train_ids & validation_ids:
             raise ValueError("Tau2 policy train/validation task split is not disjoint")
+    from examples.tau2.evaluation import Tau2AsyncEvalTrainer, Tau2PPOTrainer
+
+    use_native_async_eval = config.algorithm in ("grpo", "ppo") or (
+        config.algorithm == "sao"
+        and config.experiment_mode != "qualification"
+        and valid_dataset is not None
+    )
+    trainer_cls = (
+        Tau2PPOTrainer
+        if config.algorithm == "ppo"
+        else Tau2AsyncEvalTrainer
+        if use_native_async_eval
+        else PPOTrainer
+    )
+    trainer_cls.validate_config(config)
     if options.check_config:
+        if config.algorithm == "ppo":
+            from examples.tau2.ppo_data import ppo_config_summary
+
+            logger.info(
+                "PPO resolved summary:\n%s",
+                OmegaConf.to_yaml(
+                    ppo_config_summary(config, train_dataset, valid_dataset)
+                ),
+            )
         logger.info(
             "Resolved config (no workers/API calls):\n%s",
             OmegaConf.to_yaml(OmegaConf.structured(config)),
@@ -501,14 +669,6 @@ def main(
         max_completion_tokens=config.eval_gconfig.max_new_tokens,
     )
 
-    from examples.tau2.evaluation import Tau2AsyncEvalTrainer
-
-    use_native_async_eval = config.algorithm == "grpo" or (
-        config.algorithm == "sao"
-        and config.experiment_mode != "qualification"
-        and valid_dataset is not None
-    )
-    trainer_cls = Tau2AsyncEvalTrainer if use_native_async_eval else PPOTrainer
     with trainer_cls(
         config,
         train_dataset=train_dataset,

@@ -11,7 +11,7 @@ Usage:
   scripts/tau2/run.sh qualification {mixed|airline|retail|telecom} [overrides...]
   scripts/tau2/run.sh data critic [overrides...]
   scripts/tau2/run.sh data critic-head [overrides...]   (biased, mean-initialised value head)
-  scripts/tau2/run.sh policy {mixed|airline|retail|telecom} {grpo|sao} [overrides...]
+  scripts/tau2/run.sh policy {mixed|airline|retail|telecom} {grpo|sao|ppo} [overrides...]
   scripts/tau2/run.sh policy-pack {mixed|airline|retail} sao train_task_pack=/absolute/pack [overrides...]
     Requires econfig.benchmark_variant=fixed and equal repeats of the combined pool.
 
@@ -44,7 +44,11 @@ case "${SELECTOR}" in
 esac
 
 export AREAL_ALLOW_DEFAULT_ADMIN_KEY=1
-export TAU2_ACTOR_PATH="${TAU2_ACTOR_PATH:-Qwen/Qwen3.5-4B@851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a}"
+if [[ "${SELECTOR}" == "policy" && "${2:-}" == "ppo" ]]; then
+  export TAU2_ACTOR_PATH="${TAU2_ACTOR_PATH:-Qwen/Qwen3-4B-Instruct-2507@cdbee75f17c01a7cc42f958dc650907174af0554}"
+else
+  export TAU2_ACTOR_PATH="${TAU2_ACTOR_PATH:-Qwen/Qwen3.5-4B@851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a}"
+fi
 
 has_check_config() {
   local arg
@@ -154,7 +158,7 @@ case "${SELECTOR}" in
     fi
     ALGORITHM="$1"
     shift
-    if [[ "${ALGORITHM}" != "grpo" && "${ALGORITHM}" != "sao" ]]; then
+    if [[ "${ALGORITHM}" != "grpo" && "${ALGORITHM}" != "sao" && "${ALGORITHM}" != "ppo" ]]; then
       printf 'Unsupported tau2 policy algorithm in this entrypoint: %s\n' "${ALGORITHM}" >&2
       usage >&2
       exit 2
@@ -171,6 +175,10 @@ case "${SELECTOR}" in
         exit 2
         ;;
     esac
+    if [[ "${ALGORITHM}" == "ppo" && "${MODE}" != "mixed" ]]; then
+      printf 'PPO multi-pack recipe requires mixed domain mode\n' >&2
+      exit 2
+    fi
     if [[ "${ALGORITHM}" == "sao" ]]; then
       export TAU2_DEFAULT_WANDB_MODE=online
     fi
@@ -238,6 +246,11 @@ case "${SELECTOR}:${MODE}" in
   policy:mixed|policy-pack:mixed)
     if ! has_check_config "$@"; then
       load_deepseek_key
+    fi
+    if [[ "${ALGORITHM}" == "ppo" ]]; then
+      exec "${PYTHON_BIN}" "${POLICY_ENTRY}" \
+        --config "${REPO_ROOT}/examples/tau2/config_ppo.yaml" \
+        "$@"
     fi
     if [[ "${ALGORITHM}" == "sao" ]]; then
       : "${TAU2_CRITIC_PATH:?Set TAU2_CRITIC_PATH to the restored critic checkpoint}"

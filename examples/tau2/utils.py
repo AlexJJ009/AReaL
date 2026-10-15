@@ -182,7 +182,10 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
     critic_task_pack: str | None = None
     # SAO pack wrapper only: combine these tasks with the official train split.
     train_task_pack: str | None = None
-    # Critic fitting with scripts/tau2/train_critic_head.py only: value-head bias
+    # PPO: disjoint task packs, alongside official fixed Airline/Retail train.
+    train_task_packs: list[str] = field(default_factory=list)
+    samples_per_task_per_epoch: int = 1
+    # ADR-0012 backbone critic initialisation (PPO and critic-head): value-head bias
     # init (the expected success rate) and head learning rate (None: critic lr).
     critic_head_bias_init: float | None = None
     critic_head_lr: float | None = None
@@ -199,8 +202,14 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
-        if self.algorithm not in ("grpo", "sao", "critic"):
+        if self.algorithm not in ("grpo", "sao", "critic", "ppo"):
             raise ValueError(f"Unsupported τ² algorithm: {self.algorithm}")
+        if (
+            isinstance(self.samples_per_task_per_epoch, bool)
+            or not isinstance(self.samples_per_task_per_epoch, int)
+            or self.samples_per_task_per_epoch < 1
+        ):
+            raise ValueError("samples_per_task_per_epoch must be a positive integer")
         if self.episode_timeout_seconds <= 0:
             raise ValueError("episode_timeout_seconds must be positive")
         if self.eval_episode_timeout_seconds <= 0:

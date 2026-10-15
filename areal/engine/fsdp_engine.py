@@ -1336,7 +1336,8 @@ class FSDPEngine(TrainEngine):
             model_kwargs = {}
         elif self.config.is_critic:
             model_class = AutoModelForTokenClassification
-            model_kwargs = {"num_labels": 1}
+            self.model_config.num_labels = 1
+            model_kwargs = {}
         else:
             model_class = AutoModelForCausalLM
             model_kwargs = {}
@@ -1353,8 +1354,8 @@ class FSDPEngine(TrainEngine):
                 **model_kwargs,
             )
         else:
-            if model_class is Qwen35TokenCriticForCausalBackbone:
-                # The config the adapter would reload from path, plus any head flag.
+            if self.config.is_critic:
+                # Preserve scalar label count and the saved value-head bias flag.
                 model_kwargs["config"] = self.model_config
             model = model_class.from_pretrained(
                 pretrained_model_name_or_path=self.config.path,

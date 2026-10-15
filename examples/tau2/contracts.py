@@ -18,7 +18,7 @@ from importlib.metadata import distribution
 from typing import Any, Literal
 
 Tau2Domain = Literal["airline", "retail", "telecom"]
-Tau2Algorithm = Literal["grpo", "sao", "critic"]
+Tau2Algorithm = Literal["grpo", "sao", "critic", "ppo"]
 
 OFFICIAL_TAU2_REVISION = "b7ea9074c1cba482b30687fecdb5c8425fd6f619"
 OFFICIAL_TAU2_REPOSITORY = "https://github.com/sierra-research/tau2-bench.git"
@@ -218,7 +218,7 @@ def remaining_generation_budget(
 def rollouts_per_prompt(algorithm: Tau2Algorithm) -> int:
     if algorithm == "grpo":
         return GRPO_ROLLOUTS_PER_PROMPT
-    if algorithm in ("sao", "critic"):
+    if algorithm in ("sao", "critic", "ppo"):
         return SAO_ROLLOUTS_PER_PROMPT
     raise ValueError(f"Unsupported τ² algorithm: {algorithm}")
 
@@ -327,7 +327,7 @@ def keep_rollout_group(
         raise ValueError(
             f"Incomplete {algorithm} rollout group: got {len(rewards)}, expected {expected}"
         )
-    if algorithm in ("sao", "critic"):
+    if algorithm in ("sao", "critic", "ppo"):
         return True
     if not dynamic_filter:
         return True
