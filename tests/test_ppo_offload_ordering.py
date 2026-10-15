@@ -3,6 +3,7 @@
 
 from contextlib import contextmanager
 from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -20,6 +21,7 @@ class _ResidencyEngine(_TrainEngine):
         self.events = events
         self.step = step
         self.requires_resident_transfer = False
+        self.config = SimpleNamespace(backend="fsdp")
 
     def _record(self, operation: str) -> None:
         self.events.append((self.step[0], self.role, operation, sorted(self.resident)))
@@ -31,6 +33,9 @@ class _ResidencyEngine(_TrainEngine):
     def offload(self) -> None:
         self.resident.discard(self.role)
         self._record("offload")
+
+    def _release_unused_cuda_cache(self) -> None:
+        self._record("release_unused_cuda_cache")
 
     def _compute(self, operation: str) -> None:
         # Like FSDPEngine._ensure_ready(), compute leaves the engine resident.
@@ -72,6 +77,7 @@ class _ResidencyEngine(_TrainEngine):
     def compute_advantages(self, batch: list[dict]) -> list[dict]:
         # Advantage construction is tensor-only: SAO calls this while the
         # critic is resident, before its before_actor_update handoff.
+        self._record("compute_advantages")
         result = deepcopy(batch)
         for row in result:
             row["returns"] = torch.ones(1)
@@ -165,6 +171,24 @@ def test_train_two_steps_with_offload_keeps_one_role_resident(
     for step_id in (1, 2):
         compute = [event[1:3] for event in events if event[0] == step_id]
         assert ("actor", "compute_logp") in compute
+        logp_index = compute.index(("actor", "compute_logp"))
+        advantage_index = compute.index(("actor", "compute_advantages"))
+        assert logp_index < advantage_index
+        if mode == "grpo":
+            assert ("actor", "release_unused_cuda_cache") not in compute
+        else:
+            # PPO must clear logp temporaries before its actor update. SAO and
+            # warmup hand the GPU to the critic next, so clear before onload.
+            next_phase = (
+                ("critic", "onload")
+                if trainer.config.critic_updates_before_actor
+                or (mode == "warmup" and step_id == 1)
+                else ("actor", "ppo_update")
+            )
+            next_phase_index = compute.index(next_phase, advantage_index + 1)
+            assert ("actor", "release_unused_cuda_cache") in compute[
+                advantage_index + 1 : next_phase_index
+            ], f"Actor logp cache retained into {next_phase}: {compute}"
         assert compute.count(("actor", "ppo_update")) == int(
             mode != "warmup" or step_id == 2
         )

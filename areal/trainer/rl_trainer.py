@@ -928,6 +928,10 @@ class PPOTrainer:
                 adv_batch = self.actor.compute_advantages(rollout_batch)
                 self.actor.get_device_stats().log("compute advantages")
 
+            if self.critic is not None:
+                # Drop logp temporaries before the actor update or SAO critic onload.
+                self._release_unused_cuda_cache(self.actor, role="actor")
+
             # Wait for async checkpoint staging to complete before modifying parameters
             self.saver.maybe_wait_for_staging()
 
