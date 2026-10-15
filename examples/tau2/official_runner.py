@@ -18,6 +18,9 @@ episode, so offline and in-training evaluation share one definition:
   each ``k`` averages over the tasks with at least ``k`` evaluated trials, which
   is identical when nothing is excluded, and the count is reported otherwise.
 
+Policy context exhaustion is a completed zero-score task failure under our
+context budget. It is kept without retrying and counted separately.
+
 AReaL only delivers results that carry policy tokens. An episode the user ended
 before any policy call, or one whose retries were exhausted, comes back as a
 bare rejection; the episode's own attempt record tells the two apart.
@@ -198,8 +201,8 @@ def record_from_unexported(
 ) -> dict[str, Any]:
     """Resolve an episode that returned no policy tokens.
 
-    Its last attempt either finished without any policy call (scored, as
-    official τ² scores a first-turn user stop) or failed after the last retry
+    Its last attempt either finished without policy tokens (a first-turn user
+    stop or context exhaustion, both scored) or failed after the last retry
     (an infrastructure error, excluded from metrics).
     """
 
@@ -264,6 +267,17 @@ def collect_episodes(
             if trajectory is None
             else record_from_trajectory(row, trajectory)
         )
+        if trajectory is not None:
+            # Tensors carry scores but not string stop reasons. Join the final
+            # attempt so exported context failures remain identifiable offline.
+            attempts = attempt_records(trajectory_root, row["source_id"])
+            if attempts and attempts[-1].get("status") == COMPLETED:
+                last = attempts[-1]
+                record.update(
+                    stop_reason=last.get("stop_reason"),
+                    policy_turns=last.get("policy_turns"),
+                    attempts=len(attempts),
+                )
         records.append(record)
         if on_record is not None:
             on_record(record)
@@ -319,7 +333,13 @@ def official_metrics(records: list[dict[str, Any]], *, repeats: int) -> dict[str
             "evaluated_episodes": len(evaluated),
             "infra_excluded_episodes": len(excluded),
             "infra_excluded_by_type": dict(reasons),
-            "policy_free_episodes": sum(r.get("policy_turns") == 0 for r in evaluated),
+            "context_limit_episodes": sum(
+                r.get("stop_reason") == "context_limit" for r in evaluated
+            ),
+            "policy_free_episodes": sum(
+                r.get("policy_turns") == 0 and r.get("stop_reason") != "context_limit"
+                for r in evaluated
+            ),
             "avg_reward": sum(scores) / len(scores) if scores else 0.0,
             "tasks": len(_successes_by_task(evaluated)),
             "pass_hat_k": pass_hat,

@@ -505,3 +505,63 @@ def test_select_tasks_keeps_named_subset_and_rejects_unknown():
     assert tau2_evaluate.select_tasks(rows, "retail:38") == rows[1:]
     with pytest.raises(ValueError, match="Unknown tasks"):
         tau2_evaluate.select_tasks(rows, "retail:38,airline:1")
+
+
+@pytest.mark.parametrize("policy_turns", [0, 2])
+def test_aggregate_context_limit_keeps_denominator_and_reports_domain_counts(
+    policy_turns,
+):
+    """Standalone summaries score context loss and retain unrelated infra counts."""
+    records = [
+        {
+            "status": "completed",
+            "domain": "airline",
+            "task_id": "a",
+            "trial": 0,
+            "official_score": 1.0,
+            "stop_reason": "user_stop",
+            "policy_turns": 0,
+        },
+        {
+            "status": "completed",
+            "domain": "airline",
+            "task_id": "a",
+            "trial": 1,
+            "official_score": 0.0,
+            "stop_reason": "context_limit",
+            "policy_turns": policy_turns,
+        },
+        {
+            "status": "completed",
+            "domain": "retail",
+            "task_id": "b",
+            "trial": 0,
+            "official_score": 1.0,
+        },
+        {
+            "status": "infrastructure_error",
+            "domain": "retail",
+            "task_id": "b",
+            "trial": 1,
+            "source_id": "retail:b:trial1",
+            "error_type": "RateLimitError",
+        },
+    ]
+
+    summary = tau2_evaluate.aggregate(records, planned=4, repeats=2)
+
+    assert summary["status"] == "complete"
+    assert summary["completed_episodes"] == 3
+    assert summary["infra_excluded_episodes"] == 1
+    assert summary["context_limit_episodes"] == 1
+    metrics = summary["metrics"]
+    assert metrics["eval/context_limit_episodes"] == 1
+    assert metrics["eval/domain/airline/context_limit_episodes"] == 1
+    assert metrics["eval/domain/retail/context_limit_episodes"] == 0
+    assert metrics["eval/policy_free_episodes"] == 1
+    assert metrics["eval/avg_reward"] == pytest.approx(2 / 3)
+    assert metrics["eval/pass^1"] == pytest.approx(3 / 4)
+    assert metrics["eval/pass^2"] == 0.0
+    assert summary["official"]["overall"]["pass_hat_k_tasks"] == {1: 2, 2: 1}
+    assert summary["by_domain"]["airline"]["episodes"] == 2
+    assert summary["by_trial"]["1"]["pass1_mean"] == 0.0

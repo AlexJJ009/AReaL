@@ -316,6 +316,7 @@ def aggregate(
         "eval/planned_episodes": planned,
         "eval/completed_episodes": len(completed),
         "eval/infra_excluded_episodes": overall["infra_excluded_episodes"],
+        "eval/context_limit_episodes": overall["context_limit_episodes"],
         "eval/policy_free_episodes": overall["policy_free_episodes"],
         "eval/avg_reward": overall["avg_reward"],
         "eval/pass1_mean": overall["avg_reward"],
@@ -331,6 +332,9 @@ def aggregate(
         metrics[f"eval/domain/{domain}/mean@{repeats}"] = result["mean_at_k"]
         metrics[f"eval/domain/{domain}/infra_excluded_episodes"] = result[
             "infra_excluded_episodes"
+        ]
+        metrics[f"eval/domain/{domain}/context_limit_episodes"] = result[
+            "context_limit_episodes"
         ]
         for k, value in result["pass_hat_k"].items():
             metrics[f"eval/domain/{domain}/pass^{k}"] = value
@@ -370,6 +374,7 @@ def aggregate(
         "planned_episodes": planned,
         "completed_episodes": len(completed),
         "infra_excluded_episodes": overall["infra_excluded_episodes"],
+        "context_limit_episodes": overall["context_limit_episodes"],
         "infra_excluded": [
             {k: r.get(k) for k in ("source_id", "attempts", "error_type", "error")}
             for r in records

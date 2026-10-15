@@ -253,6 +253,7 @@ async def test_cancellation_waits_for_episode_cleanup():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("evaluation", [False, True])
 @pytest.mark.parametrize(
     "policy_failure,policy_message",
     [
@@ -272,7 +273,7 @@ async def test_cancellation_waits_for_episode_cleanup():
     ],
 )
 async def test_context_exhaustion_is_policy_failure_not_simulator_failure(
-    monkeypatch, policy_failure, policy_message
+    monkeypatch, policy_failure, policy_message, evaluation
 ):
     from litellm import BadRequestError
 
@@ -309,6 +310,7 @@ async def test_context_exhaustion_is_policy_failure_not_simulator_failure(
         agent_api_key="session",
         user_api_key="user",
         timeout=30.0,
+        evaluation=evaluation,
     )
     assert runner._agent_llm_args()["max_total_tokens"] == 32768
     task = _get_task(
@@ -624,12 +626,13 @@ async def test_training_episode_timeout_is_kept_as_truncated_zero(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("evaluation", [False, True])
 @pytest.mark.parametrize(
     "outcome, error_type",
     [("malformed", json.JSONDecodeError), (0.0, None), ("unrelated", RuntimeError)],
 )
 async def test_evaluator_failure_fails_attempt_for_episode_retry(
-    monkeypatch, tmp_path, outcome, error_type
+    monkeypatch, tmp_path, outcome, error_type, evaluation
 ):
     from types import SimpleNamespace
     from unittest.mock import Mock
@@ -643,6 +646,7 @@ async def test_evaluator_failure_fails_attempt_for_episode_retry(
         agent_api_key="session-secret",
         user_api_key="user-secret",
         timeout=1200.0,
+        evaluation=evaluation,
     )
     task = _get_task("retail", "68", "test")
     simulation = SimpleNamespace(messages=[], termination_reason="completed")
@@ -753,20 +757,41 @@ async def test_evaluation_keeps_finished_episode_past_wall_clock(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_evaluation_context_exhaustion_fails_attempt_like_official(monkeypatch):
-    from litellm import BadRequestError
+@pytest.mark.parametrize("failure", ["context", "connection"])
+@pytest.mark.parametrize("prior_policy_turns", [0, 1])
+async def test_evaluation_policy_failure_keeps_context_but_retries_connection(
+    monkeypatch, tmp_path, failure, prior_policy_turns
+):
+    """Exercise the real runner, attempt writer and episode retry loop on CPU."""
+    from types import SimpleNamespace
+    from unittest.mock import Mock
 
-    from examples.tau2.agent import Tau2InfrastructureError
+    import torch
+    from litellm import APIConnectionError, BadRequestError
+
+    from examples.tau2 import official_runner
+
+    from areal.experimental.openai.proxy.workflow import OpenAIProxyWorkflow
+
+    policy_calls = 0
+    attempts = []
+    results = []
 
     def fake_completion(**kwargs):
+        nonlocal policy_calls
         if kwargs["model"] == "openai/dummy":
-            raise BadRequestError(
-                message="areal_context_limit: context_length_exceeded",
-                model=kwargs["model"],
-                llm_provider="openai",
-            )
+            policy_calls += 1
+            if policy_calls % (prior_policy_turns + 1) == 0:
+                error = BadRequestError if failure == "context" else APIConnectionError
+                raise error(
+                    message="areal_context_limit: context_length_exceeded"
+                    if failure == "context"
+                    else "Connection refused",
+                    model=kwargs["model"],
+                    llm_provider="openai",
+                )
         return ModelResponse(
-            model="test",
+            model=kwargs["model"],
             choices=[
                 {
                     "index": 0,
@@ -778,27 +803,97 @@ async def test_evaluation_context_exhaustion_fails_attempt_like_official(monkeyp
         )
 
     monkeypatch.setattr(llm_utils, "completion", fake_completion)
-    runner = Tau2Runner(
+    evaluator = Mock(
+        side_effect=AssertionError("Budget failures must not be evaluated")
+    )
+    monkeypatch.setattr("examples.tau2.agent.evaluate_simulation", evaluator)
+    monkeypatch.setenv("TAU2_TEST_USER_KEY", "test-user")
+    monkeypatch.delenv("TAU2_USAGE_LOG", raising=False)
+    agent = Tau2AgentWorkflow(
         econfig=Tau2EnvConfig(
             domain="telecom",
             user_llm_base_url="https://user.invalid/v1",
             user_llm="openai/test-user",
+            user_llm_api_key_env="TAU2_TEST_USER_KEY",
         ),
         gen_args={"max_total_tokens": 32768, "max_completion_tokens": 4096},
-        agent_base_url="http://policy.invalid/v1",
-        agent_api_key="session",
-        user_api_key="user",
         timeout=30.0,
         evaluation=True,
+        trajectory_dir=str(tmp_path),
     )
-    task = _get_task(
-        "telecom", get_tau2_dataset("telecom", split="train")[0]["task_id"], "train"
+    agent.retry_delay = 0
+    proxy = OpenAIProxyWorkflow(mode="inline", agent=agent)
+    monkeypatch.setattr(
+        "areal.experimental.openai.proxy.workflow.stats_tracker.get",
+        lambda *_: SimpleNamespace(scalar=lambda **_: None),
     )
-    # Official τ² has no context-window outcome: the attempt fails, is retried,
-    # and is finally excluded as an infrastructure error.
-    with pytest.raises(Tau2InfrastructureError) as caught:
-        await runner.run(task)
-    assert Tau2AgentWorkflow.should_retry_episode(caught.value)
+
+    async def run_attempt(engine, data):
+        attempts.append(data)
+        result = await agent.run(
+            data, base_url="http://policy.invalid/v1", api_key="session"
+        )
+        results.append(result)
+        # Only proxy transport/export is replaced; the runner and retry loop are real.
+        if prior_policy_turns == 0:
+            return None
+        return {
+            "rewards": torch.tensor([result.reward]),
+            "official_scores": torch.tensor([result.metadata["official_score"]]),
+            "task_budget_failure": torch.tensor(
+                [result.metadata["failure_class"] == "task_budget"]
+            ),
+        }
+
+    monkeypatch.setattr(proxy, "_arun_episode", run_attempt)
+    task = get_tau2_dataset("telecom", split="train")[0]
+    row = official_runner.expand_trials([task], 1)[0]
+    trajectory = await proxy.arun_episode(None, row)
+
+    class Controller:
+        dispatcher = None
+
+        def submit(self, *args, **kwargs):
+            return 0
+
+        def wait_results(self, *args, **kwargs):
+            return [(0, SimpleNamespace(trajectory=trajectory) if trajectory else None)]
+
+    controller = Controller()
+    controller.dispatcher = controller
+    (record,) = official_runner.collect_episodes(
+        controller, [row], workflow_kwargs={}, max_inflight=1, trajectory_root=tmp_path
+    )
+    saved = official_runner.attempt_records(tmp_path, row["source_id"])
+    evaluator.assert_not_called()
+    if failure == "connection":
+        assert len(attempts) == agent.infra_retries + 1 == 4
+        assert len(saved) == 4
+        assert all(item["status"] == "error" for item in saved)
+        assert record["status"] == official_runner.INFRASTRUCTURE_ERROR
+        assert "Connection refused" in record["error"]
+        assert results == []
+        metrics = official_runner.official_metrics([record], repeats=1)["overall"]
+        assert metrics["infra_excluded_episodes"] == 1
+        assert metrics["evaluated_episodes"] == 0
+    else:
+        assert len(attempts) == len(saved) == 1
+        (result,) = results
+        assert result.reward == result.metadata["official_score"] == 0.0
+        assert result.truncated and not result.terminated and not result.bootstrap_mask
+        assert result.metadata["reward_info"] is None
+        assert saved[0]["reward_info"] is None
+        assert saved[0]["status"] == record["status"] == "completed"
+        assert record["reward"] == record["official_score"] == 0.0
+        assert record["stop_reason"] == result.stop_reason == "context_limit"
+        assert record["task_budget_failure"]
+        assert record["policy_turns"] == prior_policy_turns
+        metrics = official_runner.official_metrics([record], repeats=1)["overall"]
+        assert metrics["evaluated_episodes"] == metrics["context_limit_episodes"] == 1
+        assert (
+            metrics["infra_excluded_episodes"] == metrics["policy_free_episodes"] == 0
+        )
+        assert metrics["pass_hat_k"] == {1: 0.0}
 
 
 def test_user_llm_usage_sums_only_user_turns():

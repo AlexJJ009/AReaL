@@ -85,7 +85,7 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
         self._async_eval_rollout.start_proxy()
 
     def _evaluate_dataset(self, eval_workflow, eval_workflow_kwargs) -> dict:
-        """Score the validation split with the official `tau2 run` semantics."""
+        """Score validation with official metrics and zero-score context failures."""
 
         tasks = [row for batch in self.valid_dataloader for row in batch]
         repeats = self.config.eval_gconfig.n_samples
@@ -114,6 +114,7 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
                 "episodes": result["evaluated_episodes"],
                 "reward_mean": result["avg_reward"],
                 "infra_excluded_episodes": result["infra_excluded_episodes"],
+                "context_limit_episodes": result["context_limit_episodes"],
                 "policy_free_episodes": result["policy_free_episodes"],
                 "pass_hat_k": result["pass_hat_k"],
                 "mean_at_k": result["mean_at_k"],
@@ -126,6 +127,7 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
                 "episodes",
                 "reward_mean",
                 "infra_excluded_episodes",
+                "context_limit_episodes",
                 "policy_free_episodes",
             ):
                 metrics[f"eval/{domain}/{key}"] = result[key]
@@ -136,6 +138,7 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
         metrics["eval/episodes"] = overall["evaluated_episodes"]
         metrics["eval/reward_mean"] = overall["avg_reward"]
         metrics["eval/infra_excluded_episodes"] = overall["infra_excluded_episodes"]
+        metrics["eval/context_limit_episodes"] = overall["context_limit_episodes"]
         metrics[f"eval/mean@{repeats}"] = overall["mean_at_k"]
         for k, value in overall["pass_hat_k"].items():
             metrics[f"eval/pass^{k}"] = value

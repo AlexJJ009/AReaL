@@ -350,7 +350,7 @@ class _OfficialEvalController:
         task_id = len(self.kwargs) - 1
         outcome = self.outcomes[row["source_id"]]
         root = Path(workflow_kwargs["trajectory_dir"])
-        if outcome == "policy_free":
+        if outcome in ("policy_free", "context_limit", "context_limit_no_policy"):
             directory = root / row["source_id"]
             directory.mkdir(parents=True)
             (directory / "a.json").write_text(
@@ -358,13 +358,26 @@ class _OfficialEvalController:
                     {
                         "recorded_at": 1.0,
                         "status": "completed",
-                        "policy_turns": 0,
-                        "official_score": 1.0,
-                        "stop_reason": "user_stop",
+                        "policy_turns": 2 if outcome == "context_limit" else 0,
+                        "official_score": float(outcome == "policy_free"),
+                        "stop_reason": "user_stop"
+                        if outcome == "policy_free"
+                        else "context_limit",
+                        "task_budget_failure": outcome != "policy_free",
                     }
                 )
             )
-            result = None
+            result = (
+                SimpleNamespace(
+                    trajectory={
+                        "rewards": torch.tensor([0.0]),
+                        "official_scores": torch.tensor([0.0]),
+                        "task_budget_failure": torch.tensor([True]),
+                    }
+                )
+                if outcome == "context_limit"
+                else None
+            )
         elif outcome == "infra":
             result = None
         else:
@@ -404,9 +417,15 @@ def _official_eval_trainer(tmp_path, outcomes, tasks):
     return trainer, statuses
 
 
-def test_tau2_in_training_eval_scores_and_excludes_like_official(tmp_path):
+@pytest.mark.parametrize(
+    "context_outcome", ["context_limit", "context_limit_no_policy"]
+)
+def test_tau2_in_training_eval_scores_and_excludes_like_official(
+    tmp_path, context_outcome
+):
+    """Both context export paths stay scored beside policy-free and infra outcomes."""
     outcomes = {
-        "airline:44:trial0": 0.0,  # context-limited training-style export
+        "airline:44:trial0": context_outcome,
         "airline:44:trial1": "policy_free",
         "retail:1:trial0": 1.0,
         "retail:1:trial1": "infra",
@@ -424,6 +443,13 @@ def test_tau2_in_training_eval_scores_and_excludes_like_official(tmp_path):
     assert status["domains"]["airline"]["episodes"] == 2
     assert status["domains"]["airline"]["reward_mean"] == 0.5
     assert status["domains"]["airline"]["policy_free_episodes"] == 1
+    assert status["domains"]["airline"]["context_limit_episodes"] == 1
+    assert status["domains"]["retail"]["context_limit_episodes"] == 0
+    assert status["metrics"]["eval/context_limit_episodes"] == 1
+    assert status["metrics"]["eval/airline/context_limit_episodes"] == 1
+    assert status["metrics"]["eval/retail/context_limit_episodes"] == 0
+    assert status["metrics"]["eval/pass^1"] == pytest.approx(3 / 4)
+    assert status["metrics"]["eval/pass^2"] == 0.0
     # The exhausted episode is excluded from the denominator and counted.
     assert status["domains"]["retail"]["episodes"] == 1
     assert status["domains"]["retail"]["reward_mean"] == 1.0
@@ -584,10 +610,10 @@ def test_tau2_episode_retry_covers_any_exception_like_official_runner():
         Tau2InfrastructureError,
     )
 
-    # tau2.runner.progress retries every Exception, including context overflow
-    # and deterministic errors; shutdown/cancellation is not an Exception.
+    # Raised infrastructure and deterministic errors retain official retries;
+    # handled context exhaustion returns an outcome instead of reaching this hook.
     for failure in (
-        Tau2InfrastructureError("areal_context_limit: exhausted"),
+        Tau2InfrastructureError("policy transport connection reset"),
         litellm.RateLimitError(
             message="Too many requests", model="dummy", llm_provider="openai"
         ),

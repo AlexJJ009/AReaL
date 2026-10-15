@@ -507,9 +507,9 @@ class Tau2Runner:
         except Exception as e:
             run_info.messages = self.messages = orchestrator.get_trajectory()
             run_info.error = str(e)
-            # Official τ² has no context-window outcome: the provider error is
-            # retried and finally excluded, so evaluation raises it instead.
-            if is_context_budget_error(e) and not self.evaluation:
+            # The policy context cap is our task budget: training and evaluation
+            # both keep exhaustion as a zero-reward failure without replaying it.
+            if is_context_budget_error(e):
                 run_info.error_type = "task_budget"
                 run_info.terminated = False
                 run_info.truncated = True
@@ -662,9 +662,9 @@ class Tau2AgentWorkflow:
     ) -> None:
         if export_style != "concat":
             return
-        # Zero leaves means the policy was never called (e.g. the official user
-        # simulator stopped on its first turn). Official τ² scores that episode
-        # normally; it is not a transient failure and must not be replayed.
+        # Zero leaves can mean a first-turn user stop or context exhaustion
+        # before any policy tokens were generated. Both are scored from the
+        # completed attempt record and must not be replayed.
         if len(interactions) <= 1:
             return
         task_id = data.get("task_id", "<unknown>")

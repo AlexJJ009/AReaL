@@ -298,3 +298,109 @@ def test_official_metrics_reports_mean_and_pass_hat_1_2_4_over_eligible_tasks():
     assert metrics["pass_hat_k"][2] == pytest.approx(expected)
     # Per-task mean, then mean over tasks (not the pooled episode mean 3/11).
     assert metrics["mean_at_k"] == pytest.approx((1 / 4 + 0 + 2 / 3) / 3)
+
+
+@pytest.mark.parametrize("policy_turns", [0, 2])
+def test_collect_context_limit_keeps_completed_zero_score_and_final_attempt(
+    tmp_path, policy_turns
+):
+    """Both first-call and later overflow retain their completed attempt outcome."""
+    row = _rows(1)[0]
+    _write_attempt(
+        tmp_path,
+        row["source_id"],
+        "older",
+        recorded_at=1.0,
+        status="error",
+        error_type="RateLimitError",
+        error="provider busy",
+        policy_turns=0,
+    )
+    _write_attempt(
+        tmp_path,
+        row["source_id"],
+        "final",
+        recorded_at=2.0,
+        status="completed",
+        policy_turns=policy_turns,
+        official_score=0.0,
+        stop_reason="context_limit",
+        task_budget_failure=True,
+        reward_info=None,
+    )
+    controller = _Controller(results={0: _trajectory(0.0)} if policy_turns else {})
+
+    records = official_runner.collect_episodes(
+        controller,
+        [row],
+        workflow_kwargs={},
+        max_inflight=1,
+        trajectory_root=tmp_path,
+    )
+
+    assert len(controller.submitted) == 1
+    assert len(records) == 1
+    record = records[0]
+    assert record["status"] == "completed"
+    assert record["reward"] == record["official_score"] == 0.0
+    assert record["stop_reason"] == "context_limit"
+    assert record["policy_turns"] == policy_turns
+    assert record["attempts"] == 2
+    metrics = official_runner.official_metrics(records, repeats=1)["overall"]
+    assert metrics["evaluated_episodes"] == metrics["context_limit_episodes"] == 1
+    assert metrics["infra_excluded_episodes"] == metrics["policy_free_episodes"] == 0
+
+
+@pytest.mark.parametrize("context_policy_turns", [0, 2])
+def test_official_metrics_context_limit_counts_in_all_pass_denominators(
+    context_policy_turns,
+):
+    """Context loss lowers pass metrics; ordinary infra alone is excluded."""
+    records = [
+        {
+            "domain": domain,
+            "task_id": "a",
+            "status": "completed",
+            "official_score": 1.0,
+            "trial": trial,
+            "policy_turns": 2,
+            "stop_reason": "user_stop",
+        }
+        for domain in ("retail", "airline")
+        for trial in range(4)
+    ]
+    records[3].update(
+        official_score=0.0,
+        stop_reason="context_limit",
+        policy_turns=context_policy_turns,
+    )
+    records[4]["policy_turns"] = 0
+    records.append(
+        {
+            "domain": "retail",
+            "task_id": "infra-only",
+            "status": official_runner.INFRASTRUCTURE_ERROR,
+            "error_type": "RateLimitError",
+        }
+    )
+
+    metrics = official_runner.official_metrics(records, repeats=4)
+
+    overall = metrics["overall"]
+    assert overall["episodes"] == 9
+    assert overall["evaluated_episodes"] == 8
+    assert overall["infra_excluded_episodes"] == 1
+    assert overall["context_limit_episodes"] == 1
+    assert overall["policy_free_episodes"] == 1
+    assert overall["avg_reward"] == pytest.approx(7 / 8)
+    assert overall["mean_at_k"] == pytest.approx(7 / 8)
+    assert overall["pass_hat_k_tasks"] == {1: 2, 2: 2, 4: 2}
+    assert overall["pass_hat_k"] == pytest.approx({1: 7 / 8, 2: 3 / 4, 4: 1 / 2})
+    retail = metrics["by_domain"]["retail"]
+    assert retail["context_limit_episodes"] == retail["infra_excluded_episodes"] == 1
+    assert retail["policy_free_episodes"] == 0
+    assert retail["pass_hat_k"] == pytest.approx({1: 3 / 4, 2: 1 / 2, 4: 0.0})
+    airline = metrics["by_domain"]["airline"]
+    assert airline["context_limit_episodes"] == 0
+    assert airline["policy_free_episodes"] == 1
+    assert airline["pass_hat_k"] == {1: 1.0, 2: 1.0, 4: 1.0}
