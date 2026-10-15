@@ -1,0 +1,114 @@
+# Standard PPO; retain GRPO async correction, replace group returns with GAE.
+# Default pool: AReaL pack v2 648 + official fixed train 99 = 747 tasks.
+# 8 complete epochs -> 48 global steps, 10 warmup + 38 actor updates, 5976 episodes.
+defaults:
+  - config_grpo
+  - _self_
+
+experiment_name: tau2-ppo
+algorithm: ppo
+enable_offload: true
+total_train_epochs: 8
+num_critic_only_steps: 10
+train_batch_episodes: 128
+train_task_packs: []
+samples_per_task_per_epoch: 1
+# Derived from pool sizes, or supply exact matching budgets.
+domain_effective_episodes: {}
+
+rollout:
+  max_concurrent_rollouts: 128
+  queue_size: 256
+  agent:
+    tool_call_parser: qwen25
+
+evaluation_rollout:
+  agent:
+    tool_call_parser: qwen25
+
+gconfig:
+  n_samples: 1
+
+actor:
+  path: ${oc.env:TAU2_ACTOR_PATH,Qwen/Qwen3-4B-Instruct-2507@cdbee75f17c01a7cc42f958dc650907174af0554}
+  eps_clip_higher: 0.2
+  reward_norm: null
+  adv_norm: null
+  gae_lambda: 1.0
+  critic_gae_lambda: 1.0
+  gae_lambda_kwargs: {}
+  use_direct_dis_loss: false
+  optimizer:
+    lr: 1.0e-06
+  # TMS offload cannot use expandable_segments; use the proven SAO worker env.
+  scheduling_spec:
+    - task_type: worker
+      port_count: 2
+      gpu: 1
+      cpu: 2
+      mem: 64
+      cmd: python3 -m areal.infra.rpc.rpc_server
+      env_vars: {}
+
+critic:
+  backend: ${actor.backend}
+  experiment_name: ${experiment_name}
+  trial_name: ${trial_name}
+  path: ${oc.env:TAU2_CRITIC_PATH,${actor.path}}
+  is_critic: true
+  freeze_critic_attention: false
+  value_contract: null
+  init_from_scratch: false
+  offload: true
+  dtype: ${actor.dtype}
+  optimizer_dtype: ${actor.optimizer_dtype}
+  grad_reduce_dtype: ${actor.grad_reduce_dtype}
+  attn_impl: ${actor.attn_impl}
+  disable_dropout: true
+  gradient_checkpointing: true
+  ppo_n_minibatches: 1
+  loss_reduction: token_mean
+  eps_clip: 0.5
+  mb_spec:
+    n_mbs: 1
+    max_tokens_per_mb: 32768
+    packing_algorithm: ffd
+  fsdp:
+    offload_params: false
+    per_layer_optim_step: false
+  optimizer:
+    type: adam
+    lr: 1.0e-05
+    weight_decay: 0.01
+    beta1: 0.9
+    beta2: 0.999
+    eps: 1.0e-8
+    lr_scheduler_type: constant
+    gradient_clipping: 1.0
+    warmup_steps_proportion: 0.015
+    warmup_steps: null
+  scheduling_strategy:
+    type: colocation
+    target: actor
+  scheduling_spec: ${actor.scheduling_spec}
+
+train_dataset:
+  batch_size: 128
+
+econfig:
+  benchmark_variant: fixed
+
+saver:
+  freq_steps: 10
+
+recover:
+  freq_steps: 10
+
+evaluator:
+  freq_steps: 10
+  eval_before_train: true
+
+stats_logger:
+  wandb:
+    project: ${oc.env:TAU2_WANDB_PROJECT,areal-tau2-ppo}
+    tags: [tau2, ppo, qwen3-4b-instruct, full-critic]

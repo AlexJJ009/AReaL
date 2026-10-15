@@ -379,8 +379,8 @@ def validate_tau2_critic_config(
         or config.critic.optimizer.warmup_steps_proportion != 0
     ):
         raise ValueError("Tau2 critic requires constant LR with zero warmup")
-    if not config.critic.freeze_critic_attention:
-        raise ValueError("Tau2 critic production fit requires frozen attention")
+    # Attention freezing is an experiment choice. Both full-parameter fitting
+    # and the original frozen-attention recipe share all other contracts.
     if validation_rows is not None:
         expected_validation_rows = _expected_validation_rows(config)
         if validation_rows != expected_validation_rows:

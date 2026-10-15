@@ -27,7 +27,20 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
     _snapshot_evidence = False
     _recover_rollout_inputs = True
 
-    def _init_impl(self, config, *args, **kwargs):
+    # The PPO recipe evaluates every global step interval, including warmup.
+    @property
+    def _evaluate_during_critic_warmup(self):
+        return self.config.algorithm == "ppo"
+
+    @classmethod
+    def validate_config(cls, config):
+        """Shared CPU preflight and runtime checks, including checkpoint cadence."""
+        super().validate_config(config)
+        cls._validate_save_eval_sync(config)
+        if config.scheduler.type != "local":
+            raise NotImplementedError(
+                "Dedicated checkpoint evaluation requires LocalScheduler"
+            )
         if (
             config.actor.loss_reduction != "token_mean"
             or config.actor.ppo_n_minibatches != 1
@@ -45,6 +58,9 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
             raise ValueError(
                 "Finite-tail critic dispatch requires token_mean, one minibatch and disabled dropout"
             )
+
+    def _init_impl(self, config, *args, **kwargs):
+        self.validate_config(config)
         super()._init_impl(config, *args, **kwargs)
         epoch = self.recover_info.last_step_info.epoch if self.recover_info else 0
         if self.recover_info is None:

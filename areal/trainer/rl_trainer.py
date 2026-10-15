@@ -152,31 +152,7 @@ class PPOTrainer:
         # Set seed.
         seeding.set_random_seed(config.seed, key=f"trainer{rank}")
 
-        # Parse per-engine allocations from config.
-        self.actor_alloc = ModelAllocation.from_str(config.actor.backend, name="actor")
-        self.rollout_alloc = ModelAllocation.from_str(
-            config.rollout.backend, name="rollout"
-        )
-        self._should_offload_rollout = self._is_actor_rollout_colocated(config)
-        self._should_offload_actor = (
-            self._should_offload_rollout or config.actor.offload
-        )
-        self._should_offload_critic = (
-            config.critic is not None and config.critic.offload
-        )
-        self._should_offload_ref = config.ref is not None and config.ref.offload
-        self._should_offload_teacher = (
-            config.teacher is not None and config.teacher.offload
-        )
-        # In colocate (awex) mode the GPU switch between rollout and training
-        # is managed by the AWEX adapter (manual offload/onload + tagged SGLang
-        # release), not by the TMS-based offload machinery below.
-        if self._is_v1_awex_colocate(config):
-            self._should_offload_rollout = False
-            self._should_offload_actor = False
-
-        # Validate config before proceeding with weight initialization
-        self._validate_cfg()
+        self._configure_and_validate_engines(config)
 
         self._amend_xccl_weight_update_envvar()
         self._amend_deterministic_envvar()
@@ -737,6 +713,8 @@ class PPOTrainer:
         if actor_was_offloaded:
             self._onload_model(self.actor, role="actor")
 
+    _evaluate_during_critic_warmup = False
+
     def _apply_initial_step_policy_version(self, initial_step: int) -> None:
         if initial_step <= 0:
             return
@@ -1099,7 +1077,7 @@ class PPOTrainer:
                     args={"global_step": global_step},
                 ),
             ):
-                if not critic_only:
+                if not critic_only or self._evaluate_during_critic_warmup:
                     self._evaluate(
                         eval_workflow=eval_workflow,
                         eval_workflow_kwargs=eval_workflow_kwargs,
@@ -1713,6 +1691,40 @@ class PPOTrainer:
         if not is_single_controller():
             dist.barrier(group=self.actor.cpu_group)
             current_platform.synchronize()
+
+    @classmethod
+    def validate_config(cls, config: PPOConfig) -> None:
+        """Run engine config checks without loading tokenizers or creating workers."""
+        probe = cls.__new__(cls)
+        probe.config = config
+        probe._configure_and_validate_engines(config)
+
+    def _configure_and_validate_engines(self, config: PPOConfig) -> None:
+        # Parse per-engine allocations from config.
+        self.actor_alloc = ModelAllocation.from_str(config.actor.backend, name="actor")
+        self.rollout_alloc = ModelAllocation.from_str(
+            config.rollout.backend, name="rollout"
+        )
+        self._should_offload_rollout = self._is_actor_rollout_colocated(config)
+        self._should_offload_actor = (
+            self._should_offload_rollout or config.actor.offload
+        )
+        self._should_offload_critic = (
+            config.critic is not None and config.critic.offload
+        )
+        self._should_offload_ref = config.ref is not None and config.ref.offload
+        self._should_offload_teacher = (
+            config.teacher is not None and config.teacher.offload
+        )
+        # In colocate (awex) mode the GPU switch between rollout and training
+        # is managed by the AWEX adapter (manual offload/onload + tagged SGLang
+        # release), not by the TMS-based offload machinery below.
+        if self._is_v1_awex_colocate(config):
+            self._should_offload_rollout = False
+            self._should_offload_actor = False
+
+        # Validate config before proceeding with weight initialization
+        self._validate_cfg()
 
     def _validate_cfg(self):
         if (
