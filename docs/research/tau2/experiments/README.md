@@ -9,3 +9,13 @@
 1. 结果：数字、图表和对假设的判断。
 
 长期有效的决策写到 [../decisions/](../decisions/README.md)，不放在这里。
+
+## 目录
+
+- [2026-10-14-confirm-exit-preexp.md](2026-10-14-confirm-exit-preexp.md)
+- [2026-10-14-critic-offline-preexp.md](2026-10-14-critic-offline-preexp.md)：Qwen3.5
+  critic 离线预实验
+- [2026-10-15-critic-offline-preexp-qwen3.md](2026-10-15-critic-offline-preexp-qwen3.md)：Qwen3
+  critic 离线预实验
+- [2026-10-15-qwen3-ppo-grpo-sao.md](2026-10-15-qwen3-ppo-grpo-sao.md)：Qwen3 PPO / GRPO
+  / SAO 对比

@@ -3,7 +3,7 @@
 | 项                 | 内容                                                                                                                                                    |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 编号               | EXP-2026-10-15-critic-offline-qwen3                                                                                                                     |
-| 状态               | 准备中：工具适配交给 Codex                                                                                                                              |
+| 状态               | E2/E3/E7 已运行（2026-10-15），结果在 `results-0f8f6aa0/`；§9–11 未填写                                                                                 |
 | 设计 / 执行 / 批准 | Claude / Codex / GongxunLi                                                                                                                              |
 | 代码               | `codex/sao-math`；沿用 Qwen3.5 预实验的工具（[2026-10-14-critic-offline-preexp.md](2026-10-14-critic-offline-preexp.md)，`451705d8`），改动先合入再运行 |
 | 产物目录           | `_artifacts/AReaL/codex-sao-math/tau2-training-20261015-critic-offline-qwen3/`                                                                          |

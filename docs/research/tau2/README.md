@@ -10,6 +10,10 @@
 的 EV 一直在 0 附近，原因见 [critic/](critic/README.md)；SAO 正式运行（mix pack + critic 510 第 55 步）见
 [sao-runs.md](sao-runs.md)。研究方向暂停方法推导，先找准现象（[research-direction/](research-direction/README.md)）。
 
+**状态（2026-10-16）**：baseline 换到 Qwen3-4B-Instruct-2507，PPO / GRPO / SAO 在同一题池和评测上对比，记录见
+[experiments/2026-10-15-qwen3-ppo-grpo-sao.md](experiments/2026-10-15-qwen3-ppo-grpo-sao.md)。PPO
+48 步、GRPO 47 步已完成；PPO 续训到 120 步运行中，SAO 120 步排队，Telecom 全量评测（D1）在最后。
+
 ## 结论
 
 **初始分数高（Retail/Airline 约 80%，Telecom 100%）的主因是模型本身能完成多数任务，加上 benchmark
@@ -33,6 +37,12 @@ DeepSeek-Flash 低 15.6pp。385 个失败里 168 个由用户造成；Doubao 的
 `formal-v2` 和早期 SAO 的证据只能说"无法判断训练是否有效"，不能说"训练变差"。SAO 534（mix pack + critic 510）的评测在 32K
 上下文限制下显示：训练让对话变长，超出 32K 的 episode 从第 0 步的 4 条增到第 40 步的 76 条（共 240 条），Airline mean@4 从
 0.475 降到 0.263；第 10 步 Airline 比第 0 步高 0.113，但区间包含 0（[sao-runs.md](sao-runs.md)）。
+
+**Qwen3 PPO baseline
+提升小，目前不能归因到用户模拟器**（[experiments/2026-10-15-qwen3-ppo-grpo-sao.md §4](experiments/2026-10-15-qwen3-ppo-grpo-sao.md)）：评测
+起点到 48 步 +3.5pp，CI \[−2.0, +9.0\]，而这套评测只能分辨约 8pp；同一批训练题上 reward 配对 +6.6pp，policy 在学。两份独立
+case study 都发现失败约 92% 是 agent 的错，约 8% 是用户的错，且全是"确认后同一句 STOP"；用户的随机性主要放大评测噪声。48 步 × lr
+1e-6 是可比工作里训练量最少的（[ppo-training-budget-survey.md](ppo-training-budget-survey.md)）。
 
 ## 仍未完成
 
@@ -64,6 +74,10 @@ DeepSeek-Flash 低 15.6pp。385 个失败里 168 个由用户造成；Doubao 的
 - [training-data.md](training-data.md)：AReaL-tau2-data 的核查、筛选、pack 和 Telecom pack。
 - [critic/](critic/README.md)：critic 实验（扩数据、value head、EV 上限、数据配比、case study）。
 - [sao-runs.md](sao-runs.md)：SAO mix pack + critic 510 第 55 步。
+- [experiments/2026-10-15-qwen3-ppo-grpo-sao.md](experiments/2026-10-15-qwen3-ppo-grpo-sao.md)：Qwen3
+  上 PPO / GRPO / SAO 对比、OOM 和 SAO 崩溃的修复、两份 case study 的结论。
+- [ppo-training-budget-survey.md](ppo-training-budget-survey.md)：相关工作的训练步数、batch、lr
+  与我们的对比。
 - [infra-issues.md](infra-issues.md)：proxy 容量泄漏、Qwen3 加速配置、SAO 推权重崩溃。
 - [issues/](issues/)：给 Codex 的 issue 记录。
 - [reports/](reports/README.md)：Codex / Claude 的最终报告（xccl、critic recover、SAO mix），critic
