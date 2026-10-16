@@ -89,6 +89,7 @@ def update_critic_before_actor(
     The caller has computed initial values/targets and waited for checkpoint
     staging. Policy publication happens only on return. Microbatch accumulation
     is inside the engine; each update call must perform one full optimizer step.
+    The handoff callback must restore actor residency before advantage RPC ingress.
     """
     if isinstance(updates, bool) or not isinstance(updates, int) or updates < 1:
         raise ValueError("critic updates must be a positive integer")
@@ -117,13 +118,15 @@ def update_critic_before_actor(
         raise RuntimeError("Critic returned the wrong number of value trajectories")
     for row, value in zip(raw, refreshed):
         row["values"] = value.detach() if isinstance(value, torch.Tensor) else value
+    # Even tensor-only advantages need an onloaded actor: RPC moves the payload
+    # onto CUDA before entering the method, while TMS pauses offloaded memory.
+    if before_actor_update is not None:
+        before_actor_update()
     actor_batch = actor.compute_advantages(raw)
     if len(actor_batch) != len(fixed):
         raise RuntimeError("Actor returned the wrong number of advantage trajectories")
     for row, target in zip(actor_batch, fixed):
         row["returns"] = target["returns"]
-    if before_actor_update is not None:
-        before_actor_update()
     actor_report = actor.ppo_update(actor_batch)
     all_masked = not actor_update_completed(actor_report)
     if not all_masked:

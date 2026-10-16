@@ -75,8 +75,13 @@ class _ResidencyEngine(_TrainEngine):
         return [torch.zeros(1) for _ in batch]
 
     def compute_advantages(self, batch: list[dict]) -> list[dict]:
-        # Advantage construction is tensor-only: SAO calls this while the
-        # critic is resident, before its before_actor_update handoff.
+        # RPC broadcasts the batch onto CUDA before entering compute_advantages.
+        # TMS must already have resumed the actor's allocations at that boundary;
+        # unlike model forward, tensor-only advantages cannot ensure readiness.
+        assert self.role in self.resident, (
+            f"{self.role}.compute_advantages RPC received tensors while offloaded: "
+            f"{self.events}"
+        )
         self._record("compute_advantages")
         result = deepcopy(batch)
         for row in result:
