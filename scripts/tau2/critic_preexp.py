@@ -30,6 +30,8 @@ PENALTIES = (1e-5, 1e-3, 0.01, 0.1, 1.0, 10.0)
 SEEDS = (SEED, SEED + 1, SEED + 2)
 
 
+QWEN3_REVISION = "cdbee75f17c01a7cc42f958dc650907174af0554"
+
 PINNED_BASE_REVISION = "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a"
 
 
@@ -71,10 +73,12 @@ def validate_primary_cache(manifest, *, synthetic=False):
             "Primary features must be the base model final score-input layer"
         )
     fingerprint = checkpoint_fingerprint(manifest, synthetic=synthetic)
-    if (
-        not synthetic
-        and PINNED_BASE_REVISION not in Path(fingerprint["checkpoint"]).parts
-    ):
+    revision = (
+        QWEN3_REVISION
+        if manifest.get("protocol") == "qwen3-20261015"
+        else PINNED_BASE_REVISION
+    )
+    if not synthetic and revision not in Path(fingerprint["checkpoint"]).parts:
         raise ValueError(
             "Primary checkpoint must be the registered pinned base snapshot"
         )
@@ -108,7 +112,11 @@ def validate_e7_cache_alias(alias, manifest, base_manifest, *, synthetic=False):
             raise ValueError(
                 "E7 intermediate layer checkpoint/fingerprints differ from base"
             )
-    elif alias == "r510-final":
+    elif alias == (
+        "r480-final"
+        if base_manifest.get("protocol") == "qwen3-20261015"
+        else "r510-final"
+    ):
         if (
             manifest.get("layer") != "final"
             or manifest.get("feature_semantics")
@@ -122,8 +130,18 @@ def validate_e7_cache_alias(alias, manifest, base_manifest, *, synthetic=False):
         if not synthetic:
             checkpoint = Path(fingerprint["checkpoint"])
             if (
-                "critic-head-qwen35-mix-r2" not in checkpoint.parts
-                or checkpoint.name != "epoch2epochstep14globalstep54"
+                (
+                    "critic-instruct-formal-v1"
+                    if alias == "r480-final"
+                    else "critic-head-qwen35-mix-r2"
+                )
+                not in checkpoint.parts
+                or checkpoint.name
+                != (
+                    "epoch1epochstep46globalstep93"
+                    if alias == "r480-final"
+                    else "epoch2epochstep14globalstep54"
+                )
                 or checkpoint.parent.name != "critic"
             ):
                 raise ValueError(
@@ -286,22 +304,11 @@ def export_head(store, weight, bias, out, penalty):
 
 
 class PreexpStore(FeatureStore):
-    def __init__(self, manifest):
-        # Intermediate hidden states deliberately differ from final score input.
-        self.path = Path(manifest)
-        self.manifest = json.loads(self.path.read_text())
-        if self.manifest.get("schema") != "tau2-critic-features-v1":
-            raise ValueError("Unsupported feature manifest")
-        semantics = self.manifest.get("feature_semantics", "")
-        if semantics not in (
-            "score_input_final_norm_shifted_action_prefix",
-            "intermediate_layer_output_shifted_action_prefix",
-        ):
-            raise ValueError("Unknown causal prefix feature semantics")
-        self.hidden_size = int(self.manifest["hidden_size"])
-        self.episodes = []
-        self.sampled_training = False
-        self._train = None
+    # Intermediate hidden states deliberately differ from final score input.
+    _feature_semantics = (
+        "score_input_final_norm_shifted_action_prefix",
+        "intermediate_layer_output_shifted_action_prefix",
+    )
 
     @staticmethod
     def metadata(shard, index):
@@ -440,12 +447,24 @@ class PreexpStore(FeatureStore):
 
 
 class Preexperiment:
+    seeds = SEEDS
+    seed = SEED
+
     def __init__(
-        self, features, out, *, pool_manifest=None, synthetic=False, r510_reference=None
+        self,
+        features,
+        out,
+        *,
+        pool_manifest=None,
+        synthetic=False,
+        r510_reference=None,
+        seed=SEED,
     ):
         self.out = Path(out)
         self.out.mkdir(parents=True, exist_ok=True)
         self.synthetic = synthetic
+        self.seed = seed
+        self.seeds = (seed, seed + 1, seed + 2)
         self.store = PreexpStore(features)
         self.reference_path = r510_reference
         validate_primary_cache(self.store.manifest, synthetic=synthetic)
@@ -477,7 +496,7 @@ class Preexperiment:
         self.tasks = list(
             zip(self.fields["domain"], self.fields["task_id"], strict=True)
         )
-        self.folds = grouped_folds(self.tasks)
+        self.folds = grouped_folds(self.tasks, seed=self.seed)
         self.episode_map = {row["trajectory_id"]: row for row in self.store.episodes}
         self.indices = defaultdict(list)
         for index, identity in enumerate(self.identities):
@@ -485,7 +504,7 @@ class Preexperiment:
         initial = self.store.evaluate_targets(
             {"shared": (torch.zeros(self.x.shape[1]), torch.tensor(0.78))}
         )
-        self.bootstrap = TaskBootstrap(initial["rows"])
+        self.bootstrap = TaskBootstrap(initial["rows"], seed=self.seed)
         self.provenance = {
             "synthetic": synthetic,
             "scientific_interpretation": "disabled: synthetic execution check"
@@ -497,7 +516,7 @@ class Preexperiment:
             "feature_manifest_sha256": hashlib.sha256(
                 self.store.path.read_bytes()
             ).hexdigest(),
-            "seeds": list(SEEDS),
+            "seeds": list(self.seeds),
             "bootstrap_draws": 20000,
             "bootstrap_tasks": 60,
             "cv": "five folds grouped by domain/task; training only",
@@ -528,7 +547,7 @@ class Preexperiment:
         candidates = []
         for penalty in PENALTIES:
             losses, seed_mse = [], {}
-            for seed in SEEDS:
+            for seed in self.seeds:
                 folds = grouped_folds(self.tasks, seed=seed)
                 seed_losses = []
                 for fold in range(5):
@@ -586,7 +605,7 @@ class Preexperiment:
         bootstrap = self.bootstrap if bootstrap is None else bootstrap
         fitter = fit_ridge if kind == "ridge" else fit_logistic
         output = []
-        for seed in SEEDS:
+        for seed in self.seeds:
             models, penalties, heads = {}, {}, {}
             for domain, choices in selection.items():
                 selected = min(
@@ -647,7 +666,9 @@ class Preexperiment:
                     models, logistic=kind == "logistic", planted=planted
                 )
                 bootstrap = (
-                    self.bootstrap if not planted else TaskBootstrap(validation["rows"])
+                    self.bootstrap
+                    if not planted
+                    else TaskBootstrap(validation["rows"], seed=self.seed)
                 )
                 results[f"{kind}_{scope}"] = {
                     "selection": selection,
@@ -720,10 +741,16 @@ class Preexperiment:
         evaluate=True,
         planted=False,
         training_subset=None,
+        initial_head=None,
+        bias_init=0.78,
     ):
         labels = self.y if labels is None else labels
         weight = torch.zeros(self.x.shape[1], requires_grad=True)
-        bias = torch.tensor(0.78, requires_grad=not frozen_bias)
+        bias = torch.tensor(bias_init, requires_grad=not frozen_bias)
+        if initial_head is not None:
+            with torch.no_grad():
+                weight.copy_(initial_head["weight"].reshape_as(weight))
+                bias.copy_(initial_head["bias"].reshape_as(bias))
         parameters = [weight] if frozen_bias else [weight, bias]
         optimizer = torch.optim.AdamW(parameters, lr=lr, weight_decay=0)
         train_mask = training_subset if held is None else ~held
@@ -828,14 +855,18 @@ class Preexperiment:
             "total_steps": steps,
             "frozen_bias": frozen_bias,
             "warmup_steps": warmup_steps,
-            "bias_init": 0.78,
+            "bias_init": float(initial_head["bias"].reshape(()))
+            if initial_head is not None
+            else bias_init,
             "episodes_seen": sum(len(rows) for rows in batches),
             "steps": consumed,
             "evaluations": evaluations,
         }
         if evaluate:
             rows = evaluations[-1]["validation"]["rows"]
-            bootstrap = self.bootstrap if not planted else TaskBootstrap(rows)
+            bootstrap = (
+                self.bootstrap if not planted else TaskBootstrap(rows, seed=self.seed)
+            )
             output["bootstrap"] = bootstrap.report(rows)
             output["maximum_adjacent_domain_bias_jump"] = {
                 domain: max(
@@ -883,7 +914,7 @@ class Preexperiment:
         candidates = []
         for lr in LRS:
             losses, per_seed = [], {}
-            for seed in SEEDS:
+            for seed in self.seeds:
                 folds = grouped_folds(self.tasks, seed=seed)
                 values = []
                 for fold in range(5):
@@ -1012,7 +1043,7 @@ class Preexperiment:
                 arm_lrs = list(dict.fromkeys([5e-6, *[item["lr"] for item in cv[:2]]]))
                 for lr in arm_lrs:
                     seeds = []
-                    for seed in SEEDS:
+                    for seed in self.seeds:
                         arm, (weight, bias) = self.simulate(
                             lr=lr, batch=batch, steps=steps, seed=seed
                         )
@@ -1101,7 +1132,7 @@ class Preexperiment:
                     replay=batch == 16,
                     training_subset=r510,
                 )[0]
-                for seed in (SEEDS[:1] if batch == 16 else SEEDS)
+                for seed in (self.seeds[:1] if batch == 16 else self.seeds)
             ]
             arms.append(
                 {
@@ -1202,7 +1233,11 @@ class Preexperiment:
         expected_aliases = {
             f"base-layer-{index}"
             for index in layer_indices(int(self.store.manifest["depth"]))
-        } | {"r510-final"}
+        } | {
+            "r480-final"
+            if self.store.manifest.get("protocol") == "qwen3-20261015"
+            else "r510-final"
+        }
         if set(caches) != expected_aliases:
             raise ValueError(
                 "E7 requires exactly the three registered quarter-depth base layers and r510-final"
@@ -1282,9 +1317,9 @@ class Preexperiment:
                 (str(row["domain"]), str(row["task_id"])) for row in validation["rows"]
             }
             if len(tasks) == 60:
-                position_bootstrap[name] = TaskBootstrap(validation["rows"]).report(
-                    validation["rows"]
-                )
+                position_bootstrap[name] = TaskBootstrap(
+                    validation["rows"], seed=self.seed
+                ).report(validation["rows"])
             else:
                 position_bootstrap[name] = {
                     "draws": 20000,

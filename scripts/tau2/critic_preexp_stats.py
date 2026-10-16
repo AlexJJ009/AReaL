@@ -18,14 +18,17 @@ FIELDS = ("n_tokens", "sse", "error_sum", "target_sum", "target2_sum")
 class TaskBootstrap:
     """One shared draw matrix for every comparison, including domain subsets."""
 
-    def __init__(self, rows: list[dict[str, Any]], *, require_60: bool = True):
+    def __init__(
+        self, rows: list[dict[str, Any]], *, require_60: bool = True, seed: int = SEED
+    ):
+        self.seed = seed
         self.keys = sorted({(str(r["domain"]), str(r["task_id"])) for r in rows})
         if require_60 and len(self.keys) != 60:
             raise ValueError(f"Expected 60 validation tasks, got {len(self.keys)}")
         self.identities = {self.identity(r): (r["n_tokens"], r["target"]) for r in rows}
         if len(self.identities) != len(rows):
             raise ValueError("Duplicate validation episode identities")
-        generator = torch.Generator().manual_seed(SEED)
+        generator = torch.Generator().manual_seed(seed)
         sampled = torch.randint(
             len(self.keys), (DRAWS, len(self.keys)), generator=generator
         )
@@ -136,7 +139,7 @@ class TaskBootstrap:
         return {
             "draws": DRAWS,
             "tasks_per_draw": len(self.keys),
-            "seed": SEED,
+            "seed": self.seed,
             "paired_difference": reference is not None,
             "by_domain": output,
         }

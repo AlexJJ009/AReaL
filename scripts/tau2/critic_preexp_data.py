@@ -14,6 +14,40 @@ from scripts.tau2.critic_features import _reward, action_positions, validate_spl
 
 SEED = 20261014
 RETRY_OFFSET = 1 << 40
+QWEN3_PROTOCOL = "qwen3-20261015"
+
+
+def replay_step_map(manifest: dict[str, Any]) -> dict[int, int]:
+    """Bind r480 batches to saved metrics, including both short epoch tails."""
+    batches = manifest.get("replay_batches", [])
+    if len(batches) != 94:
+        raise ValueError("r480 replay requires 94 recorded batches")
+    mapping = {}
+    for step, batch in enumerate(batches):
+        source = Path(batch["metrics_file"])
+        if sha256(source) != batch["metrics_sha256"]:
+            raise ValueError("Replay metrics SHA256 mismatch")
+        record = json.loads(source.read_text())
+        metrics = record["metrics"]
+        count = 11 if step % 47 == 46 else 16
+        start = step * 16
+        orders = list(range(start, start + count))
+        if (
+            batch["episode_order"] != orders
+            or batch["global_step"] != step
+            or batch["completed_step"] != step + 1
+            or batch["epoch"] != step // 47
+            or batch["epoch_step"] != step % 47
+            or record["global_step"] != step
+            or record["completed_step"] != step + 1
+            or record["epoch"] != step // 47
+            or record["epoch_step"] != step % 47
+            or int(metrics["tau2_batch/task_id_start"]) != start
+            or int(metrics["tau2_batch/real_episodes"]) != count
+        ):
+            raise ValueError("r480 replay batch differs from recorded metrics")
+        mapping.update({order: step for order in orders})
+    return mapping
 
 
 def sha256(path: str | Path) -> str:
@@ -45,7 +79,19 @@ def load_pool(
     """
     import torch
 
-    torch.set_num_threads(1)
+    previous_threads = torch.get_num_threads()
+    try:
+        torch.set_num_threads(1)
+        return _load_pool(path, synthetic=synthetic)
+    finally:
+        torch.set_num_threads(previous_threads)
+
+
+def _load_pool(
+    path: str | Path, synthetic: bool
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    import torch
+
     path = Path(path)
     digest = sha256(path)
     if path.with_name(path.name + ".sha256").read_text().split()[0] != digest:
@@ -54,18 +100,25 @@ def load_pool(
     if manifest.get("schema_version") != "offline-critic-pool/1":
         raise ValueError("Unsupported pool schema")
     manifest["pool_manifest_sha256"] = digest
+    qwen3 = manifest.get("protocol") == QWEN3_PROTOCOL
+    steps = replay_step_map(manifest) if qwen3 else {}
     sources, rows, seen = {}, [], set()
     for section, split in [("training", "train"), ("validation", "validation")]:
         entries = manifest[section]
         if (
             not synthetic
-            and len(entries) != {"training": 2774, "validation": 120}[section]
+            and len(entries)
+            != (
+                {"training": 1494, "validation": 60}
+                if qwen3
+                else {"training": 2774, "validation": 120}
+            )[section]
         ):
             raise ValueError("Registered pool count mismatch")
         if len(entries) != manifest["counts"][section]["rows"]:
             raise ValueError("Declared pool count mismatch")
         for entry in entries:
-            if entry["run"] not in ("r499", "r510"):
+            if entry["run"] not in (("r480",) if qwen3 else ("r499", "r510")):
                 raise ValueError("Unregistered source run")
             source = entry["rollout_file"] if split == "train" else entry["pt_file"]
             expected_sha = (
@@ -131,13 +184,17 @@ def load_pool(
             if physical < 0 or physical >= 2 * RETRY_OFFSET:
                 raise ValueError("Invalid retry ID")
             order = physical % RETRY_OFFSET
+            if qwen3 and split == "train" and order not in steps:
+                raise ValueError("r480 episode absent from replay metrics")
             row.update(
                 _source_path=str(Path(source).resolve()),
                 _source_row=index,
                 _split=split,
                 _run=entry["run"],
                 _episode_order=order,
-                _trainer_step=order // 16,
+                _trainer_step=steps[order]
+                if qwen3 and split == "train"
+                else order // 16,
                 rollout_task_id=physical,
                 _trajectory_id=f"{entry['run']}:{split}:{source}:{index}",
             )
@@ -163,8 +220,23 @@ def load_pool(
         for r in rows
         if r["_split"] == "train" and r["_run"] == "r510"
     ]
-    if not synthetic and replay != list(range(1280)):
+    if not synthetic and not qwen3 and replay != list(range(1280)):
         raise ValueError("r510 numeric replay is incomplete or duplicated")
+    if qwen3:
+        training = [r for r in rows if r["_split"] == "train"]
+        if [r["_episode_order"] for r in training] != sorted(steps):
+            raise ValueError("r480 numeric replay is incomplete or duplicated")
+        for batch in manifest["replay_batches"]:
+            group = [r for r in training if r["_trainer_step"] == batch["global_step"]]
+            if (
+                [r["task_id"] for r in group] != batch["task_ids"]
+                or [r["source_id"] for r in group] != batch["source_ids"]
+                or abs(
+                    sum(_reward(r) for r in group) / len(group) - batch["reward_mean"]
+                )
+                > 1e-6
+            ):
+                raise ValueError("r480 replay source membership/rewards differ")
     for index, row in enumerate(rows):
         row["_pool_index"] = index
     return manifest, rows

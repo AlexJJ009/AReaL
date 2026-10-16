@@ -14,6 +14,7 @@ from scripts.tau2.critic_features import (
     SCHEMA,
     _reward,
     action_positions,
+    critic_backbone,
     estimate,
     identity,
     selected_positions,
@@ -21,6 +22,7 @@ from scripts.tau2.critic_features import (
 from scripts.tau2.critic_preexp_data import (
     LABEL_SEMANTICS,
     PLANTED_RULES,
+    QWEN3_PROTOCOL,
     SEED,
     WRITE_TOOL_INVENTORY,
     PlantedRuleSelectionError,
@@ -43,7 +45,7 @@ def extract_layers(
 
     device = next(model.parameters()).device
     selected, hooks = {}, []
-    backbone = model.model.language_model
+    backbone = critic_backbone(model)
     for layer in layers:
         if layer != "final":
             index = int(layer)
@@ -88,7 +90,7 @@ def extract_layers(
 
 
 def token_metadata(
-    row: dict[str, Any], positions: Any, tokenizer: Any, rule: str, layer: str
+    row: dict[str, Any], positions: Any, tokenizer: Any, rule: str | None, layer: str
 ) -> dict[str, Any]:
     import torch
 
@@ -124,7 +126,9 @@ def token_metadata(
         position=positions.tolist(),
         turn=turns[positions + 1].tolist(),
         progress=(ranks.float() / max(1, len(all_positions) - 1)).tolist(),
-        planted_label=prefix_labels(row, positions, tokenizer, rule).tolist(),
+        planted_label=prefix_labels(row, positions, tokenizer, rule).tolist()
+        if rule is not None
+        else [0.0] * n,
     )
     return metadata
 
@@ -148,7 +152,9 @@ def write_part(
     if output.exists():
         raise ValueError("Extraction part destination already exists")
     output.mkdir(parents=True)
-    depth = len(model.model.language_model.layers)
+    depth = len(critic_backbone(model).layers)
+    qwen3 = pool_manifest.get("protocol") == QWEN3_PROTOCOL
+    seed = 20261015 if qwen3 else SEED
     checkpoint_files = {
         p.name: sha256(p) for p in sorted(Path(checkpoint).glob("*.safetensors"))
     }
@@ -163,14 +169,15 @@ def write_part(
         "checkpoint_config_sha256": sha256(Path(checkpoint) / "config.json")
         if (Path(checkpoint) / "config.json").exists()
         else None,
-        "seed": SEED,
+        "seed": seed,
+        "protocol": pool_manifest.get("protocol", "qwen35-20261014"),
         "train_k": 128,
         "validation_features_exact": True,
         "planted_rule": rule,
         "depth": depth,
         "shard_index": shard_index,
         "shard_count": shard_count,
-        "run_ids": ["r499", "r510"],
+        "run_ids": ["r480"] if qwen3 else ["r499", "r510"],
         "head_path": "initial-head.pt",
         "train_features_exact": False,
     }
@@ -178,7 +185,7 @@ def write_part(
     for row in rows:
         if row["_pool_index"] % shard_count != shard_index:
             continue
-        positions, _ = selected_positions(row, train_k=128, seed=SEED)
+        positions, _ = selected_positions(row, train_k=128, seed=seed)
         features = extract_layers(model, row, positions, layers)
         metadata = token_metadata(row, positions, tokenizer, rule["rule"], "final")
         for layer in layers:
@@ -233,8 +240,14 @@ def verify_cache(
         != "prefix_position=t-1_for_action_token_t"
     ):
         raise ValueError("Cache schema/prefix semantics mismatch")
+    qwen3 = pool_manifest.get("protocol") == QWEN3_PROTOCOL
+    if manifest.get("protocol", "qwen35-20261014") != pool_manifest.get(
+        "protocol", "qwen35-20261014"
+    ):
+        raise ValueError("Cache protocol mismatch")
     if not synthetic and (
-        manifest.get("seed") != SEED or manifest.get("train_k") != 128
+        manifest.get("seed") != (20261015 if qwen3 else SEED)
+        or manifest.get("train_k") != 128
     ):
         raise ValueError("Cache registered seed/sample count mismatch")
     if manifest.get("layer") != "final" and not 1 <= int(manifest["layer"]) < int(
@@ -242,7 +255,9 @@ def verify_cache(
     ):
         raise ValueError("Cache intermediate layer depth mismatch")
     rule = manifest.get("planted_rule", {})
-    if (
+    if qwen3 and rule != {"status": "not_applicable", "rule": None}:
+        raise ValueError("Qwen3 E2/E3/E7 cache must omit planted rule selection")
+    if not qwen3 and (
         rule.get("label_semantics") != LABEL_SEMANTICS
         or rule.get("status") != "selected"
         or rule.get("rule") not in PLANTED_RULES
@@ -280,7 +295,7 @@ def verify_cache(
             }
             for position, rank in zip(selected.tolist(), ranks, strict=True)
         }
-        if tokenizer is not None:
+        if tokenizer is not None and not qwen3:
             label_expected[trajectory] = dict(
                 zip(
                     selected.tolist(),
@@ -333,6 +348,7 @@ def verify_cache(
                 raise ValueError("Cache planted label is nonbinary")
             if (
                 tokenizer is not None
+                and not qwen3
                 and float(part["planted_label"][i])
                 != label_expected[trajectory][position]
             ):
@@ -359,6 +375,7 @@ def merge_parts(parts, output, rows, pool_manifest, *, tokenizer=None):
     manifests = [json.loads((p / "manifest.json").read_text()) for p in parts]
     common_keys = (
         "pool_manifest_sha256",
+        "protocol",
         "checkpoint",
         "checkpoint_files_sha256",
         "checkpoint_config_sha256",
@@ -370,7 +387,9 @@ def merge_parts(parts, output, rows, pool_manifest, *, tokenizer=None):
         "planted_rule",
         "shard_count",
     )
-    if any(any(m[k] != manifests[0][k] for k in common_keys) for m in manifests):
+    if any(
+        any(m.get(k) != manifests[0].get(k) for k in common_keys) for m in manifests
+    ):
         raise ValueError("Extraction part provenance mismatch")
     if sorted(m["shard_index"] for m in manifests) != list(
         range(manifests[0]["shard_count"])
@@ -424,19 +443,23 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--tokenizer", type=Path)
     parser.add_argument("--rule-file", type=Path)
-    parser.add_argument("--model-name", choices=["base", "r510"], default="base")
+    parser.add_argument(
+        "--model-name", choices=["base", "r510", "r480"], default="base"
+    )
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=8)
     parser.add_argument("--parts", type=Path)
     parser.add_argument("--tokens-per-second", type=float, default=4000)
     args = parser.parse_args()
     pool, rows = load_pool(args.pool)
+    qwen3 = pool.get("protocol") == QWEN3_PROTOCOL
+    seed = 20261015 if qwen3 else SEED
     if args.mode == "estimate":
         payload = estimate(
             rows,
             hidden_size=2560,
             train_k=128,
-            seed=SEED,
+            seed=seed,
             tokens_per_second=args.tokens_per_second,
             gpu_count=args.shard_count,
         )
@@ -449,13 +472,17 @@ def main() -> None:
         )
         payload["total_two_model_wall_seconds"] = 2 * payload["estimated_wall_seconds"]
         payload["total_two_model_gpu_hours"] = 2 * payload["estimated_gpu_hours"]
-        payload["planted_rule_cpu_decode_calls"] = sum(
-            len(selected_positions(r, train_k=128, seed=SEED)[0])
-            for r in rows
-            if r["_split"] == "train"
+        payload["planted_rule_cpu_decode_calls"] = (
+            0
+            if qwen3
+            else sum(
+                len(selected_positions(r, train_k=128, seed=seed)[0])
+                for r in rows
+                if r["_split"] == "train"
+            )
         )
-        payload["planted_rule_cpu_decoder_roundtrips"] = sum(
-            r["_split"] == "train" for r in rows
+        payload["planted_rule_cpu_decoder_roundtrips"] = (
+            0 if qwen3 else sum(r["_split"] == "train" for r in rows)
         )
         payload["estimated_cpu_rule_seconds"] = (
             0.08 * payload["planted_rule_cpu_decoder_roundtrips"]
@@ -474,7 +501,7 @@ def main() -> None:
         tokenizer = AutoTokenizer.from_pretrained(args.tokenizer, local_files_only=True)
         layers = (
             ["final"]
-            if args.model_name == "r510"
+            if args.model_name in ("r510", "r480")
             else [
                 "final",
                 *map(
@@ -527,8 +554,12 @@ def main() -> None:
         parser.error("Requires an existing local checkpoint directory")
     if not 0 <= args.shard_index < args.shard_count:
         parser.error("Invalid process shard index/count")
-    rule = json.loads(args.rule_file.read_text())
-    if (
+    rule = (
+        {"status": "not_applicable", "rule": None}
+        if qwen3
+        else json.loads(args.rule_file.read_text())
+    )
+    if not qwen3 and (
         rule["pool_manifest_sha256"] != pool["pool_manifest_sha256"]
         or rule["selection_split"] != "train"
         or rule.get("label_semantics") != LABEL_SEMANTICS
@@ -543,16 +574,36 @@ def main() -> None:
         Qwen35TokenCriticForCausalBackbone,
     )
 
-    torch.manual_seed(SEED)
-    model = Qwen35TokenCriticForCausalBackbone.from_pretrained(
-        str(args.checkpoint),
-        dtype=torch.bfloat16,
-        attn_implementation="sdpa",
-    ).to("cuda")
+    torch.manual_seed(seed)
+    if qwen3:
+        from transformers import AutoModelForTokenClassification
+
+        model = AutoModelForTokenClassification.from_pretrained(
+            str(args.checkpoint),
+            num_labels=1,
+            dtype=torch.bfloat16,
+            attn_implementation="flash_attention_2",
+            local_files_only=True,
+        ).to("cuda")
+        if (
+            len(critic_backbone(model).layers) != 36
+            or model.score.in_features != 2560
+            or model.score.bias is None
+        ):
+            raise ValueError(
+                "Expected Qwen3 36-layer/2560-dimension biased token critic"
+            )
+    else:
+        model = Qwen35TokenCriticForCausalBackbone.from_pretrained(
+            str(args.checkpoint),
+            dtype=torch.bfloat16,
+            attn_implementation="sdpa",
+            local_files_only=True,
+        ).to("cuda")
     layers = (
         ["final"]
-        if args.model_name == "r510"
-        else ["final", *map(str, layer_indices(len(model.model.language_model.layers)))]
+        if args.model_name in ("r510", "r480")
+        else ["final", *map(str, layer_indices(len(critic_backbone(model).layers)))]
     )
     write_part(
         model,
