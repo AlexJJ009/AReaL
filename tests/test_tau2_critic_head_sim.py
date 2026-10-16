@@ -93,6 +93,10 @@ def test_feature_store_repeated_passes_hash_and_load_each_shard_once(
     first = store.evaluate(weight, bias)
     assert first == store.evaluate(weight, bias)
     assert [row["n_tokens"] for row in first["rows"]] == [2, 2]
+    if isinstance(store, pre.PreexpStore):
+        targets = store.evaluate_targets({"shared": (weight, bias)})
+        assert targets == store.evaluate_targets({"shared": (weight, bias)})
+        assert [row["n_tokens"] for row in targets["rows"]] == [2, 2]
     assert len(loads) == len(hashes) == 2
 
 
