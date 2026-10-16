@@ -71,6 +71,7 @@ def test_critic_first_controller_keeps_remote_targets_and_refreshes_values(
             return {"result": serialize_value(result)}
 
         instance._custom_function_call = dispatch
+        instance._replicated_function_call = dispatch
         instance._gateway_post = gateway
         return instance
 

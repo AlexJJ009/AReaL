@@ -129,6 +129,7 @@ def test_critic_can_offload_after_value_refresh_before_actor_update():
     )
 
     assert events.index("critic.forward.2") < events.index("critic.offload")
+    assert events.index("critic.offload") < events.index("actor.advantages", 2)
     assert events.index("critic.offload") < events.index("actor.optimizer.1")
 
 
