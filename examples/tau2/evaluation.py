@@ -63,8 +63,26 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
         self.validate_config(config)
         super()._init_impl(config, *args, **kwargs)
         epoch = self.recover_info.last_step_info.epoch if self.recover_info else 0
-        if self.recover_info is None:
-            self.train_dataloader.sampler.seed = config.seed
+        # StatefulDataLoader restores the cursor, but DistributedSampler does
+        # not persist its seed or epoch. Restore those before creating iterators.
+        self.train_dataloader.sampler.seed = config.seed
+        if self.recover_info is not None:
+            last = self.recover_info.last_step_info
+            if last.epoch_step == last.steps_per_epoch - 1:
+                inputs = self.recover_info.rollout_input_state or {}
+                if inputs.get("outstanding") or inputs.get("buffer"):
+                    raise ValueError(
+                        "Completed epoch recovery has pending rollout inputs"
+                    )
+                # At EOF torchdata may restart automatically, without the empty
+                # batch that normally advances FiniteEpochBatcher. Start the
+                # next epoch explicitly; its dataloader cursor must be fresh.
+                epoch = last.next().epoch
+                # Materialize a queued torchdata restore before resetting it:
+                # load_state_dict({}) alone leaves next_iter_state queued.
+                self.train_dataloader.state_dict()
+                self.train_dataloader.load_state_dict({})
+            self.train_dataloader.sampler.set_epoch(epoch)
         self.rollout.prepare_batch = partial(
             self._prepare_training_batch, FiniteEpochBatcher(self.rollout, epoch)
         )
