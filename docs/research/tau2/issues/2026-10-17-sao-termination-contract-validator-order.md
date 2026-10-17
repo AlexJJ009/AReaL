@@ -4,12 +4,14 @@
 
 ## 现象
 
-`test_entry_rejects_overrides_inconsistent_with_return_oracle` 的 3 个参数（分别改 `discount`、`gae_lambda`、`gae_timestep_unit`）失败。
+`test_entry_rejects_overrides_inconsistent_with_return_oracle` 的 3 个参数（分别改
+`discount`、`gae_lambda`、`gae_timestep_unit`）失败。
 
 - 测试用通用 PPOConfig 构造配置，预期报 `actor.<field>` 相关的错误。
 - 实际先触发 dedicated async eval 的 guard：`saver.mode != sync`，报错信息与测试的 regex 不匹配。
 
-证据：`_artifacts/AReaL/codex-sao-math/tau2-user-td-split-20261017/` 下的 `existing-regressions.log`、`preexisting-sao-base.log`、`preexisting-failures.md`。
+证据：`_artifacts/AReaL/codex-sao-math/tau2-user-td-split-20261017/` 下的
+`existing-regressions.log`、`preexisting-sao-base.log`、`preexisting-failures.md`。
 
 ## 影响
 
