@@ -21,3 +21,5 @@
   / SAO 对比
 - [2026-10-17-user-td-split-plan.md](2026-10-17-user-td-split-plan.md)：按用户回复拆 TD
   误差的实验计划（提案）
+- [2026-10-18-user-sim-rerun.md](2026-10-18-user-sim-rerun.md)：用户模拟器 v3 矩阵重跑，加
+  U1 prompt patch 与 DeepSeek thinking 开关对照
