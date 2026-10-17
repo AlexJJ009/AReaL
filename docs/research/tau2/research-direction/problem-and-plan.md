@@ -226,13 +226,138 @@ Qwen3-Instruct 上重复。
   的毛病（例如学会避开会触发提前结束的确认说法），不一定是 agent 变强。评测要包括训练没见过的模拟器，最好固定一个或几个评测用模拟器，报告"训练模拟器 ×
   评测模拟器"的矩阵。
 
-## 4 轻量方法候选：只扣掉用户这次回复带来的意外（2026-10-12）
+## 4 轻量方法候选：只扣掉用户这次回复带来的意外（2026-10-12；2026-10-17 补 §4.1 token 位置和 §4.3 偏差分析）
 
 **一句话**：在每次用户回复的前后各读一次 critic，把这一步的 TD 误差拆成"agent 这一轮带来的变化"和"用户这次回复带来的意外"，后者乘一个系数
 $\beta \in [0, 1]$ 再进 GAE。$\beta = 1$ 就是原来的 SAO。
 
-**做法**。记 agent 第 $t$ 轮开始前 critic 的预测为 $V_t$（现有），agent 第 $t$ 轮说完、用户还没回复时的预测为
-$U_t$（新增的读数）。对话结束时 $V_{T+1} = R$。原来跨过用户回复的 TD 误差拆成两段：
+### 4.1 预备：一段对话在 token 序列上的样子，以及 critic 在哪里读数
+
+方法要在"agent 说完、用户还没回复"这一刻读一次 critic。这一刻对应训练序列里的哪个 token，取决于 chat template、loss mask 和
+critic 的输出约定。本节把这三件事讲清楚，后面的公式都用这里定义的位置。论文正文不一定写这些，但没有它们，$V_t$、$U_t$ 落在哪里是看不懂的。
+
+**chat template 是什么**。语言模型只读一条 token 序列，不认识"system / user / assistant /
+tool"这些角色。多轮对话要先按一套固定规则拼成一条字符串， 用特殊 token 标出每条消息的开始、结束和角色，这套规则就是 chat template。它随
+tokenizer 发布（`tokenizer_config.json` 里的 Jinja 模板），训练和推理必须用同一套，否则模型看到的格式和它学过的不一样。
+
+我们用的是 Qwen3-4B-Instruct-2507（revision `cdbee75f`）自带的模板，规则是：
+
+- 每条消息写成 `<|im_start|>{角色}\n{内容}<|im_end|>\n`。`<|im_start|>`（id 151644）和 `<|im_end|>`（id
+  151645）是单个特殊 token。
+- system 消息里放 tau2 的 policy，后面接 `# Tools` 段，列出全部工具的 JSON schema。
+- agent 调工具时，在 assistant 内容里写
+  `<tool_call>\n{"name": ..., "arguments": ...}\n</tool_call>`。
+- **工具返回也用 `user` 角色**，内容包在 `<tool_response>…</tool_response>` 里。所以只看角色 token
+  分不出"用户回复"和"工具返回"，要看 `<tool_response>` 或原始消息的 role。
+- 轮到 agent 时，模板先追加 `<|im_start|>assistant\n`（generation prompt），模型从这之后开始生成，直到生成
+  `<|im_end|>` 为止。
+
+用这个模板渲染一段简化的 tau2 对话（policy 和工具列表省略），得到的字符串是：
+
+```text
+<|im_start|>system
+<policy>...</policy>
+
+# Tools
+...（工具 schema 与调用格式说明）...<|im_end|>
+<|im_start|>user
+Hi, I want to cancel reservation EHGLP3.<|im_end|>
+<|im_start|>assistant
+<tool_call>
+{"name": "get_reservation_details", "arguments": {"reservation_id": "EHGLP3"}}
+</tool_call><|im_end|>
+<|im_start|>user
+<tool_response>
+{"reservation_id": "EHGLP3", "cabin": "basic_economy"}
+</tool_response><|im_end|>
+<|im_start|>assistant
+Your reservation is basic economy without insurance, so it cannot be cancelled.<|im_end|>
+<|im_start|>user
+OK, thanks. ###STOP###<|im_end|>
+```
+
+**训练序列和 loss mask**。AReaL 的 tau2 配置用 `chat_template_type: concat`：一个 episode 是一条 token
+序列，每次 agent 生成都在前文后面接上，前文的 token 原样保留，不重新渲染。每个 token 带一个 `loss_mask`（下文叫 raw mask）：agent
+生成的 token（包括它生成的 `<|im_end|>`）为 1，system、用户、工具返回和模板插入的 token 为 0。最后那条用户结束消息（如
+`###STOP###`）不在序列里，序列停在 agent 最后一次生成的 `<|im_end|>`。
+
+**value\[i\] 的含义**。critic 和 policy 一样是 causal 模型，对序列的每个位置都输出一个数。位置 $i$ 的输出读过了第 $0..i$ 个
+token，所以 value\[i\] 是"站在 token $i$ 之后这个状态上"对最终 reward 的预测；同一位置上 policy 预测的是下一个 token
+$x_{i+1}$。
+
+**rolled mask：哪些位置参与 loss**。训练在位置 $i$ 学的是"预测 $x_{i+1}$"，所以位置 $i$ 参与 loss 当且仅当 $x_{i+1}$
+是 agent 生成的。代码把 raw mask 左移一位得到 rolled
+mask：$\mathrm{roll}[i] = \mathrm{raw}[i+1]$（`actor.py:226-227`）。只有 mask 左移，value
+本身不移。actor loss、token 级 GAE（`gae.py:27`，跳过 mask 为 0 的位置，等价于 SAO 的 Skip-Observation GAE）和
+critic loss（`critic.py:178-195`）都只用 rolled mask 为 1 的位置。用户 token 和工具返回 token 上的 value
+也会被算出来，但没有 target，不训练也不使用。
+
+**位置定义**。设 agent 第 $t$ 轮的生成段占位置 $a..b$（$x_a$ 是第一个生成 token，$x_b$ 是生成的 `<|im_end|>`）：
+
+| 记号      | 位置            | 这个 token 是什么                                                               | 读到了什么                              | 现在是否训练     |
+| --------- | --------------- | ------------------------------------------------------------------------------- | --------------------------------------- | ---------------- |
+| $V_t$     | value\[$a-1$\]  | generation prompt `<\|im_start\|>assistant\n` 的最后一个换行（模板插入，raw=0） | agent 开口之前的全部上下文              | 是（roll=1）     |
+| —         | value\[$b-1$\]  | agent 生成内容的最后一个 token（如 `.` 或 `</tool_call>`）                      | 整句话，但还没看到 agent 决定在这里结束 | 是（roll=1）     |
+| $U_t$     | value\[$b$\]    | agent 生成的 `<\|im_end\|>`（raw=1）                                            | 整句话及结束标记，还没看到用户回复      | **否**（roll=0） |
+| $V_{t+1}$ | value\[$a'-1$\] | 下一轮 generation prompt 的换行（$a'$ 是下一段的起点）                          | 用户回复之后的上下文                    | 是               |
+
+注意 agent 的第一个生成 token 不是换行：`<|im_start|>assistant\n` 整段是模板插入的，换行只是"agent 开口之前"上下文的最后一个
+token，$V_t$ 在那里读。`<|im_end|>` 的 raw=1、roll=0 有两层意思："生成 `<|im_end|>`"这个动作在位置 $b-1$ 上训练；位置
+$b$ 本身的输出不进任何 loss，因为它的下一个 token 是模板。
+
+**一个真实片段**（PPO v3 rollout `rollout/0/202.jsonl`，episode `2817075289978133925`，0-based
+下标；省略号处见 `_artifacts/.../tau2-token-positions-20261016/selected-token-dumps.md`）：
+
+```text
+位置   token            raw roll  说明
+4944   <|im_start|>      0   0    模板
+4945   assistant         0   0    模板
+4946   \n                0   1    模板          ← V_t = value[4946]
+4947   To                1   1    agent 生成的第一个 token
+ ...
+5010   .                 1   1    agent 生成     ← value[b-1]
+5011   <|im_end|>        1   0    agent 生成     ← U_t = value[5011]
+5012   \n                0   0    模板
+5013   <|im_start|>      0   0    模板
+5014   user              0   0    模板
+5015   \n                0   0    模板
+5016   Sure              0   0    用户回复开始
+ ...
+5045   <|im_end|>        0   0    用户回复结束
+5046   \n                0   0    模板
+5047   <|im_start|>      0   0    模板
+5048   assistant         0   0    模板
+5049   \n                0   1    模板          ← V_{t+1} = value[5049]
+5050   <tool_call>       1   1    下一轮 agent 生成
+```
+
+**在真实数据上的核对**（2026-10-16，Codex 报告
+`_artifacts/AReaL/codex-sao-math/tau2-token-positions-20261016/codex-report.md`，Claude
+独立重跑）：PPO v3 `rollout/0` 的 251 个 episode、2,683 个生成段，全部以生成的 `<|im_end|>` 结尾，全部满足
+$\mathrm{roll}[a-1]=1$、$\mathrm{roll}[b-1]=1$、$\mathrm{roll}[b]=0$，违例 0 个。生成段之间的间隔有 977
+个是用户回复、1,455 个是工具返回，另有 251 个是 episode 的最后一次生成。所以每个 episode 平均有
+$(977+251)/251 \approx 4.9$ 个用户边界需要读 $U_t$，工具边界不读。outcome reward 加在最后一段的 $b-1$
+位置（`trajectory.py:29-57` 取 rolled mask 的最后一个位置）。
+
+**$U_t$ 用 value\[$b$\]，不用 value\[$b-1$\]**。在位置 $b-1$，agent 还要决定是在这里结束（生成
+`<|im_end|>`）还是继续写。记 $\mathrm{EOS}$ 为 `<|im_end|>`，按全概率公式，真实的 value 函数满足（$\gamma=1$，中间没有
+reward）：
+
+$$
+V(s_{b-1}) = \pi(\mathrm{EOS} \mid s_{b-1})\, V(s_b) + \sum_{x \neq \mathrm{EOS}} \pi(x \mid s_{b-1})\, V(s_{b-1} \oplus x)
+$$
+
+其中 $s_{b-1} \oplus x$ 表示在 $s_{b-1}$ 后面接上 token
+$x$。只有当结束几乎确定（$\pi(\mathrm{EOS}\mid s_{b-1}) \approx 1$）时才有
+$V(s_{b-1}) \approx V(s_b)$。上面那批数据里，生成 `<|im_end|>` 的概率中位数是 0.99999917，但 2,683 段里有 180
+段低于 0.9，而且**全部在用户边界上**（工具边界最低是 0.997）。也就是说，恰恰在方法要读 $U_t$ 的位置，"说到这里就停"本身是 agent
+的一个有随机性的决定。用 value\[$b-1$\] 当 $U_t$，会把这个决定的一部分算进用户段。所以 $U_t$ 取
+value\[$b$\]，代价是这个位置现在不训练，要在 critic loss 里补上（见 §4.4 的"代码改动"）。
+
+### 4.2 做法
+
+记 agent 第 $t$ 轮开始前 critic 的预测为 $V_t$（现有，value\[$a-1$\]），agent 第 $t$ 轮说完、用户还没回复时的预测为
+$U_t$（新增的读数，value\[$b$\]）。对话结束时 $V_{T+1} = R$。原来跨过用户回复的 TD 误差拆成两段：
 
 $$
 \delta_t = V_{t+1} - V_t = \underbrace{(U_t - V_t)}_{\text{agent 这一轮}} + \underbrace{(V_{t+1} - U_t)}_{\text{用户这次回复}},\qquad
@@ -250,11 +375,75 @@ $$
   身上。[appendix-method-draft-16.11.md](appendix-method-draft-16.11.md) 第 7 步的第 2
   条假设（用户出错与 agent 无关）在这里不需要。
 
-**为什么说得通（唯一需要的命题）**。若 $U_t$ 准确，即
-$U_t = \mathbb{E}[V_{t+1} \mid \text{对话到 agent 第 } t \text{ 轮说完为止}]$，则用户段的条件期望为 0，乘
-$\beta$ 不改变梯度的期望，只降低方差。这与 Mao et al.（[analysis.md §2](analysis.md)）扣掉外部输入的思路相同，区别是：$U_t$
+### 4.3 为什么说得通：什么时候无偏，critic 不准时付出什么
+
+**为什么需要这一节**。乘 $\beta<1$ 改动了 advantage。只要改 advantage，就要回答：模型会不会因此学偏，不再是在最大化
+$R$？本节给出不学偏的条件，以及条件不满足时偏差有多大。
+
+**第一步：改动了什么**。先看 $\gamma=\lambda=1$ 的情形（PPO 的配置）。对 agent 第 $t$ 轮里的任一动作 token $i$，把它之后所有
+$\tilde\delta$ 加起来，agent 段和用户段的读数逐项消去，得到
+
+$$
+A_i(\beta) = (R - V_i) - (1-\beta)\sum_{k \ge t} (V_{k+1} - U_k)
+$$
+
+$\beta=1$ 时就是原来的 $R - V_i$。$V_i$ 只是 baseline，不依赖动作，所以原来的 $A_i$ 即使 critic 不准也无偏，critic
+不准只会增加方差。方法额外引入的只有第二项：从当前这一轮起，每次用户回复的"用户段" $V_{k+1}-U_k$，乘上 $(1-\beta)$ 后减掉。
+
+**第二步：这一项什么时候不带来偏差**。policy gradient 里这一项贡献
+$\mathbb{E}[\nabla \log \pi(x_i \mid h_i)\,(V_{k+1}-U_k)]$。记 $h_k^{+}$ 为"对话进行到 agent 第
+$k$ 轮说完"的历史；因为 $k \ge t$，动作 $x_i$ 已经包含在 $h_k^{+}$ 里，$\nabla \log \pi(x_i \mid h_i)$ 在给定
+$h_k^{+}$ 时是确定的。先对用户回复取条件期望：
+
+$$
+\mathbb{E}\big[\nabla \log \pi(x_i \mid h_i)\,(V_{k+1}-U_k)\big]
+= \mathbb{E}\big[\nabla \log \pi(x_i \mid h_i)\,\big(\mathbb{E}[V_{k+1} \mid h_k^{+}] - U_k\big)\big]
+$$
+
+所以只要
+
+$$
+U_k = \mathbb{E}[V_{k+1} \mid h_k^{+}] \tag{C}
+$$
+
+这一项就是 0，乘 $\beta$ 不改变梯度的期望，只缩小用户段带来的噪声。
+
+**例子**。agent 问"确认吗？"之后，用户 50% 回答 yes（之后 $V_{t+1}=0.9$），50% 直接 STOP（$V_{t+1}=0.1$）。满足 (C)
+的 $U_t = 0.5\times0.9+0.5\times0.1 = 0.5$，用户段是 $+0.4$ 或 $-0.4$，平均为 0。agent 这一轮的好坏由
+$U_t - V_t$ 记录：如果换一种问法能让 yes 的比例更高，$U_t$ 就更高，好处记到 agent 身上。
+
+**(C) 是什么意思**。真实的 value 函数天然满足 (C)：用户回复这一步上的 Bellman 一致性就是这个式子，所以"用户段均值为 0"就是 value
+的定义。注意 (C) 里的 $V_{k+1}$ 是 critic 自己的读数，不是真实 value，所以 (C) 要求的是 **critic
+在用户回复前后自洽**，比"critic 准确"弱：critic 在某道难题上整体高估 0.2，只要 $U_k$ 和用户回复后的 $V_{k+1}$
+平均起来一样高估，两者相减就消掉了，不产生偏差。真正产生偏差的是 critic 系统性地看错"用户回复会让局面变好还是变坏"，例如 $U_k$ 认为问完确认后成功率是
+0.7，而看到各种用户回复之后的 $V_{k+1}$ 平均只有 0.5。
+
+**第三步：critic 不自洽时，偏差和方差怎么换**。实际的 critic 不会精确满足 (C)。记
+$e_k = \mathbb{E}[V_{k+1}\mid h_k^{+}] - U_k$，方法引入的偏差是
+
+$$
+-(1-\beta)\sum_{k\ge t}\mathbb{E}\big[\nabla \log \pi(x_i \mid h_i)\, e_k\big]
+$$
+
+它随 $(1-\beta)$ 线性增长；同时被缩小的是用户段 $V_{k+1}-U_k$ 里围绕 $e_k$ 的随机波动。这和 GAE 的 $\lambda$
+是同一类交换：$\lambda<1$ 用 critic 的读数替换一部分真实回报，critic 不准就有偏，但方差小，PPO 通常就是用 $\lambda=0.95$
+接受这个交换。区别是 $\beta$ 只作用在用户回复处，正是我们认为噪声集中的地方。$\beta=1$ 不改变原算法；$\beta=0$ 方差降得最多，也最依赖
+critic。偏差小于减掉的方差时，梯度估计的总误差变小，值得用；哪边更大要靠实验，所以计划扫 $\beta \in \{1, 0.5, 0\}$。
+
+SAO 的 $\lambda_{\text{actor}} = 1-1/(1.5L) < 1$，本身已经承担一部分 GAE 偏差。$\lambda<1$ 时用户段进入
+$A_i$ 的权重变成 $\lambda$ 的幂次，但上面的推导不变：方法新增的偏差仍然只取决于 $e_k$。
+
+**训练前就能量的两个量**（离线，用训练好 $U_t$ 位置的 critic 和已有 rollout）：
+
+- 偏差的代理：held-out rollout 上用户段 $V_{k+1}-U_k$ 的均值，整体、按 domain、按 agent
+  这一轮的动作类型（问确认、执行写操作、拒绝）分组。各组都接近 0 说明 (C) 近似成立。
+- 能减掉的方差：用户段在 advantage 方差里的占比（§4 末表"方法 2"）。占比小，这个方法就没有多少可做的。
+
+**和 Mao et al. 的关系**。这与 Mao et al.（[analysis.md §2](analysis.md)）扣掉外部输入的思路相同，区别是：$U_t$
 是在看到 agent 这句话之后的预测，所以不要求用户的随机性与 agent 无关，[analysis.md §2](analysis.md) 说的"不能直接套用
 Mao"的障碍不存在。
+
+### 4.4 和旧草案的比较、代价和风险
 
 **和 [appendix-method-draft-16.11.md](appendix-method-draft-16.11.md) 比轻在哪里**：
 
@@ -264,17 +453,24 @@ Mao"的障碍不存在。
 | 状态               | 用户 → 历史统计的表、收缩、窗口                                                  | 无                           |
 | 超参数             | $k$、$\tau$、上下限、窗口                                                        | $\beta$                      |
 | 测量位置           | 事后选的最后一次行动（Codex S1 指出有误）                                        | 用户回复前后，在线即可确定   |
-| 需要的理论         | 噪声模型、逆方差、可辨识性论证                                                   | 上面一条命题                 |
+| 需要的理论         | 噪声模型、逆方差、可辨识性论证                                                   | §4.3 的一致性条件 (C)        |
 | 用户反应依赖 agent | 降权会少学这部分                                                                 | 记到 agent 身上              |
 
 **代价和风险：**
 
-- **更依赖 critic**。$\beta = 0$ 时 advantage 全由 critic 的差分构成，critic 不准就有偏；$\beta$
-  取中间值是折中。critic 先要有正的 EV（[critic/](../critic/README.md)），这一前提与
+- **更依赖 critic**。$\beta<1$ 时 critic 在用户回复前后不自洽就有偏（§4.3 的 $e_k$）；$\beta$ 取中间值是折中。critic
+  先要有正的 EV（[critic/](../critic/README.md)），这一前提与
   [appendix-method-draft-16.11.md](appendix-method-draft-16.11.md) 相同。
-- **代码改两处**：critic 在每个 agent 轮结束、用户回复前的位置多训练一个点（目标仍是 $R$）；GAE 在用户回复处换成
-  $\tilde\delta$。现在的 value 是"看到这个 token 之前"的预测（`actor.py:226` 把 mask 左移一位），所以 $U_t$ 要取
-  agent 最后一个 token 之后那个位置，现在那里没有 loss，要补上。
+- **代码改动**（位置定义见 §4.1）：
+  1. critic：在每个用户边界的 value\[$b$\]（agent 生成的 `<|im_end|>`）上多训练一个点，target 仍是 $R$（SAO 的
+     $\lambda_{\text{critic}}=1$）。用一个独立的 critic mask 加这些点，不改 actor 的 mask；工具边界不加。每个
+     episode 约多 4.9 个点，相对约 1,100 个已训练的动作位置可以忽略，forward 也已经算出了这个位置的 value。
+  1. GAE：token 级实现里，跨过用户回复的 TD 误差落在位置 $b-1$ 上，原来是 $\delta_{b-1} = W - V[b-1]$（$W$ 是下一轮的
+     $V_{t+1}$，最后一轮是 $R$）。改成 $\tilde\delta_{b-1} = (U - V[b-1]) + \beta\,(W - U)$，$U$ 取
+     value\[$b$\]。$\beta=1$ 时逐 token 还原原算法。$\lambda_{\text{actor}}<1$ 时，按 token 加权求和的结果和
+     §4.2 按轮写的公式不严格相等，实现以这里的 token 级修正为准。
+  1. 识别用户边界要看 `<tool_response>` 或原始消息 role，不能只看 `user` 角色 token（工具返回也是 `user`），也不能只看
+     `</tool_call>` 后缀（数据里有 1 段 tool tag 损坏、后面接的是真实用户回复）。
 - **撞车风险，待核实**：ArCHer（Zhou et al. 2024）在 utterance 级训练 Q 和 V，用 Q − V 作为 token 级策略的
   advantage，结构接近；SWEET-RL 也用 turn 级 advantage，但 critic 用特权信息训练。要读原文确认区别。
 - **新颖性薄**。控制变量本身是经典方法，所以贡献要落在现象（§3）和"一个旋钮在强、弱用户模拟器上都稳定提升"的实验上，与 §3 的论文结构一致。
