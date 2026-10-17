@@ -67,5 +67,6 @@ run 读到改动。
 
 ## 4. 中间结果
 
-- 596（DeepSeek V4.1，无 patch）：240/240 完成，mean@4 0.750（Airline 0.525、Retail 0.8625）；v3 旧版为 0.713（0.525 /
-  0.806）。用 case study 的 U1 规则统计，命中 4 条（其中 reward 0 的 3 条），v3 旧版为 13 条。NL judge 也换成了 V4.1，分数差不能全归到用户。
+- 596（DeepSeek V4.1，无 patch）：240/240 完成，mean@4 0.750（Airline 0.525、Retail 0.8625）；v3 旧版为
+  0.713（0.525 / 0.806）。用 case study 的 U1 规则统计，命中 4 条（其中 reward 0 的 3 条），v3 旧版为 13 条。NL
+  judge 也换成了 V4.1，分数差不能全归到用户。
