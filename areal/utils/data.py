@@ -34,6 +34,9 @@ NON_MODEL_FORWARD_METADATA_KEYS = frozenset(
         "terminated",
         "truncated",
         "turn_ids",
+        "critic_loss_mask",
+        "user_boundary_types",
+        "user_td_beta",
     }
 )
 

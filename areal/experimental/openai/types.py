@@ -314,6 +314,49 @@ class InteractionWithTokenLogpReward:
             [self.episode_metadata.get("failure_class") == "task_budget"],
             dtype=torch.bool,
         )
+        if "user_boundary_types" in self.episode_metadata:
+            kinds = self.episode_metadata["user_boundary_types"]
+            origin = result["action_origin_mask"][0].bool()
+            turns = result["turn_ids"][0]
+            positions = torch.nonzero(
+                origin & ~torch.cat((origin[1:], origin.new_zeros(1))),
+                as_tuple=False,
+            ).flatten()
+            if len(kinds) != positions.numel():
+                raise ValueError(
+                    "Official user boundary count does not match generated segment count"
+                )
+            if any(
+                isinstance(kind, bool)
+                or not isinstance(kind, int)
+                or kind not in (1, 2, 3, 4)
+                for kind in kinds
+            ):
+                raise ValueError("Invalid official user boundary type")
+            if not torch.equal(
+                turns[positions],
+                torch.arange(len(kinds), device=turns.device, dtype=turns.dtype),
+            ):
+                raise ValueError(
+                    "Official user boundary count/order does not match generated turn_ids"
+                )
+            if not torch.equal(origin, result["loss_mask"][0].bool()):
+                raise ValueError(
+                    "User boundaries require unchanged generated action mask"
+                )
+            boundaries = torch.zeros_like(result["turn_ids"], dtype=torch.int32)
+            boundaries[0, positions] = torch.tensor(
+                kinds, dtype=torch.int32, device=boundaries.device
+            )
+            result["user_boundary_types"] = boundaries
+            beta = self.episode_metadata.get("user_td_beta")
+            if (
+                isinstance(beta, bool)
+                or not isinstance(beta, int | float)
+                or not 0 <= beta <= 1
+            ):
+                raise ValueError("user_td_beta must be finite and in [0, 1]")
+            result["user_td_beta"] = torch.tensor([beta], dtype=torch.float32)
 
     def apply_episode_result(
         self,

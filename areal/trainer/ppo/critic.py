@@ -12,6 +12,7 @@ from areal.infra import TrainController
 from areal.infra.rpc.serialization import serialize_value
 from areal.trainer.ppo.stats import infer_token_denominator
 from areal.trainer.ppo.update import summarize_updates
+from areal.trainer.ppo.user_boundary import critic_loss_mask, log_user_boundary_stats
 from areal.utils import stats_tracker
 from areal.utils.data import (
     batched_call,
@@ -55,7 +56,14 @@ class PPOCritic:
             if critic_update_index is not None
             else nullcontext()
         ):
-            return batched_call(self._ppo_update, data, unpack=False)
+            return batched_call(
+                functools.partial(
+                    self._ppo_update,
+                    log_boundaries=critic_update_index in (None, 1),
+                ),
+                data,
+                unpack=False,
+            )
 
     @trace_perf("ppo_critic.grad_norm", category="compute")
     @stats_tracker.scope_func_wrapper("critic_diagnostic")
@@ -78,17 +86,21 @@ class PPOCritic:
                 loss_reduction=self.config.loss_reduction,
             ),
             loss_weight_fn=lambda x: (
-                x["loss_mask"].count_nonzero()
+                critic_loss_mask(x).count_nonzero()
                 if self.config.eps_clip is None
                 else loss_reduction_weight(
-                    x["loss_mask"],
+                    critic_loss_mask(x),
                     self.config.loss_reduction,
                     x.get("cu_seqlens"),
                 )
             ),
         )
 
-    def _ppo_update(self, data: dict[str, Any]) -> dict[str, float]:
+    def _ppo_update(
+        self, data: dict[str, Any], *, log_boundaries: bool = True
+    ) -> dict[str, float]:
+        if log_boundaries:
+            log_user_boundary_stats(data)
         ########## Logging code starts ##########
         scalars = dict(
             mask_no_eos_with_zero=self.config.mask_no_eos_with_zero,
@@ -120,10 +132,10 @@ class PPOCritic:
                     loss_reduction=self.config.loss_reduction,
                 ),
                 loss_weight_fn=lambda x: (
-                    x["loss_mask"].count_nonzero()
+                    critic_loss_mask(x).count_nonzero()
                     if self.config.eps_clip is None
                     else loss_reduction_weight(
-                        x["loss_mask"],
+                        critic_loss_mask(x),
                         self.config.loss_reduction,
                         x.get("cu_seqlens"),
                     )
@@ -178,7 +190,7 @@ def ppo_loss_fn(
     value = value.squeeze(-1).float()
     old_value = input_data["values"].float()
     target_value = input_data["returns"].float()
-    loss_mask = input_data["loss_mask"].bool()
+    loss_mask = critic_loss_mask(input_data).bool()
 
     if eps_clip is None:
         errors = (value - target_value.detach()).square()

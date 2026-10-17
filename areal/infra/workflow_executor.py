@@ -1147,6 +1147,7 @@ class WorkflowExecutor:
             ("logprobs", "behavior_logprobs"),
             ("versions", "versions"),
             ("turn_ids", "turn_ids"),
+            ("user_boundary_types", "user_boundary_types"),
         ):
             tensor = traj.get(tensor_key)
             if tensor is not None:
@@ -1155,6 +1156,8 @@ class WorkflowExecutor:
             tensor = traj.get(tensor_key)
             if tensor is not None:
                 fields[tensor_key] = bool(tensor[row].item())
+        if "user_td_beta" in traj:
+            fields["user_td_beta"] = float(traj["user_td_beta"][row].item())
         episode_ids = traj.get("episode_ids")
         if episode_ids is not None:
             active_episode_ids = episode_ids[row, :seqlen].unique().tolist()

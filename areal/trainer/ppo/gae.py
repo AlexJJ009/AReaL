@@ -32,8 +32,15 @@ def _compute_token_level_gae(
     discount: float,
     gae_lambda: float | torch.Tensor,
     bootstrap_values: torch.Tensor | None = None,
+    user_boundary_types: torch.Tensor | None = None,
+    user_td_beta: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute GAE with each generated token treated as one timestep."""
+    """Compute token GAE, optionally splitting actor TD at user boundaries.
+
+    The opt-in correction is at b-1 and reads U=value[b]. It does not add a
+    timestep: with lambda<1 this is a token correction, not turn-level GAE.
+    The caller must compute critic targets with the original TD residuals.
+    """
     bs, max_seqlen = rewards.shape
     advantages_reversed = [torch.zeros(bs, dtype=torch.float32, device=values.device)]
     lastgaelam = torch.zeros(bs, dtype=torch.float32, device=values.device)
@@ -41,6 +48,14 @@ def _compute_token_level_gae(
     discounted_lambda = discount * gae_lambda
     for t in reversed(range(max_seqlen - 1)):
         delta = rewards[:, t] + discount * nextvalues - values[:, t]
+        if user_boundary_types is not None:
+            assert user_td_beta is not None
+            boundary = user_boundary_types[:, t + 1]
+            split = ((boundary == 1) | (boundary == 3)) & (user_td_beta != 1)
+            # Internal W is the next active state. At the last action reward R
+            # has already been added at t=b-1, so W=R (tau2 bootstrap is zero).
+            user_segment = rewards[:, t] + discount * nextvalues - values[:, t + 1]
+            delta = torch.where(split, delta - (1 - user_td_beta) * user_segment, delta)
         newgaelam = delta + discounted_lambda * lastgaelam
 
         # Skip tokens that do not contribute to the loss.
