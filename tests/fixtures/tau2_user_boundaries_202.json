@@ -1,0 +1,91 @@
+{
+  "provenance": {
+    "rollout_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-ppo-20261015/ppo-formal-qwen3-v3/logs/root/tau2-ppo/ppo-formal-qwen3-v3/rollout/0/202.jsonl",
+    "rollout_sha256": "d64dfed2781481c85546c538586596a57207598513c884caceaea76d6f8ed5e2",
+    "trace_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-ppo-20261015/ppo-formal-qwen3-v3/logs/root/tau2-ppo/ppo-formal-qwen3-v3/tau2-trajectories/rollout/pack:_data_storage_yl_test_lgx_data-1_dataset_tau2_tau2-areal-pack-20261011-v2:airline:airline_236/ddd9fc3fd6c94115aa2e00a1e38f2148.json",
+    "trace_sha256": "089f090751a573115c3538ad032c3f191ad2d601aa3926c960c618ec806ee6d0",
+    "episode_id": 2817075289978133925,
+    "source_report": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-token-positions-20261016/selected-token-dumps.md"
+  },
+  "messages": [
+    {
+      "role": "assistant",
+      "tool_calls": null,
+      "raw_data": null
+    },
+    {
+      "role": "user",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "bef1aab2-832d-4aa7-b60d-c8e7f349896c"
+      }
+    },
+    {
+      "role": "assistant",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "chatcmpl-369a870521594957af56fe91249f7"
+      }
+    },
+    {
+      "role": "user",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "8f14aee0-66d3-40d7-8b89-f59e3381bb6b"
+      }
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "id": "call_85a0284279844c41a5efa151",
+          "name": "get_reservation_details",
+          "arguments": {
+            "reservation_id": "4WQ150"
+          },
+          "requestor": "assistant"
+        }
+      ],
+      "raw_data": {
+        "id": "chatcmpl-fc124407808540aab06c3ddab6795"
+      }
+    },
+    {
+      "role": "tool",
+      "requestor": "assistant"
+    },
+    {
+      "role": "assistant",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "chatcmpl-e272fdbb4a164ccebeb94eacb7c70"
+      }
+    },
+    {
+      "role": "user",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "1e97e47f-6cbe-497c-a7c3-cb7e1aa434e2"
+      },
+      "content": "Yes, please proceed. I understand this is a downgrade from business to economy and that I’ll receive a refund of $812. Please send the refund back to my gift card, ID gift_card_3576581. Thank you!\n\n###STOP###"
+    }
+  ],
+  "seqlen": 5857,
+  "spans": [
+    [
+      4947,
+      5011
+    ],
+    [
+      5050,
+      5076
+    ],
+    [
+      5423,
+      5856
+    ]
+  ],
+  "terminated": true,
+  "truncated": false,
+  "bootstrap_mask": false
+}

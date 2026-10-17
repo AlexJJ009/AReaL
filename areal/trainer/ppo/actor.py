@@ -23,6 +23,7 @@ from areal.trainer.ppo.trajectory import (
     action_trajectory_metadata,
 )
 from areal.trainer.ppo.update import summarize_updates
+from areal.trainer.ppo.user_boundary import user_boundary_mask
 from areal.utils import logging, stats_tracker
 from areal.utils.constants import (
     PROX_APPROX_METHOD_LINEAR,
@@ -326,6 +327,35 @@ class PPOActor:
             gae_lambda = float(self.gae_lambda)
             if not math.isfinite(gae_lambda):
                 raise ValueError(f"Static gae_lambda must be finite, got {gae_lambda}")
+        boundary_kwargs = {}
+        u_mask = None
+        if "user_boundary_types" in data:
+            if (
+                self.gae_timestep_unit != "token"
+                or self.discount != 1.0
+                or self.config.critic_gae_lambda != 1.0
+                or self.kl_ctl != 0
+                or "values" not in data
+            ):
+                raise ValueError(
+                    "User TD splitting requires token GAE, gamma=1, critic lambda=1, "
+                    "zero KL and full critic values"
+                )
+            if "token_rewards" in data:
+                torch._assert_async(
+                    torch.all(data["token_rewards"] == 0),
+                    "User TD splitting requires outcome-only rewards",
+                )
+            if bootstrap_values is not None:
+                torch._assert_async(
+                    torch.all(~bootstrap_mask),
+                    "User TD splitting requires tau2 bootstrap_mask=False",
+                )
+            u_mask = user_boundary_mask(data, loss_mask)
+            boundary_kwargs = dict(
+                user_boundary_types=data["user_boundary_types"],
+                user_td_beta=data["user_td_beta"],
+            )
         if self.gae_timestep_unit == "turn":
             assert turn_ids is not None
             advantages, returns = _compute_turn_level_gae(
@@ -348,6 +378,7 @@ class PPOActor:
                 discount=self.discount,
                 gae_lambda=gae_lambda,
                 bootstrap_values=bootstrap_values,
+                **boundary_kwargs,
             )
         # Critic targets have their own trace decay. Never derive them from
         # normalized policy advantages or a later actor-only transformation.
@@ -365,6 +396,11 @@ class PPOActor:
                 _, returns = _compute_turn_level_gae(**critic_kwargs, turn_ids=turn_ids)
             else:
                 _, returns = _compute_token_level_gae(**critic_kwargs)
+        if u_mask is not None:
+            # U is not an action timestep. Copy the existing lambda-critic=1
+            # outcome target at b-1; never use the carried inactive returns[b].
+            returns = torch.where(u_mask, returns.roll(1, -1), returns)
+            data["critic_loss_mask"] = loss_mask.bool() | u_mask
         data["returns"] = returns.detach()
 
         # Optionally perform advantage normalization.

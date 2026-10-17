@@ -1,0 +1,238 @@
+{
+  "provenance": {
+    "rollout_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-ppo-20261015/ppo-formal-qwen3-v3/logs/root/tau2-ppo/ppo-formal-qwen3-v3/rollout/0/70.jsonl",
+    "rollout_sha256": "4129a18c4f651318391af725b402dc77ca98405232d9f7ef98a2ea3420239b15",
+    "trace_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-ppo-20261015/ppo-formal-qwen3-v3/logs/root/tau2-ppo/ppo-formal-qwen3-v3/tau2-trajectories/rollout/pack:_data_storage_yl_test_lgx_data-1_dataset_tau2_tau2-areal-pack-20261011-v2:retail:retail_180/3d1b550ed4dc48ddb267f27c08fea9c0.json",
+    "trace_sha256": "07af406deada9ec732d633086654be619c9a6e8e9bff2a73c48f39e2f3a3159b",
+    "episode_id": 4557483438381356447,
+    "source_report": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-token-positions-20261016/selected-token-dumps.md"
+  },
+  "messages": [
+    {
+      "role": "assistant",
+      "tool_calls": null,
+      "raw_data": null
+    },
+    {
+      "role": "user",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "29b2bb36-f1ed-4a8a-9c46-d125d8760652"
+      }
+    },
+    {
+      "role": "assistant",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "chatcmpl-e9262bd10310413d8bc06aab029b1"
+      }
+    },
+    {
+      "role": "user",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "ef97f7bf-909a-48db-b9e3-a4e80284d937"
+      }
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "id": "call_bac1aed3721c425084f95c2d",
+          "name": "find_user_id_by_name_zip",
+          "arguments": {
+            "first_name": "Victor",
+            "last_name": "Anderson",
+            "zip": "78205"
+          },
+          "requestor": "assistant"
+        }
+      ],
+      "raw_data": {
+        "id": "chatcmpl-9806bb16c2c74d5ba50d8055f78f6"
+      }
+    },
+    {
+      "role": "tool",
+      "requestor": "assistant"
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "id": "call_650626efa96d40ed8faf2c14",
+          "name": "get_user_details",
+          "arguments": {
+            "user_id": "victor_anderson_7502"
+          },
+          "requestor": "assistant"
+        }
+      ],
+      "raw_data": {
+        "id": "chatcmpl-f38a86f557904b389d4390d287841"
+      }
+    },
+    {
+      "role": "tool",
+      "requestor": "assistant"
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "id": "call_0c9e828bd8c941cab05abffd",
+          "name": "get_order_details",
+          "arguments": {
+            "order_id": "#W8178873"
+          },
+          "requestor": "assistant"
+        }
+      ],
+      "raw_data": {
+        "id": "chatcmpl-fbfc91e0bad6490197dbe7463fca2"
+      }
+    },
+    {
+      "role": "tool",
+      "requestor": "assistant"
+    },
+    {
+      "role": "assistant",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "chatcmpl-66d63953131a483bb1e9c6686f9ef"
+      }
+    },
+    {
+      "role": "user",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "a432269a-95b0-41b8-8c47-aee037810327"
+      }
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "id": "call_f57c83816e1d451480d35163",
+          "name": "modify_pending_order_address",
+          "arguments": {
+            "order_id": "#W8178873",
+            "address1": "1250 Pennsylvania Avenue NW",
+            "address2": "Suite 400",
+            "city": "Washington",
+            "state": "DC",
+            "country": "USA",
+            "zip": "20004"
+          },
+          "requestor": "assistant"
+        }
+      ],
+      "raw_data": {
+        "id": "chatcmpl-8bd58b2ffdbe4e819cccc1c51f7b9"
+      }
+    },
+    {
+      "role": "tool",
+      "requestor": "assistant"
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "id": "call_1581700d717b4536867d88cf",
+          "name": "modify_pending_order_address",
+          "arguments": {
+            "order_id": "#W3552474",
+            "address1": "1250 Pennsylvania Avenue NW",
+            "address2": "Suite 400",
+            "city": "Washington",
+            "state": "DC",
+            "country": "USA",
+            "zip": "20004"
+          },
+          "requestor": "assistant"
+        }
+      ],
+      "raw_data": {
+        "id": "chatcmpl-1a2241dc4e734c42a4a39212556c6"
+      }
+    },
+    {
+      "role": "tool",
+      "requestor": "assistant"
+    },
+    {
+      "role": "assistant",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "chatcmpl-b41349b8ed3b47f389251c462a4d5"
+      },
+      "content": "อุปกรณ์\n{\"name\": \"modify_pending_order_address\", \"arguments\": {\"order_id\": \"#W9919531\", \"address1\": \"1250 Pennsylvania Avenue NW\", \"address2\": \"Suite 400\", \"city\": \"Washington\", \"state\": \"DC\", \"country\": \"USA\", \"zip\": \"20004\"}}\n</tool_call>"
+    },
+    {
+      "role": "user",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "089239b7-cd11-41f1-b019-219e226484c3"
+      }
+    },
+    {
+      "role": "assistant",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "chatcmpl-0646b6a9a6e54ad49578fd96c3ea4"
+      }
+    },
+    {
+      "role": "user",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "3cf74567-4ef1-43c5-9322-c7e1dbced64c"
+      },
+      "content": "Perfect, thank you for taking care of all of that! ###STOP###"
+    }
+  ],
+  "seqlen": 7300,
+  "spans": [
+    [
+      5003,
+      5033
+    ],
+    [
+      5074,
+      5116
+    ],
+    [
+      5140,
+      5170
+    ],
+    [
+      5409,
+      5437
+    ],
+    [
+      5791,
+      5974
+    ],
+    [
+      6064,
+      6145
+    ],
+    [
+      6499,
+      6580
+    ],
+    [
+      6942,
+      7023
+    ],
+    [
+      7094,
+      7299
+    ]
+  ],
+  "terminated": true,
+  "truncated": false,
+  "bootstrap_mask": false
+}

@@ -207,6 +207,9 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
     # ADR-0012 backbone critic initialisation (matched policies and critic-head): bias
     # init (the expected success rate) and head learning rate (None: critic lr).
     critic_head_bias_init: float | None = None
+    # Train exact post-agent values and optionally attenuate user-transition TD.
+    train_user_boundary_values: bool = False
+    user_td_beta: float = 1.0
     critic_head_lr: float | None = None
     # Episode attempts after the first, as `tau2 run --max-retries` (default 3).
     infra_retries: int = 3
@@ -221,6 +224,7 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
 
     def __post_init__(self) -> None:
         super().__post_init__()
+        self.validate_user_td_split()
         if self.algorithm not in ("grpo", "sao", "critic", "ppo"):
             raise ValueError(f"Unsupported τ² algorithm: {self.algorithm}")
         if (
@@ -243,6 +247,28 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
             1 <= self.min_usable_group_size <= self.gconfig.n_samples
         ):
             raise ValueError("min_usable_group_size must be in [1, gconfig.n_samples]")
+
+    def validate_user_td_split(self) -> None:
+        """Validate opt-in user-boundary settings, including structured loading."""
+        if not isinstance(self.train_user_boundary_values, bool):
+            raise ValueError("train_user_boundary_values must be a bool (user_td)")
+        beta = self.user_td_beta
+        if (
+            isinstance(beta, bool)
+            or not isinstance(beta, int | float)
+            or not math.isfinite(beta)
+            or not 0 <= beta <= 1
+        ):
+            raise ValueError("user_td_beta must be finite and in [0, 1]")
+        if beta < 1 and not self.train_user_boundary_values:
+            raise ValueError("user_td_beta < 1 requires train_user_boundary_values")
+        if (self.train_user_boundary_values or beta != 1) and self.algorithm not in (
+            "ppo",
+            "sao",
+        ):
+            raise ValueError(
+                "user_td settings require ppo or sao; critic-only is unsupported"
+            )
 
     def resolve_min_usable_group_size(self) -> int:
         if self.min_usable_group_size is not None:

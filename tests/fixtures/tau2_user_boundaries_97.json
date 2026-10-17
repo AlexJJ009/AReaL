@@ -1,0 +1,123 @@
+{
+  "provenance": {
+    "rollout_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-ppo-20261015/ppo-formal-qwen3-v3/logs/root/tau2-ppo/ppo-formal-qwen3-v3/rollout/0/97.jsonl",
+    "rollout_sha256": "9f63a732c18362031a62794b0437afafc7e2c1a2e8300fa011d6ad3705a91da1",
+    "trace_path": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-ppo-20261015/ppo-formal-qwen3-v3/logs/root/tau2-ppo/ppo-formal-qwen3-v3/tau2-trajectories/rollout/pack:_data_storage_yl_test_lgx_data-1_dataset_tau2_tau2-areal-pack-20261011-v2:airline:airline_849/673496ebbe004125a1b68c6ee24e6a79.json",
+    "trace_sha256": "d01f6e2545f65f2f7905d494a42dae7ef0f691b9620fc493763ecf909d309e93",
+    "episode_id": 1924095381637564723,
+    "source_report": "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/tau2-token-positions-20261016/selected-token-dumps.md"
+  },
+  "messages": [
+    {
+      "role": "assistant",
+      "tool_calls": null,
+      "raw_data": null
+    },
+    {
+      "role": "user",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "851d5b24-776a-4cab-b09c-25fa81af37a0"
+      }
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "id": "call_ed2321a640b94addb2b22779",
+          "name": "get_reservation_details",
+          "arguments": {
+            "reservation_id": "23LMN8"
+          },
+          "requestor": "assistant"
+        }
+      ],
+      "raw_data": {
+        "id": "chatcmpl-59a6f7169d2d4a70ba0e30a415b40"
+      }
+    },
+    {
+      "role": "tool",
+      "requestor": "assistant"
+    },
+    {
+      "role": "assistant",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "chatcmpl-cd617aa7c6bd45379aa18eeedc2ac"
+      }
+    },
+    {
+      "role": "user",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "85d9fdf0-ab9c-4913-ac27-0ab2aecc5ca2"
+      }
+    },
+    {
+      "role": "assistant",
+      "tool_calls": [
+        {
+          "id": "call_5f478d52dbd04b419e5a98b0",
+          "name": "update_reservation_flights",
+          "arguments": {
+            "reservation_id": "23LMN8",
+            "cabin": "business",
+            "flights": [
+              {
+                "flight_number": "HAT162",
+                "date": "2024-05-19"
+              }
+            ],
+            "payment_id": "credit_card_9131473"
+          },
+          "requestor": "assistant"
+        }
+      ],
+      "raw_data": {
+        "id": "chatcmpl-74be12bb2f3346bcaa50f75031cb2"
+      }
+    },
+    {
+      "role": "tool",
+      "requestor": "assistant"
+    },
+    {
+      "role": "assistant",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "chatcmpl-fd68bfe063dc4b47a49702141bb84"
+      }
+    },
+    {
+      "role": "user",
+      "tool_calls": null,
+      "raw_data": {
+        "id": "71f2deb9-290f-4802-aa31-51a471f8bf5d"
+      },
+      "content": "That’s great, thank you! The details look correct, and the card ending in 9131473 is the right one. I appreciate your help with the upgrade. \n\n###STOP###"
+    }
+  ],
+  "seqlen": 5838,
+  "spans": [
+    [
+      4949,
+      4974
+    ],
+    [
+      5241,
+      5359
+    ],
+    [
+      5381,
+      5461
+    ],
+    [
+      5751,
+      5837
+    ]
+  ],
+  "terminated": true,
+  "truncated": false,
+  "bootstrap_mask": false
+}

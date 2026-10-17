@@ -37,6 +37,7 @@ from tau2.user.user_simulator_base import HalfDuplexUser
 # Import utilities (also patches tau2.utils.llm_utils)
 from examples.tau2 import benchmark_variant, task_pack
 from examples.tau2.contracts import bind_policy_request, strip_policy_reasoning
+from examples.tau2.user_boundary import classify_user_boundaries
 from examples.tau2.user_simulator import RecordingUserSimulator
 from examples.tau2.utils import (
     Tau2EnvConfig,
@@ -614,6 +615,8 @@ class Tau2AgentWorkflow:
         infra_retries: int = OFFICIAL_RETRY_ATTEMPTS,
         evaluation: bool = False,
         trajectory_dir: str | None = None,
+        train_user_boundary_values: bool = False,
+        user_td_beta: float = 1.0,
     ):
         if econfig is None:
             econfig = Tau2EnvConfig()
@@ -630,6 +633,8 @@ class Tau2AgentWorkflow:
         self.reject_exhausted_episode = True
         self.evaluation = evaluation
         self.trajectory_dir = trajectory_dir
+        self.train_user_boundary_values = train_user_boundary_values
+        self.user_td_beta = user_td_beta
         from areal.utils.runtime_audit import write_runtime_audit
 
         write_runtime_audit(
@@ -861,5 +866,15 @@ class Tau2AgentWorkflow:
                 "reward_info": reward_info,
                 "failure_class": run_info.error_type,
                 **runner.llm_route_evidence(),
+                **(
+                    {
+                        "user_boundary_types": classify_user_boundaries(
+                            run_info.messages
+                        ),
+                        "user_td_beta": self.user_td_beta,
+                    }
+                    if self.train_user_boundary_values
+                    else {}
+                ),
             },
         )

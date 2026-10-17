@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import torch
@@ -89,6 +90,37 @@ def derive_critic_update_metrics(stats: dict[str, Any]) -> dict[str, Any]:
                     )
                 ] = result[source]
 
+    # User-boundary moments come from the initial values snapshot, once per
+    # batch, rather than pooling SAO's post-fit actor recomputation.
+    for key in list(result):
+        if not key.endswith("/u_points"):
+            continue
+        scope = key.removesuffix("/u_points")
+        mean_key = _stat_key(scope, "user_segment_mean")
+        mean = result.setdefault(mean_key, None)
+        second = result.get(_stat_key(scope, "user_segment_second_moment"))
+        result[_stat_key(scope, "user_segment_std")] = (
+            None
+            if mean is None or second is None
+            else math.sqrt(max(0.0, second - mean * mean))
+        )
+        target = result.get(_stat_key(scope, "u_target"))
+        target2 = result.get(_stat_key(scope, "u_target_second_moment"))
+        residual = result.get(_stat_key(scope, "u_residual"))
+        mse = result.get(_stat_key(scope, "u_mse"))
+        variance = None if target is None or target2 is None else target2 - target**2
+        defined = (
+            variance is not None
+            and variance > 0
+            and residual is not None
+            and mse is not None
+        )
+        result[_stat_key(scope, "critic_explained_variance_pre_update")] = (
+            1 - (mse - residual**2) / variance if defined else None
+        )
+        result[_stat_key(scope, "critic_explained_variance_pre_update_defined")] = (
+            float(defined)
+        )
     return result
 
 

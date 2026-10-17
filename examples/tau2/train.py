@@ -145,6 +145,23 @@ def validate_tau2_recipe(
     request with the full chat template instead of concatenating tokens.
     """
 
+    config.validate_user_td_split()
+    if config.train_user_boundary_values:
+        actor = config.actor
+        if not (
+            actor.gae_timestep_unit == "token"
+            and actor.discount == 1.0
+            and actor.critic_gae_lambda == 1.0
+            and actor.kl_ctl == 0
+            and actor.reward_scaling == 1.0
+            and actor.reward_bias == 0.0
+            and actor.reward_norm is None
+            and not actor.overlong_reward_penalty
+            and not config.gconfig.reward_normalization
+        ):
+            raise ValueError(
+                "user_td requires token GAE, gamma=1, critic lambda=1 and raw outcome rewards without KL/shaping"
+            )
     if config.algorithm == "critic":
         raise ValueError("Use scripts/tau2/train_critic.sh for critic-only training")
 
@@ -667,6 +684,10 @@ def main(
         timeout=config.episode_timeout_seconds,
         infra_retries=config.infra_retries,
     )
+    if config.train_user_boundary_values:
+        workflow_kwargs.update(
+            train_user_boundary_values=True, user_td_beta=config.user_td_beta
+        )
     from areal.utils.stats_logger import StatsLogger
 
     log_path = StatsLogger.get_log_path(
@@ -681,6 +702,8 @@ def main(
 
     # Evaluation sampling is explicit and shared across dev/test.
     eval_workflow_kwargs = workflow_kwargs.copy()
+    eval_workflow_kwargs.pop("train_user_boundary_values", None)
+    eval_workflow_kwargs.pop("user_td_beta", None)
     eval_workflow_kwargs["timeout"] = config.eval_episode_timeout_seconds
     # The evaluator binds evaluation=True and a per-run attempt-record directory.
     eval_workflow_kwargs.pop("trajectory_dir")
