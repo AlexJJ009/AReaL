@@ -19,3 +19,5 @@
   critic 离线预实验
 - [2026-10-15-qwen3-ppo-grpo-sao.md](2026-10-15-qwen3-ppo-grpo-sao.md)：Qwen3 PPO / GRPO
   / SAO 对比
+- [2026-10-17-user-td-split-plan.md](2026-10-17-user-td-split-plan.md)：按用户回复拆 TD
+  误差的实验计划（提案）

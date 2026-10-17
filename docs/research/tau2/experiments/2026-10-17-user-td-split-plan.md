@@ -1,0 +1,147 @@
+# 实验计划：按用户回复拆 TD 误差（user-boundary TD split）
+
+状态：**提案，待用户确认**（2026-10-17）。§7 的待定项定下来之前，不启动任何 GPU 任务。
+
+方法定义见 [../research-direction/problem-and-plan.md](../research-direction/problem-and-plan.md)
+§4。代码开关已合并进 `codex/sao-math`（`946369e`）：
+
+- `train_user_boundary_values`：在用户边界的 value\[$b$\] 上加 critic loss；
+- `user_td_beta`：用户段的系数 $\beta$。
+
+两个开关默认都关闭，用法见 §6。
+
+## 1 目的
+
+回答一个问题：在用户回复处把 TD 误差的用户段乘 $\beta<1$，能不能让 PPO / SAO 的训练更稳、效果更好？
+
+这个方法是"在原算法上加一个开关"，所以比较对象永远是**同一算法开关开与关**：
+
+- PPO+split 对 PPO；
+- SAO+split 对 SAO；
+- 不拿 PPO+split 去比 SAO。
+
+## 2 跑之前的预估
+
+### 2.1 方法能起作用的两个前提
+
+1. **可削减的方差要够大。** $\beta$ 只能缩小 agent 每一轮说完以后、用户回复带来的那部分波动（§4.3 的用户段 $V_{k+1}-U_k$）。这部分在 advantage 方差里占比很小的话，方法基本不起作用。
+2. **critic 在用户回复前后要自洽。** 即满足条件 (C)：$U_k \approx \mathbb{E}[V_{k+1}\mid h_k^+]$。不自洽时，$\beta<1$ 会引入偏差。
+
+### 2.2 已有数据说明了什么
+
+以下数据都来自 2026-10-17 的统计。评测是 fixed-v3 test 的 100 题，每题 4 次，agent 用 temperature 0；脚本在 `phai:/data_storage/yl_test/lgx/tmp/claude-boot/{var,diverge2}.py`。
+
+- **同一道题的结果波动很大。** 即使 agent 用 temperature 0，每题 4 次 trial 之间的方差也占总方差的 40%（PPO step 0）到 54%（PPO step 120）。约一半的题 4 次结果里有对有错。
+- **波动几乎全部从用户的第一条消息开始。** 同一道题两两比较 trial，99% 的配对第一处不同就出在用户的开场消息上，只有约 1% 出在 agent 的回复上。DeepSeek 用户模拟器（temperature 0）的开场白每次都不一样。
+- **这恰好是方法管不到的地方。** 用户开场消息在 agent 第一次说话之前，它的影响进入 $V_1$，不进入任何用户段，$\beta$ 碰不到它。上面的数据只说明"用户噪声很大"，**不能**说明"这个方法能削减它"：
+  - 开场之后，后续用户回复带来的波动（$\beta$ 管得到）有多大，现在不知道；
+  - agent 对不同上下文做出的不同反应算在 agent 段，本来就该由 agent 负责，$\beta$ 也不该碰。
+- **训练时的比例会更小。** 训练时 agent 用 temperature 1 采样，agent 自己的随机性也进入分母，所以训练时用户段的占比还会低于上面评测里的比例。
+- **critic 的情况。** PPO critic 的训练 batch EV 在 0.3–0.4 附近停住，SAO 在 0.2–0.35。PPO critic 的 grad_norm 每一步都超过 1.0 被裁剪（中位数 6.9）。$U$ 位置从来没有训练过，自洽程度未知。
+
+### 2.3 预估结论
+
+- **在现在的设置下，评测 pass rate 上大概率看不出差别。** 现在的设置是：DeepSeek 用户、单 seed、100 题评测。
+  - 100 题配对比较的最小可检测差异（MDE）约 8pp。
+  - PPO 训练 120 步本身的提升是 +8.5pp（CI ±7pp）。
+  - 一个只削减部分方差的改动，很难在单 seed 上再拉开 8pp。
+- **能看得出的只有训练侧指标**：advantage 方差、梯度范数的波动、训练 reward 曲线的平滑程度。
+- **"simple but work"能不能成立，取决于 §3 的 G2 测出来的可削减方差占比。** 现在没有证据支持它在 DeepSeek 用户下有用。如果 G2 的占比很小，应该先改方法或换实验条件（§2.4），而不是直接跑 RL。
+
+### 2.4 实验条件：要有一个噪声更大的用户
+
+§4 原计划（"方法 3"）就要求在 DeepSeek 和 Doubao 两种用户下各跑一次。原因是这个方法预测的收益随用户噪声增大而增大。
+
+只在 DeepSeek 下跑，预测结果接近零，只能当对照，证明不了方法有用。要设计一个**有机会**显示方法有效的实验，就需要一个噪声更大的用户模拟器条件。这一项需要 API 费用，要用户批准。
+
+## 3 门槛：先量，后跑
+
+| 门槛 | 内容 | 资源 | 状态 |
+| --- | --- | --- | --- |
+| G1 | 评测轨迹的分歧位置分析（§2.2） | CPU，几分钟 | 已完成 |
+| G2 | 在已有 PPO rollout 上量可削减方差占比和自洽度（见下） | 1 张 GPU，约 1–2 小时，加 Codex 写脚本 | 待批准 |
+| G3 | 2–3 步 GPU smoke：确认 value\[$b$\] 在真实 RPC 链路上传到 actor，边界计数校验不误报 | 8 卡，约 1 小时 | 待批准，在 RL 之前做 |
+| RL | §5 的训练矩阵 | 每个 120 步的 run 约 17–18 小时 × 8 卡 | G2、G3 通过后，经批准再跑 |
+
+**G2 的做法**：
+
+- 用 PPO 续训保存的 critic checkpoint（`…/ppo-formal-qwen3-v3-ext/checkpoints/.../critic/epoch19epochstep5globalstep119`），在 PPO 最后几个 epoch 的训练 rollout 上做一次 forward，不训练。
+- $U$ 先用 value\[$b-1$\] 近似：value\[$b$\] 没训练过，读出来的数没有意义。近似的误差见 §4.1，它只影响约 7% 的用户边界。
+- 计算以下三个量：
+  - (a) **可削减占比**：$\mathrm{Var}\big(\sum_k (V_{k+1}-U_k)\big) / \mathrm{Var}(R - V_i)$，按 domain 分别报；
+  - (b) **自洽度**：用户段均值，按 domain 和 agent 这一轮的动作类型（问确认、执行写操作、拒绝、普通回复）分组；
+  - (c) 内部用户边界和终止边界分别的贡献。
+
+**G2 的判据**（提案，跑之前定下，跑完不改）：
+
+| 结果 | 判断 |
+| --- | --- |
+| 占比 ≥ 20%，且各组用户段均值的绝对值 ≤ 0.05 | 进入 G3 和 RL |
+| 占比 < 5% | 这个方法在当前条件下起不了作用。不跑 RL，先改方法或换噪声更大的用户 |
+| 介于两者之间，或均值偏离大 | 用户决定 |
+
+## 4 预先登记的假设
+
+跑之前写下，结果出来后不改。
+
+| 编号 | 假设 | 判据（成立） | 判据（不成立） |
+| --- | --- | --- | --- |
+| H1 | 用户段在 advantage 方差里占比可观 | G2 占比 ≥ 20% | < 5% |
+| H2 | 现有 critic 在用户回复前后近似自洽 | G2 各组用户段均值的绝对值 ≤ 0.05 | 任一主要组 > 0.1 |
+| H3 | 开关打开、$\beta<1$ 时 advantage 总方差下降 | 同一 batch、同一 critic 上离线比较 $\beta=1$ 与 $\beta<1$，总方差下降 ≥ G2 占比的一半（用户段与 agent 段之间有协方差，不一定按 $\beta^2$ 缩小） | 总方差不降 |
+| H4 | 训练更稳 | 与同算法开关关闭相比，3 个 seed 的训练 reward 曲线和 eval 曲线波动（步间标准差）更小，梯度范数的方差更小 | 无差别或更大 |
+| H5 | 效果不变差 | eval mean@4 的配对差 ≥ −3pp（非劣） | < −3pp |
+| H6 | 效果更好（只在噪声大的用户条件下预期成立） | eval 配对差 ≥ MDE（约 8pp），或多 seed 合并后显著 | — |
+
+H4–H6 需要多个 seed。单 seed 只能看 H3 和训练侧的趋势，不能下"更稳"的结论。
+
+## 5 训练矩阵与花费
+
+**完整矩阵**：{PPO, SAO} × $\beta \in$ {开关关闭, 1（只训 $U$）, 0.5, 0} × 3 seed × {DeepSeek, 噪声大的用户}，共 48 个 run，约 36 天 × 8 卡，不现实。
+
+**建议的最小矩阵**（G2 通过后）：
+
+| 阶段 | run | 目的 | 花费 |
+| --- | --- | --- | --- |
+| R1 | PPO，$\beta=1$ 只训 $U$，1 seed | 策略不受影响。在线量 $U$ 的 EV 和自洽度，验证 G2 的近似 | 约 18 小时 |
+| R2 | PPO，$\beta \in \{0.5, 0\}$，各 1 seed | 看 H3 和训练侧趋势 | 约 36 小时 |
+| R3 | R2 中较好的 $\beta$ 与开关关闭各补到 3 seed | H4、H5 | 约 72 小时 |
+| R4 | 噪声大的用户下重复 R2 / R3 | H6 | 另算，需 API 批准 |
+
+先用 PPO：PPO 是 $\lambda=1$，原算法不受 critic 偏差影响，$\beta$ 是唯一的偏差来源，结果最好归因。SAO 本身已经有 $\lambda<1$ 的偏差，而且它的回落原因还没查清（见 SAO case study，pueue 595），等 case study 出来再决定是否加进矩阵。
+
+## 6 已有和缺的
+
+**已有**：
+
+- 开关和诊断日志：`ppo_critic/user_boundary/*`，SAO 下是 `ppo_critic/critic_update_1/user_boundary/*`。
+  - 指标包括 `u_points`、`user_segment_mean/std`、$U$ 位置的 EV，内部和终止边界分开记录。
+- 启动方式（必须带 `+`）：
+
+  ```bash
+  bash scripts/tau2/launch_ppo.sh NAME formal +train_user_boundary_values=true +user_td_beta=0.5
+  bash scripts/tau2/launch_qwen3.sh sao NAME formal +train_user_boundary_values=true +user_td_beta=0.5
+  ```
+
+**缺的**：
+
+- G2 的离线脚本（critic checkpoint forward、按边界聚合）；
+- G3 smoke；
+- 噪声大的用户条件的配置和费用评估；
+- 多 seed 的启动方式（现在固定 `seed: 42`）。
+
+## 7 待用户决定
+
+1. G2 的判据阈值（20% / 5% / 0.05）是否认可。
+2. G2 排在 D1 之前还是之后：
+   - D1 在 SAO 之后启动，大约要跑 18 小时；G2 只要 1 张卡。D1 留出空卡的话可以同时跑，否则排在 D1 之后。
+3. 噪声大的用户条件（Doubao 或其他）是否纳入范围，以及 API 预算。
+4. seed 数（建议 3）。
+
+## 8 运行记录
+
+（未开始）
+
+## 9 结果
+
+（未开始）
