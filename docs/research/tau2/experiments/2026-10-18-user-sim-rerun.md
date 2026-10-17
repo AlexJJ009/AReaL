@@ -62,4 +62,6 @@ run 读到改动。
 - patch 后 U1 下降但换成其他用户错误、总数不降：支持"不可靠用户修不干净"。
 - 旧 v3 轨迹可以用当前 judge 重新计分，把 judge 版本变化和用户变化分开。
 
-并行的只读 case study（infra 审计、thinking 开关对比、U1 归因）写在产物目录的 `claude-infra-case-study/`。
+并行的只读 case study（infra 审计、thinking 开关对比、U1 归因）：`_artifacts/AReaL/codex-sao-math/user-sim-20261012/claude-infra-case-study/REPORT.md`。
+
+
