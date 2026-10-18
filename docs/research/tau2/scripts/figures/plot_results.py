@@ -265,10 +265,23 @@ def plot_cause_figure(rows, fails, failed_tasks, out, name):
         )
     with open(os.path.join(out, f"{name}_table.csv"), "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["user_simulator", "mean@4", "pass^4", "user_caused_share", *[c for c, _ in CAUSES]])
+        w.writerow(
+            [
+                "user_simulator",
+                "mean@4",
+                "pass^4",
+                "user_caused_share",
+                *[c for c, _ in CAUSES],
+            ]
+        )
         for s in stats:
             w.writerow(
-                [s["label"], f"{s['mean4']:.1f}", f"{s['pass4']:.1f}", f"{s['user_share']:.0f}%"]
+                [
+                    s["label"],
+                    f"{s['mean4']:.1f}",
+                    f"{s['pass4']:.1f}",
+                    f"{s['user_share']:.0f}%",
+                ]
                 + [s["counts"].get(c, 0) for c, _ in CAUSES]
             )
     print("wrote", os.path.join(out, f"{name}_table.csv"))
@@ -279,10 +292,27 @@ def plot_cause_figure(rows, fails, failed_tasks, out, name):
     left = [0] * n
     for cause, color in CAUSES:
         vals = [s["counts"].get(cause, 0) for s in stats]
-        ax.barh(ys, vals, left=left, height=0.55, color=color, edgecolor="white", linewidth=0.6, label=cause)
+        ax.barh(
+            ys,
+            vals,
+            left=left,
+            height=0.55,
+            color=color,
+            edgecolor="white",
+            linewidth=0.6,
+            label=cause,
+        )
         for y, x0, v in zip(ys, left, vals):
             if v >= 6:
-                ax.text(x0 + v / 2, y, str(v), ha="center", va="center", fontsize=6, color="white")
+                ax.text(
+                    x0 + v / 2,
+                    y,
+                    str(v),
+                    ha="center",
+                    va="center",
+                    fontsize=6,
+                    color="white",
+                )
         left = [x0 + v for x0, v in zip(left, vals)]
     ax.set_yticks(ys)
     ax.set_yticklabels([lab for _, lab in rows])
@@ -293,8 +323,13 @@ def plot_cause_figure(rows, fails, failed_tasks, out, name):
     ax.set_xlim(0, max(left) * 1.08)
     ax.set_xlabel(f"Failed episodes (of {n_ep})")
     ax.legend(
-        frameon=False, ncol=3, loc="lower center", bbox_to_anchor=(0.42, 1.0),
-        columnspacing=0.9, handlelength=1.1, fontsize=6.5,
+        frameon=False,
+        ncol=3,
+        loc="lower center",
+        bbox_to_anchor=(0.42, 1.0),
+        columnspacing=0.9,
+        handlelength=1.1,
+        fontsize=6.5,
     )
     save(fig, out, name)
 
@@ -310,9 +345,7 @@ def main():
     plot_baselines(a.sao_case_study, a.out)
     fails, failed_tasks = load_labels(a.labels)
     plot_cause_figure(SIM_ROWS, fails, failed_tasks, a.out, "user_sim")
-    plot_cause_figure(
-        PATCH_ROWS, fails, failed_tasks, a.out, "user_sim_patch"
-    )
+    plot_cause_figure(PATCH_ROWS, fails, failed_tasks, a.out, "user_sim_patch")
 
 
 if __name__ == "__main__":

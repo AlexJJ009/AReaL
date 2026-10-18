@@ -1,0 +1,7 @@
+user_simulator,mean@4,pass^4,user_caused_share,Agent error,User: stops at confirmation,User: deviates from goal,User: leaves early,Benchmark defect
+GLM-5.3,81.2,70.0,4%,40,0,0,2,3
+DeepSeek-V4.1 (Oct),75.0,50.0,17%,47,3,1,6,3
+"DeepSeek-V4.1 (Oct, no think)",73.8,55.0,5%,50,0,3,0,10
+Doubao-2.1-Lite,68.3,36.7,42%,42,20,8,4,2
+Doubao-2.1-Turbo,59.2,33.3,53%,44,42,5,5,2
+Qwen3.5-4B,57.1,33.3,50%,50,2,46,3,2
