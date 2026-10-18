@@ -57,7 +57,8 @@
 
 ## 4 待定的问题
 
-第二轮（规则 + 因果 judge）和规则、gold 检测器的比较见 [user-error-detectors/](../user-error-detectors/REPORT.md)。
+第二轮（规则 + 因果 judge）和规则、gold 检测器的比较见
+[user-error-detectors/](../user-error-detectors/REPORT.md)。
 
 **截断位置按"第一处用户违规"还是"致败的用户错误"？**
 
