@@ -3,9 +3,10 @@
 Figures (PNG + PDF in --out):
   baseline_curves   PPO vs SAO: eval mean@4 on Airline / Retail / Telecom with
                     task-level bootstrap 95% CI, plus critic EV per training step.
-  user_sim          Left: table (mean@4, pass^4, user-caused share).
-                    Right: primary cause of each failed episode, per user simulator.
-  user_sim_patch    Same layout, before / after the one-line U1 guideline patch.
+  user_sim          Primary cause of each failed episode, per user simulator; the
+                    companion table (mean@4, pass^4, user-caused share) is written
+                    to user_sim_table.csv.
+  user_sim_patch    Same, before / after the one-line U1 guideline patch.
 
 Style and palette follow the paper figure (overleaf "online RL",
 figures/user_sim_retail.tex). Run on phai:
@@ -240,7 +241,12 @@ def load_labels(paths):
     return fails, failed_tasks
 
 
-def plot_cause_figure(rows, fails, failed_tasks, out, name, bold_best=True):
+def plot_cause_figure(rows, fails, failed_tasks, out, name):
+    """Bar chart of failure causes; the companion table goes to {name}_table.csv.
+
+    As in the paper, the table and the chart are separate pieces placed side by side
+    (LaTeX tabular + figure there, a native table + image in Feishu).
+    """
     rows = [(k, lab) for k, lab in rows if k in fails]
     n_ep = N_TASKS * N_TRIALS
     stats = []
@@ -250,98 +256,45 @@ def plot_cause_figure(rows, fails, failed_tasks, out, name, bold_best=True):
         user = sum(v for c, v in counts.items() if c.startswith("User"))
         stats.append(
             dict(
-                label=lab,
+                label=lab.strip(),
                 mean4=100 * (1 - len(codes) / n_ep),
                 pass4=100 * (N_TASKS - len(failed_tasks[k])) / N_TASKS,
                 user_share=100 * user / len(codes),
                 counts=counts,
-                n_fail=len(codes),
             )
         )
+    with open(os.path.join(out, f"{name}_table.csv"), "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["user_simulator", "mean@4", "pass^4", "user_caused_share", *[c for c, _ in CAUSES]])
+        for s in stats:
+            w.writerow(
+                [s["label"], f"{s['mean4']:.1f}", f"{s['pass4']:.1f}", f"{s['user_share']:.0f}%"]
+                + [s["counts"].get(c, 0) for c, _ in CAUSES]
+            )
+    print("wrote", os.path.join(out, f"{name}_table.csv"))
+
     n = len(stats)
-    fig = plt.figure(figsize=(7.2, 0.30 * n + 1.0))
-    gs = fig.add_gridspec(1, 2, width_ratios=[1.15, 1.2], wspace=0.04)
-    tab = fig.add_subplot(gs[0])
-    bar = fig.add_subplot(gs[1], sharey=tab)
-    ylim = (-0.7, n - 0.3)
-
-    # Left: booktabs-style table; row i sits at y = n - 1 - i, same as its bar.
-    tab.axis("off")
-    tab.set_xlim(0, 1)
-    tab.set_ylim(*ylim)
-    cols = [
-        (0.0, "User simulator", "left"),
-        (0.62, "mean@4", "center"),
-        (0.77, r"pass$^4$", "center"),
-        (0.92, "User-caused", "center"),
-    ]
-    y_head = n - 0.05
-    for x, h, ha in cols:
-        tab.text(x, y_head, h, ha=ha, va="center", fontsize=7.5)
-    for y, w in ((y_head + 0.42, 1.0), (y_head - 0.4, 0.5), (ylim[0], 1.0)):
-        tab.plot([0, 1], [y, y], color="black", linewidth=w, clip_on=False)
-    best_m = max(s["mean4"] for s in stats)
-    best_p = max(s["pass4"] for s in stats)
-    for i, s in enumerate(stats):
-        y = n - 1 - i
-        tab.text(0.0, y, s["label"], ha="left", va="center", fontsize=7.5)
-        for x, v, best in ((0.62, s["mean4"], best_m), (0.77, s["pass4"], best_p)):
-            bold = bold_best and abs(v - best) < 1e-9
-            tab.text(
-                x,
-                y,
-                f"{v:.1f}",
-                ha="center",
-                va="center",
-                fontsize=7.5,
-                fontweight="bold" if bold else "normal",
-            )
-        tab.text(
-            0.92, y, f"{s['user_share']:.0f}%", ha="center", va="center", fontsize=7.5
-        )
-
-    # Right: stacked horizontal bars, first row on top.
-    ys = list(range(n))[::-1]
+    fig, ax = plt.subplots(figsize=(4.4, 0.32 * n + 0.9))
+    ys = list(range(n))[::-1]  # first row on top
     left = [0] * n
     for cause, color in CAUSES:
         vals = [s["counts"].get(cause, 0) for s in stats]
-        bar.barh(
-            ys,
-            vals,
-            left=left,
-            height=0.55,
-            color=color,
-            edgecolor="white",
-            linewidth=0.6,
-            label=cause,
-        )
+        ax.barh(ys, vals, left=left, height=0.55, color=color, edgecolor="white", linewidth=0.6, label=cause)
         for y, x0, v in zip(ys, left, vals):
             if v >= 6:
-                bar.text(
-                    x0 + v / 2,
-                    y,
-                    str(v),
-                    ha="center",
-                    va="center",
-                    fontsize=6,
-                    color="white",
-                )
+                ax.text(x0 + v / 2, y, str(v), ha="center", va="center", fontsize=6, color="white")
         left = [x0 + v for x0, v in zip(left, vals)]
-    bar.set_yticks([])
-    bar.spines["left"].set_visible(False)
-    bar.grid(axis="y", visible=False)
-    bar.set_xlim(0, max(left) * 1.08)
-    bar.set_xlabel(f"Failed episodes (of {n_ep})")
-    handles, labels = bar.get_legend_handles_labels()
-    fig.legend(
-        handles,
-        labels,
-        frameon=False,
-        ncol=5,
-        loc="lower center",
-        bbox_to_anchor=(0.5, 0.97),
-        columnspacing=1.0,
-        handlelength=1.1,
+    ax.set_yticks(ys)
+    ax.set_yticklabels([lab for _, lab in rows])
+    ax.tick_params(axis="y", length=0)
+    ax.spines["left"].set_visible(False)
+    ax.grid(axis="y", visible=False)
+    ax.set_ylim(-0.6, n - 0.4)
+    ax.set_xlim(0, max(left) * 1.08)
+    ax.set_xlabel(f"Failed episodes (of {n_ep})")
+    ax.legend(
+        frameon=False, ncol=3, loc="lower center", bbox_to_anchor=(0.42, 1.0),
+        columnspacing=0.9, handlelength=1.1, fontsize=6.5,
     )
     save(fig, out, name)
 
@@ -358,7 +311,7 @@ def main():
     fails, failed_tasks = load_labels(a.labels)
     plot_cause_figure(SIM_ROWS, fails, failed_tasks, a.out, "user_sim")
     plot_cause_figure(
-        PATCH_ROWS, fails, failed_tasks, a.out, "user_sim_patch", bold_best=False
+        PATCH_ROWS, fails, failed_tasks, a.out, "user_sim_patch"
     )
 
 
