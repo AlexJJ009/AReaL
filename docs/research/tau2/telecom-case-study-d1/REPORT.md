@@ -108,9 +108,9 @@ Telecom 占 25%，每 epoch 996 题、8 步。
 
 - pack：`dataset/tau2/tau2-official-telecom-pack-20261018-v1/`（Codex 616 构建；249
   题与官方原题逐字一致，gold 1 / 空 0， 与 test 和 v2 pack 无重合，训练加载检查通过）。
-- 逐题审（pueue 620–622）：三片各 83 题，校准沿用 TELECOM_REVIEW2，对照每题 4 条 D1 轨迹。结论 249 题全部 keep，失败主因全部为
-  agent。逐个删除 gold 动作重放 1,263 次，只有 2 题里一次冗余的 `reboot_device` 删掉后仍得分（另一次重启覆盖了它）。Claude
-  随机复核 3 题，结论一致。pack 可用于训练。
+- 逐题审（pueue 620–622）：三片各 83 题，校准沿用 TELECOM_REVIEW2，对照每题 4 条 D1 轨迹。结论 249 题全部
+  keep，失败主因全部为 agent。逐个删除 gold 动作重放 1,263 次，只有 2 题里一次冗余的 `reboot_device`
+  删掉后仍得分（另一次重启覆盖了它）。Claude 随机复核 3 题，结论一致。pack 可用于训练。
 
 ## 5 局限
 
