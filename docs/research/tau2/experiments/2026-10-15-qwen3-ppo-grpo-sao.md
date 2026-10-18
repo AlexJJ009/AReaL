@@ -3,7 +3,7 @@
 | 项                 | 内容                                                                                                                                               |
 | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 编号               | EXP-2026-10-15-qwen3-ppo-grpo-sao                                                                                                                  |
-| 状态               | PPO 120 步（578 + 589）、GRPO 47 步、SAO `sao-formal-qwen3-v3-mse` 120 步已完成（2026-10-17）；120 步结果见 §4.0 |
+| 状态               | PPO 120 步（578 + 589）、GRPO 47 步、SAO `sao-formal-qwen3-v3-mse` 120 步已完成（2026-10-17）；120 步结果见 §4.0                                   |
 | 设计 / 执行 / 批准 | Claude / Codex / GongxunLi                                                                                                                         |
 | 代码               | `codex/sao-math`；每个运行用固定源码（见 §3 表）                                                                                                   |
 | 产物目录           | `_artifacts/AReaL/codex-sao-math/` 下 `tau2-ppo-20261015/`、`tau2-sao-grpo-20261015/` 等（§3）                                                     |
@@ -58,9 +58,10 @@
 
 ### 4.0 120 步结果（2026-10-18 补）
 
-数据：SAO case study（Codex，`tau2-sao-case-study-20261017/eval_curve.csv`）。SAO 实际运行是 `sao-formal-qwen3-v3-mse`
-（`tau2-sao-20261016/`）：critic 冻结 attention、lr 5e-6、不做 value clip，每步先更新 critic 2 次；actor 用 length-adaptive
-GAE（α=1.5），不白化。评测是 fixed-v3 test，每题 4 次，mean@4。**训练域**是 Airline 20 + Retail 40（240 条 episode）；Telecom 40 题不在训练池里，单列。
+数据：SAO case study（Codex，`tau2-sao-case-study-20261017/eval_curve.csv`）。SAO 实际运行是
+`sao-formal-qwen3-v3-mse` （`tau2-sao-20261016/`）：critic 冻结 attention、lr 5e-6、不做 value
+clip，每步先更新 critic 2 次；actor 用 length-adaptive GAE（α=1.5），不白化。评测是 fixed-v3 test，每题 4
+次，mean@4。**训练域**是 Airline 20 + Retail 40（240 条 episode）；Telecom 40 题不在训练池里，单列。
 
 | step | PPO 训练域 | PPO Airline | PPO Retail | PPO Telecom | SAO 训练域 | SAO Airline | SAO Retail | SAO Telecom |
 | ---- | ---------- | ----------- | ---------- | ----------- | ---------- | ----------- | ---------- | ----------- |
@@ -80,29 +81,30 @@ GAE（α=1.5），不白化。评测是 fixed-v3 test，每题 4 次，mean@4。
 
 GRPO-matched（47 步）训练域 0.379 → 0.408。
 
-训练域按题配对 bootstrap（60 题，2 万次；`phai:/data_storage/yl_test/lgx/tmp/claude-boot/ar_boot.py`）：
+训练域按题配对 bootstrap（60 题，2
+万次；`phai:/data_storage/yl_test/lgx/tmp/claude-boot/ar_boot.py`）：
 
-| 比较           | 差值   | 95% CI           |
-| -------------- | ------ | ---------------- |
-| PPO 0 → 70     | +8.3pp | \[+0.8, +16.3\]  |
-| PPO 0 → 120    | +12.5pp | \[+3.3, +21.7\] |
-| PPO 70 → 120   | +4.2pp | \[−2.1, +10.0\]  |
-| SAO 0 → 70     | +9.6pp | \[+2.9, +16.3\]  |
-| SAO 0 → 120    | +11.3pp | \[+2.9, +19.2\] |
-| SAO 70 → 120   | +1.7pp | \[−5.0, +8.3\]   |
-| GRPO 0 → 47    | +2.9pp | \[−5.0, +10.8\]  |
-| PPO − SAO，step 0 | +5.0pp | \[−2.5, +12.5\] |
-| PPO − SAO，step 120 | +6.3pp | \[−1.7, +14.2\] |
+| 比较                | 差值    | 95% CI          |
+| ------------------- | ------- | --------------- |
+| PPO 0 → 70          | +8.3pp  | \[+0.8, +16.3\] |
+| PPO 0 → 120         | +12.5pp | \[+3.3, +21.7\] |
+| PPO 70 → 120        | +4.2pp  | \[−2.1, +10.0\] |
+| SAO 0 → 70          | +9.6pp  | \[+2.9, +16.3\] |
+| SAO 0 → 120         | +11.3pp | \[+2.9, +19.2\] |
+| SAO 70 → 120        | +1.7pp  | \[−5.0, +8.3\]  |
+| GRPO 0 → 47         | +2.9pp  | \[−5.0, +10.8\] |
+| PPO − SAO，step 0   | +5.0pp  | \[−2.5, +12.5\] |
+| PPO − SAO，step 120 | +6.3pp  | \[−1.7, +14.2\] |
 
 - PPO 和 SAO 在训练域都有显著提升，主要来自 Retail；Airline 没有可分辨的变化。
 - 提升集中在前 70 步，70 → 120 两者都不显著。
 - 同一个初始模型，PPO 与 SAO 的 step 0 相差 5pp，这是评测噪声的量级；两者 120 步的差（6.3pp）与它相当，分不出算法优劣。
 - critic 在训练批次上更新前的 EV：PPO 第 1–20 步 0.07，第 101–120 步 0.34；SAO 分别为 0.08、0.33。
 - **用户后端切换**：DeepSeek 官方 API 在 10-17 上午换了模型，PPO 全程用旧后端；SAO 的评测 0–50 步为旧、60 步混合、70–120
-  步为新（[issue](../issues/2026-10-17-deepseek-user-backend-switch.md)）。step ≥ 70 的 PPO−SAO 比较跨了用户版本。
+  步为新（[issue](../issues/2026-10-17-deepseek-user-backend-switch.md)）。step ≥ 70 的 PPO−SAO
+  比较跨了用户版本。
 
 以下 §4.1–§4.4 是 48 步时的记录。
-
 
 ### 4.1 评测
 
