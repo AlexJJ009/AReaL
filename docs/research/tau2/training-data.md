@@ -425,10 +425,11 @@ reward_basis），全部 gold 1 分、空轨迹 0 分。v1 只改了 50 题的�
 Qwen3-4B-2507 在官方 `telecom_full`（2,285 题 × 4，D1）上 mean@4 19.6%，1,440 题四次全错。筛题依据和失败归因见
 [telecom-case-study-d1/REPORT.md](telecom-case-study-d1/REPORT.md)：
 
-- 排除与官方 test 同完整初始状态的 41 题（只按 test id 排除会漏 1 题），以及 1,120 道"愿意充 2 GB / 评分要求恰好 2 GB"的题
-  （与 §6 第二轮的 50 题同类，本轮不修）。
+- 排除与官方 test 同完整初始状态的 41 题（只按 test id 排除会漏 1 题），以及 1,120 道"愿意充 2 GB / 评分要求恰好 2 GB"的题 （与
+  §6 第二轮的 50 题同类，本轮不修）。
 - 从剩下 1–3/4 通过的题中按 1/2/3 次通过各抽 83 题，共 249 题。
-- pack：`dataset/tau2/tau2-official-telecom-pack-20261018-v1`（`_cache` 下有同名软链）。题目与官方原题逐字一致，gold 1 / 空 0，
-  与 test、v2 pack 无重合。与 v2 合并后每 epoch 996 题（Airline 410、Retail 337、Telecom 249），batch 128 时 8 步；配置覆盖项见
+- pack：`dataset/tau2/tau2-official-telecom-pack-20261018-v1`（`_cache`
+  下有同名软链）。题目与官方原题逐字一致，gold 1 / 空 0， 与 test、v2 pack 无重合。与 v2 合并后每 epoch 996 题（Airline
+  410、Retail 337、Telecom 249），batch 128 时 8 步；配置覆盖项见
   `_artifacts/AReaL/codex-sao-math/tau2-telecom-pack-20261018/REPORT.md`。
 - **状态：§5 的逐题审进行中**（pueue 620–622，`tau2-telecom-pack-20261018/review/`），结论出来之前不用于训练。
