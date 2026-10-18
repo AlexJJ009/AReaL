@@ -37,13 +37,19 @@ from tau2.user.user_simulator_base import HalfDuplexUser
 # Import utilities (also patches tau2.utils.llm_utils)
 from examples.tau2 import benchmark_variant, task_pack
 from examples.tau2.contracts import bind_policy_request, strip_policy_reasoning
-from examples.tau2.user_boundary import classify_user_boundaries
+from examples.tau2.user_boundary import (
+    RuleUserBoundaryDetector,
+    UserBoundaryDetector,
+    classify_user_boundaries,
+    detect_user_boundaries,
+)
 from examples.tau2.user_simulator import RecordingUserSimulator
 from examples.tau2.utils import (
     Tau2EnvConfig,
     Tau2RunInfo,
     nl_judge_metadata,
     trajectory_record_dir,
+    validate_user_td_settings,
 )
 
 from areal.experimental.openai.types import (
@@ -616,7 +622,9 @@ class Tau2AgentWorkflow:
         evaluation: bool = False,
         trajectory_dir: str | None = None,
         train_user_boundary_values: bool = False,
-        user_td_beta: float = 1.0,
+        user_td_beta: float | None = None,
+        user_boundary_detector: str | UserBoundaryDetector | None = None,
+        user_td_beta_flagged: float = 0.0,
     ):
         if econfig is None:
             econfig = Tau2EnvConfig()
@@ -634,7 +642,23 @@ class Tau2AgentWorkflow:
         self.evaluation = evaluation
         self.trajectory_dir = trajectory_dir
         self.train_user_boundary_values = train_user_boundary_values
-        self.user_td_beta = user_td_beta
+        # Reuse the example configuration's validation for direct workflow use.
+        validate_user_td_settings(
+            algorithm="ppo",
+            train_user_boundary_values=train_user_boundary_values,
+            user_td_beta=user_td_beta,
+            user_boundary_detector="rules"
+            if callable(user_boundary_detector)
+            else user_boundary_detector,
+            user_td_beta_flagged=user_td_beta_flagged,
+        )
+        self.user_td_beta = 1.0 if user_td_beta is None else user_td_beta
+        self.user_boundary_detector = (
+            RuleUserBoundaryDetector()
+            if user_boundary_detector == "rules"
+            else user_boundary_detector
+        )
+        self.user_td_beta_flagged = user_td_beta_flagged
         from areal.utils.runtime_audit import write_runtime_audit
 
         write_runtime_audit(
@@ -813,6 +837,18 @@ class Tau2AgentWorkflow:
                     },
                 )
             raise
+        boundary_metadata = {}
+        if self.train_user_boundary_values:
+            if self.user_boundary_detector is not None:
+                boundary_metadata = await detect_user_boundaries(
+                    run_info.messages, run_info.stop_reason, self.user_boundary_detector
+                )
+                boundary_metadata["user_td_beta_flagged"] = self.user_td_beta_flagged
+            else:
+                boundary_metadata = {
+                    "user_boundary_types": classify_user_boundaries(run_info.messages),
+                    "user_td_beta": self.user_td_beta,
+                }
         if trajectory_root:
             write_trajectory_record(
                 trajectory_root,
@@ -820,6 +856,7 @@ class Tau2AgentWorkflow:
                     **record,
                     "recorded_at": time.time(),
                     "status": "completed",
+                    **boundary_metadata,
                     **runner.llm_route_evidence(),
                     "stop_reason": run_info.stop_reason,
                     "official_score": float(run_info.reward),
@@ -866,15 +903,6 @@ class Tau2AgentWorkflow:
                 "reward_info": reward_info,
                 "failure_class": run_info.error_type,
                 **runner.llm_route_evidence(),
-                **(
-                    {
-                        "user_boundary_types": classify_user_boundaries(
-                            run_info.messages
-                        ),
-                        "user_td_beta": self.user_td_beta,
-                    }
-                    if self.train_user_boundary_values
-                    else {}
-                ),
+                **boundary_metadata,
             },
         )

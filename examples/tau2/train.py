@@ -686,7 +686,10 @@ def main(
     )
     if config.train_user_boundary_values:
         workflow_kwargs.update(
-            train_user_boundary_values=True, user_td_beta=config.user_td_beta
+            train_user_boundary_values=True,
+            user_td_beta=config.user_td_beta,
+            user_boundary_detector=config.user_boundary_detector,
+            user_td_beta_flagged=config.user_td_beta_flagged,
         )
     from areal.utils.stats_logger import StatsLogger
 
@@ -704,6 +707,8 @@ def main(
     eval_workflow_kwargs = workflow_kwargs.copy()
     eval_workflow_kwargs.pop("train_user_boundary_values", None)
     eval_workflow_kwargs.pop("user_td_beta", None)
+    eval_workflow_kwargs.pop("user_boundary_detector", None)
+    eval_workflow_kwargs.pop("user_td_beta_flagged", None)
     eval_workflow_kwargs["timeout"] = config.eval_episode_timeout_seconds
     # The evaluator binds evaluation=True and a per-run attempt-record directory.
     eval_workflow_kwargs.pop("trajectory_dir")

@@ -1148,6 +1148,8 @@ class WorkflowExecutor:
             ("versions", "versions"),
             ("turn_ids", "turn_ids"),
             ("user_boundary_types", "user_boundary_types"),
+            ("user_boundary_flags", "user_boundary_flags"),
+            ("user_boundary_detector_ids", "user_boundary_detector_ids"),
         ):
             tensor = traj.get(tensor_key)
             if tensor is not None:
@@ -1158,6 +1160,16 @@ class WorkflowExecutor:
                 fields[tensor_key] = bool(tensor[row].item())
         if "user_td_beta" in traj:
             fields["user_td_beta"] = float(traj["user_td_beta"][row].item())
+        if "user_td_beta_flagged" in traj:
+            from areal.trainer.ppo.user_boundary import USER_BOUNDARY_DETECTOR_NAMES
+
+            fields["user_td_beta_flagged"] = float(
+                traj["user_td_beta_flagged"][row].item()
+            )
+            fields["user_boundary_detectors"] = [
+                USER_BOUNDARY_DETECTOR_NAMES[detector_id]
+                for detector_id in fields["user_boundary_detector_ids"]
+            ]
         episode_ids = traj.get("episode_ids")
         if episode_ids is not None:
             active_episode_ids = episode_ids[row, :seqlen].unique().tolist()

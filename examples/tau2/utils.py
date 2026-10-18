@@ -173,6 +173,51 @@ class Tau2CriticConfig(PPOCriticConfig):
     per_episode_microbatching: bool = False
 
 
+def validate_user_td_settings(
+    *,
+    train_user_boundary_values: bool,
+    user_td_beta: float | None,
+    user_boundary_detector: str | None,
+    user_td_beta_flagged: float,
+    algorithm: str,
+) -> None:
+    """Shared example/workflow validation without constructing trainer configs."""
+    if not isinstance(train_user_boundary_values, bool):
+        raise ValueError("train_user_boundary_values must be a bool (user_td)")
+    beta = 1.0 if user_td_beta is None else user_td_beta
+    for name, value in (
+        ("user_td_beta", beta),
+        ("user_td_beta_flagged", user_td_beta_flagged),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int | float)
+            or not math.isfinite(value)
+            or not 0 <= value <= 1
+        ):
+            raise ValueError(f"{name} must be finite and in [0, 1]")
+    if user_boundary_detector is not None:
+        if user_boundary_detector != "rules":
+            raise ValueError("user_boundary_detector currently supports only 'rules'")
+        if not train_user_boundary_values:
+            raise ValueError(
+                "user_boundary_detector requires train_user_boundary_values"
+            )
+        if user_td_beta is not None:
+            raise ValueError(
+                "user_td_beta and user_boundary_detector are mutually exclusive"
+            )
+    if beta < 1 and not train_user_boundary_values:
+        raise ValueError("user_td_beta < 1 requires train_user_boundary_values")
+    if (train_user_boundary_values or beta != 1) and algorithm not in (
+        "ppo",
+        "sao",
+    ):
+        raise ValueError(
+            "user_td settings require ppo or sao; critic-only is unsupported"
+        )
+
+
 @dataclass
 class Tau2PPOConfig(AsyncEvalPPOConfig):
     """PPO configuration with Tau2-specific settings."""
@@ -209,7 +254,13 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
     critic_head_bias_init: float | None = None
     # Train exact post-agent values and optionally attenuate user-transition TD.
     train_user_boundary_values: bool = False
-    user_td_beta: float = 1.0
+    # None preserves effective legacy beta=1 while detecting an explicitly
+    # supplied legacy beta (including 1) together with the detector mode.
+    user_td_beta: float | None = None
+    # rules enables boundary detection; None leaves legacy behavior unchanged.
+    user_boundary_detector: str | None = None
+    # In [0, 1], used only at flagged user boundaries; all others use beta=1.
+    user_td_beta_flagged: float = 0.0
     critic_head_lr: float | None = None
     # Episode attempts after the first, as `tau2 run --max-retries` (default 3).
     infra_retries: int = 3
@@ -250,25 +301,13 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
 
     def validate_user_td_split(self) -> None:
         """Validate opt-in user-boundary settings, including structured loading."""
-        if not isinstance(self.train_user_boundary_values, bool):
-            raise ValueError("train_user_boundary_values must be a bool (user_td)")
-        beta = self.user_td_beta
-        if (
-            isinstance(beta, bool)
-            or not isinstance(beta, int | float)
-            or not math.isfinite(beta)
-            or not 0 <= beta <= 1
-        ):
-            raise ValueError("user_td_beta must be finite and in [0, 1]")
-        if beta < 1 and not self.train_user_boundary_values:
-            raise ValueError("user_td_beta < 1 requires train_user_boundary_values")
-        if (self.train_user_boundary_values or beta != 1) and self.algorithm not in (
-            "ppo",
-            "sao",
-        ):
-            raise ValueError(
-                "user_td settings require ppo or sao; critic-only is unsupported"
-            )
+        validate_user_td_settings(
+            train_user_boundary_values=self.train_user_boundary_values,
+            user_td_beta=self.user_td_beta,
+            user_boundary_detector=self.user_boundary_detector,
+            user_td_beta_flagged=self.user_td_beta_flagged,
+            algorithm=self.algorithm,
+        )
 
     def resolve_min_usable_group_size(self) -> int:
         if self.min_usable_group_size is not None:

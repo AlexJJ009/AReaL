@@ -329,6 +329,18 @@ class PPOActor:
                 raise ValueError(f"Static gae_lambda must be finite, got {gae_lambda}")
         boundary_kwargs = {}
         u_mask = None
+        if (
+            any(
+                key in data
+                for key in (
+                    "user_boundary_flags",
+                    "user_td_beta_flagged",
+                    "user_boundary_detector_ids",
+                )
+            )
+            and "user_boundary_types" not in data
+        ):
+            raise ValueError("Flagged user boundaries require user_boundary_types")
         if "user_boundary_types" in data:
             if (
                 self.gae_timestep_unit != "token"
@@ -354,8 +366,10 @@ class PPOActor:
             u_mask = user_boundary_mask(data, loss_mask)
             boundary_kwargs = dict(
                 user_boundary_types=data["user_boundary_types"],
-                user_td_beta=data["user_td_beta"],
             )
+            for key in ("user_td_beta", "user_boundary_flags", "user_td_beta_flagged"):
+                if key in data:
+                    boundary_kwargs[key] = data[key]
         if self.gae_timestep_unit == "turn":
             assert turn_ids is not None
             advantages, returns = _compute_turn_level_gae(

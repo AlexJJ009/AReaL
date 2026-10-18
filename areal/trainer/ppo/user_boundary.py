@@ -13,6 +13,24 @@ import torch
 from areal.utils import stats_tracker
 from areal.utils.stats_tracker import ReduceType
 
+# Stable transport IDs. Gold/judge are reserved for future injected detectors;
+# this change implements only the U1 and U7a rules.
+USER_BOUNDARY_DETECTOR_NAMES = (None, "U1", "U7a", "gold", "judge")
+
+
+def validate_boundary_beta(beta: Any, actor_mask: torch.Tensor, name: str) -> None:
+    if (
+        not isinstance(beta, torch.Tensor)
+        or beta.shape != (actor_mask.shape[0],)
+        or beta.device != actor_mask.device
+        or not torch.is_floating_point(beta)
+    ):
+        raise ValueError(f"{name} must be floating with shape (batch_size,)")
+    torch._assert_async(
+        torch.all(torch.isfinite(beta) & (beta >= 0) & (beta <= 1)),
+        f"{name} must be finite and in [0, 1]",
+    )
+
 
 def user_boundary_mask(data: dict[str, Any], actor_mask: torch.Tensor) -> torch.Tensor:
     """Validate opt-in transport before admitting extra post-agent critic states."""
@@ -25,17 +43,51 @@ def user_boundary_mask(data: dict[str, Any], actor_mask: torch.Tensor) -> torch.
         or types.dtype not in (torch.int32, torch.int64)
     ):
         raise ValueError("user_boundary_types must be token-aligned integer types")
-    if (
-        not isinstance(beta, torch.Tensor)
-        or beta.shape != (actor_mask.shape[0],)
-        or beta.device != actor_mask.device
-        or not torch.is_floating_point(beta)
-    ):
-        raise ValueError("user_td_beta must be floating with shape (batch_size,)")
-    torch._assert_async(
-        torch.all(torch.isfinite(beta) & (beta >= 0) & (beta <= 1)),
-        "user_td_beta must be finite and in [0, 1]",
+    flagged_mode = any(
+        key in data
+        for key in (
+            "user_boundary_flags",
+            "user_td_beta_flagged",
+            "user_boundary_detector_ids",
+        )
     )
+    if flagged_mode:
+        if "user_td_beta" in data:
+            raise ValueError(
+                "user_td_beta and flagged boundary beta are mutually exclusive"
+            )
+        flags = data.get("user_boundary_flags")
+        ids = data.get("user_boundary_detector_ids")
+        for name, tensor, dtypes in (
+            ("user_boundary_flags", flags, (torch.bool,)),
+            ("user_boundary_detector_ids", ids, (torch.int32, torch.int64)),
+        ):
+            if (
+                not isinstance(tensor, torch.Tensor)
+                or tensor.shape != types.shape
+                or tensor.device != types.device
+                or tensor.dtype not in dtypes
+            ):
+                raise ValueError(
+                    f"{name} must be token-aligned with the correct dtype/device"
+                )
+        torch._assert_async(
+            torch.all(~flags | ((types == 1) | (types == 3))),
+            "Only user boundaries may be flagged",
+        )
+        torch._assert_async(
+            torch.all(
+                (ids >= 0)
+                & (ids < len(USER_BOUNDARY_DETECTOR_NAMES))
+                & ((ids != 0) == flags)
+            ),
+            "Invalid user boundary detector IDs/flags",
+        )
+        validate_boundary_beta(
+            data.get("user_td_beta_flagged"), actor_mask, "user_td_beta_flagged"
+        )
+    else:
+        validate_boundary_beta(beta, actor_mask, "user_td_beta")
     torch._assert_async(torch.all((types >= 0) & (types <= 4)), "Invalid boundary type")
     previous_action = actor_mask.bool().roll(1, -1)
     previous_action[:, 0] = False
@@ -72,6 +124,21 @@ def log_user_boundary_stats(data: dict[str, Any]) -> None:
     user_segment = successor - values
     residual = values - targets
     with stats_tracker.scope("user_boundary"):
+        if "user_boundary_flags" in data:
+            flags = data["user_boundary_flags"]
+            stats_tracker.denominator(flagged_count=flags)
+            ids = data["user_boundary_detector_ids"]
+            for detector_id, name in enumerate(USER_BOUNDARY_DETECTOR_NAMES[1:], 1):
+                stats_tracker.denominator(
+                    **{f"detector_{name}_count": flags & (ids == detector_id)}
+                )
+            with stats_tracker.scope("flagged"):
+                stats_tracker.denominator(u_points=flags)
+                stats_tracker.stat(
+                    user_segment_mean=user_segment,
+                    denominator="u_points",
+                    reduce_type=ReduceType.AVG,
+                )
         for subset, mask in (
             ("", (types == 1) | (types == 3)),
             ("internal", types == 1),

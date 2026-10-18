@@ -349,6 +349,57 @@ class InteractionWithTokenLogpReward:
                 kinds, dtype=torch.int32, device=boundaries.device
             )
             result["user_boundary_types"] = boundaries
+            flagged_keys = (
+                "user_boundary_flags",
+                "user_boundary_detectors",
+                "user_td_beta_flagged",
+            )
+            if any(key in self.episode_metadata for key in flagged_keys):
+                from areal.trainer.ppo.user_boundary import USER_BOUNDARY_DETECTOR_NAMES
+
+                if "user_td_beta" in self.episode_metadata:
+                    raise ValueError(
+                        "user_td_beta and flagged boundary beta are mutually exclusive"
+                    )
+                if not all(key in self.episode_metadata for key in flagged_keys):
+                    raise ValueError("Incomplete flagged user boundary metadata")
+                flags = self.episode_metadata["user_boundary_flags"]
+                names = self.episode_metadata["user_boundary_detectors"]
+                if len(flags) != len(kinds) or len(names) != len(kinds):
+                    raise ValueError("User boundary flag/detector count mismatch")
+                if any(
+                    not isinstance(flag, bool)
+                    or name not in USER_BOUNDARY_DETECTOR_NAMES
+                    or flag != (name is not None)
+                    or (flag and kind not in (1, 3))
+                    for flag, name, kind in zip(flags, names, kinds, strict=True)
+                ):
+                    raise ValueError("Invalid user boundary flags/detectors")
+                aligned_flags = torch.zeros_like(boundaries, dtype=torch.bool)
+                aligned_ids = torch.zeros_like(boundaries)
+                aligned_flags[0, positions] = torch.tensor(
+                    flags, dtype=torch.bool, device=boundaries.device
+                )
+                aligned_ids[0, positions] = torch.tensor(
+                    [USER_BOUNDARY_DETECTOR_NAMES.index(name) for name in names],
+                    dtype=torch.int32,
+                    device=boundaries.device,
+                )
+                result["user_boundary_flags"] = aligned_flags
+                result["user_boundary_detector_ids"] = aligned_ids
+                beta = self.episode_metadata["user_td_beta_flagged"]
+                if (
+                    isinstance(beta, bool)
+                    or not isinstance(beta, int | float)
+                    or not 0 <= beta <= 1
+                ):
+                    raise ValueError(
+                        "user_td_beta_flagged must be finite and in [0, 1]"
+                    )
+                result["user_td_beta_flagged"] = torch.tensor(
+                    [beta], dtype=torch.float32
+                )
+                return
             beta = self.episode_metadata.get("user_td_beta")
             if (
                 isinstance(beta, bool)

@@ -34,6 +34,8 @@ def _compute_token_level_gae(
     bootstrap_values: torch.Tensor | None = None,
     user_boundary_types: torch.Tensor | None = None,
     user_td_beta: torch.Tensor | None = None,
+    user_boundary_flags: torch.Tensor | None = None,
+    user_td_beta_flagged: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute token GAE, optionally splitting actor TD at user boundaries.
 
@@ -41,6 +43,20 @@ def _compute_token_level_gae(
     timestep: with lambda<1 this is a token correction, not turn-level GAE.
     The caller must compute critic targets with the original TD residuals.
     """
+    flagged_mode = user_boundary_flags is not None or user_td_beta_flagged is not None
+    if flagged_mode:
+        if user_td_beta is not None:
+            raise ValueError(
+                "user_td_beta and flagged boundary beta are mutually exclusive"
+            )
+        if (
+            user_boundary_types is None
+            or user_boundary_flags is None
+            or user_td_beta_flagged is None
+        ):
+            raise ValueError(
+                "Flagged user boundaries require types, flags and user_td_beta_flagged"
+            )
     bs, max_seqlen = rewards.shape
     advantages_reversed = [torch.zeros(bs, dtype=torch.float32, device=values.device)]
     lastgaelam = torch.zeros(bs, dtype=torch.float32, device=values.device)
@@ -49,13 +65,19 @@ def _compute_token_level_gae(
     for t in reversed(range(max_seqlen - 1)):
         delta = rewards[:, t] + discount * nextvalues - values[:, t]
         if user_boundary_types is not None:
-            assert user_td_beta is not None
+            if flagged_mode:
+                beta = torch.where(
+                    user_boundary_flags[:, t + 1], user_td_beta_flagged, 1.0
+                )
+            else:
+                assert user_td_beta is not None
+                beta = user_td_beta
             boundary = user_boundary_types[:, t + 1]
-            split = ((boundary == 1) | (boundary == 3)) & (user_td_beta != 1)
+            split = ((boundary == 1) | (boundary == 3)) & (beta != 1)
             # Internal W is the next active state. At the last action reward R
             # has already been added at t=b-1, so W=R (tau2 bootstrap is zero).
             user_segment = rewards[:, t] + discount * nextvalues - values[:, t + 1]
-            delta = torch.where(split, delta - (1 - user_td_beta) * user_segment, delta)
+            delta = torch.where(split, delta - (1 - beta) * user_segment, delta)
         newgaelam = delta + discounted_lambda * lastgaelam
 
         # Skip tokens that do not contribute to the loss.
