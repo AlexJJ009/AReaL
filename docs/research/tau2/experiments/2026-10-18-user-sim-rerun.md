@@ -62,11 +62,30 @@ run 读到改动。
 - patch 后 U1 下降但换成其他用户错误、总数不降：支持"不可靠用户修不干净"。
 - 旧 v3 轨迹可以用当前 judge 重新计分，把 judge 版本变化和用户变化分开。
 
-并行的只读 case study（infra 审计、thinking 开关对比、U1
-归因）：`_artifacts/AReaL/codex-sao-math/user-sim-20261012/claude-infra-case-study/REPORT.md`。
+并行的只读 case study（infra 审计、thinking 开关对比、U1 归因，分析对象是 v3 的旧轨迹）：
+[user-sim-case-study-v3/infra-thinking-audit.md](../user-sim-case-study-v3/infra-thinking-audit.md)，脚本和中间结果在
+`user-sim-rerun-20261018/infra-case-study-v3data/`。
 
-## 4. 中间结果
+## 4. 结果（2026-10-18，9 组全部 240/240 完成，infra 排除 0）
 
-- 596（DeepSeek V4.1，无 patch）：240/240 完成，mean@4 0.750（Airline 0.525、Retail 0.8625）；v3 旧版为
-  0.713（0.525 / 0.806）。用 case study 的 U1 规则统计，命中 4 条（其中 reward 0 的 3 条），v3 旧版为 13 条。NL
-  judge 也换成了 V4.1，分数差不能全归到用户。
+U1 用审计里的规则计数（`user-sim-rerun-20261018/analysis/count_u1.py`），只是筛选，逐条标注见 case study v4（pueue 605）。patch 效果为按题配对 bootstrap（60 题，20,000 次，`boot_patch.py`）。
+
+| 运行 | mean@4 | Airline | Retail | 失败 | U1（其中 reward 0） | v3 对照 mean@4 / U1 |
+| --- | --- | --- | --- | --- | --- | --- |
+| DeepSeek V4.1 | 0.750 | 0.525 | 0.863 | 60 | 4（3） | 0.713 / 13（旧版） |
+| DeepSeek V4.1 + patch | 0.758 | 0.563 | 0.856 | 58 | 2（0） | — |
+| DeepSeek V4.1 关 thinking | 0.738 | 0.500 | 0.856 | 63 | 0 | — |
+| Turbo（订阅） | 0.592 | 0.538 | 0.619 | 98 | 50（46） | 0.633 / 46 |
+| Turbo + patch | 0.692 | 0.538 | 0.769 | 74 | 17（17） | — |
+| Lite | 0.683 | 0.550 | 0.750 | 76 | 24（23） | 0.700 / 23 |
+| Lite + patch | 0.758 | 0.588 | 0.844 | 58 | 0 | — |
+| GLM 5.3 | 0.813 | 0.575 | 0.931 | 45 | 0 | 0.758 / 0 |
+| Qwen3.5-4B 自部署 | 0.571 | 0.425 | 0.644 | 103 | 2（2） | 0.583 / 0 |
+
+patch 效果：Turbo +10.0pp（95% CI [+2.1, +17.9]，p=0.015），Lite +7.5pp（[+0.8, +14.2]，p=0.028），DeepSeek +0.8pp（[−3.8, +5.4]）。DeepSeek 开 vs 关 thinking：+1.3pp（[−5.4, +8.3]）。
+
+初步读法：
+
+- Doubao 的 U1 复现了（Turbo 50 vs 46，Lite 24 vs 23），GLM 仍为 0；DeepSeek 新版的 U1 从 13 降到 4。
+- 一句话的 patch 让 Lite 的 U1 归零，Turbo 从 50 降到 17，分数随之上升；失败数的减少略小于 U1 的减少，其余用户错误是否增加要看逐条标注。
+- v3 对照的分数差同时包含用户版本和 NL judge 版本（DeepSeek V4.1）的变化。
