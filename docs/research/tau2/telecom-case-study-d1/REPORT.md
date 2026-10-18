@@ -13,12 +13,13 @@ Codex（pueue 611）完成，Claude 复核并补了一项转人工筛查（§3.3
 
 1. **Telecom 的失败主要是 agent 能力不足，不是用户模拟器出错。** 从 7,347 条失败 episode 中等概率随机抽 60 条：agent 致败 59
    条，benchmark 致败 1 条，用户致败 0 条。用户致败比例的 95% Wilson 区间为 \[0%, 6.0%\]。这是抽样估计，不是"每条失败都是
-   agent 的错"。可比的参照是同一个 agent（Qwen3-4B-2507）在 Airline / Retail 上的 PPO case study：失败中用户致败约 8%
+   agent 的错"。可比的参照是同一个 agent（Qwen3-4B-2507）在 Airline / Retail 上的 PPO case study：失败中用户致败约
+   8%
    （[experiments/2026-10-15-qwen3-ppo-grpo-sao.md §4.3](../experiments/2026-10-15-qwen3-ppo-grpo-sao.md)）。
-   [user-sim-case-study-v3](../user-sim-case-study-v3/REPORT.md) 的 actor 是 Qwen3.5-4B、五个用户模拟器，用户致败占失败的
-   43.6%，不能直接对比。按 episode 算，Telecom 的上限约为 $6.0\% \times 7{,}347 / 9{,}140 \approx 4.8\%$，Airline / Retail
-   约为 3%（8% 乘以约三到四成的失败率），**两者并不矛盾**：Telecom 失败率约 80%，大量 agent 失败把用户错误在失败中的占比稀释了。
-   设定差异见 §3.5。
+   [user-sim-case-study-v3](../user-sim-case-study-v3/REPORT.md) 的 actor 是
+   Qwen3.5-4B、五个用户模拟器，用户致败占失败的 43.6%，不能直接对比。按 episode 算，Telecom 的上限约为
+   $6.0\% \times 7{,}347 / 9{,}140 \approx 4.8\%$，Airline / Retail 约为 3%（8%
+   乘以约三到四成的失败率），**两者并不矛盾**：Telecom 失败率约 80%，大量 agent 失败把用户错误在失败中的占比稀释了。 设定差异见 §3.5。
 1. **有一类成批的题错：1,120 题"愿意充 2 GB"，评分却要求恰好充 2 GB。** 逐题重放确认：只充 1 GB 就能满足其余全部环境断言，只有 金额断言失败。和
    AReaL Telecom v1 第二轮审题发现的 50
    题是同一个问题（[training-data.md §6](../training-data.md)）。这批题本轮 整体排除，没有改题。
@@ -90,15 +91,16 @@ agent 排障失败。81 条把 JSON 写进正文，是 Qwen3 的工具调用格�
 
 同一份 fixed-v3 数据目录、同一个 τ² 版本，但 Telecom 的用户设定有三处不同：
 
-| 项目           | Airline / Retail                                  | Telecom                                                                                     |
-| -------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| 用户 guideline | `simulation_guidelines.md`（212 词）               | `simulation_guidelines_tools.md`（458 词）：用户有设备工具，一次只做一个动作，工具结果不能编造 |
-| persona        | 全部为空（0/50、0/114）                            | 1,516/2,285 题有 persona，如"64 岁退休图书馆员，对技术感到焦虑"                               |
-| 转人工         | "If you are transferred… generate `###TRANSFER###`" | 多一句 "Only do this after the agent has clearly indicated that you are being transferred"  |
+| 项目           | Airline / Retail                                    | Telecom                                                                                        |
+| -------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| 用户 guideline | `simulation_guidelines.md`（212 词）                | `simulation_guidelines_tools.md`（458 词）：用户有设备工具，一次只做一个动作，工具结果不能编造 |
+| persona        | 全部为空（0/50、0/114）                             | 1,516/2,285 题有 persona，如"64 岁退休图书馆员，对技术感到焦虑"                                |
+| 转人工         | "If you are transferred… generate `###TRANSFER###`" | 多一句 "Only do this after the agent has clearly indicated that you are being transferred"     |
 
 最后一条直接解释了 §3.3：在 Telecom 的 guideline 下，agent 正文宣布转人工后用户发 TRANSFER 是**按规则行事**，不是用户错误。
-`user_scenario.instructions` 的字段（reason_for_call、known_info、unknown_info、task_instructions）三个领域相同。
-Telecom 里用户主要执行 agent 要求的设备操作，很少遇到"确认写操作"的场景，U1（同意 + STOP 同句）出现的机会也更少。
+`user_scenario.instructions`
+的字段（reason_for_call、known_info、unknown_info、task_instructions）三个领域相同。 Telecom 里用户主要执行
+agent 要求的设备操作，很少遇到"确认写操作"的场景，U1（同意 + STOP 同句）出现的机会也更少。
 
 ## 4 题目质量
 
