@@ -108,6 +108,10 @@ PPO v3 训练所用的后端。火山订阅接口上的 `deepseek-v4-1-flash-260
 按题配对差 −0.83pp（95% CI \[−7.08, +5.00\]）。1,379 次用户调用无空 content。结论：260910 的行为与旧官方后端一致， β
 训练（`tau2-ppo-beta-20261018/`）的用户和 judge 用它，可与 PPO v3 基线比较。
 
+**逐条标注**（Codex，pueue 624，口径同 case study v4，`user-sim-rerun-20261018/case-study-v4-volc260910/`）：69 个失败中
+agent 50、用户 13（U1 8、U3 3、U7a 2）、benchmark 6；v3 旧官方后端为 48/16/3。U1 规则命中 12 条，其中 4 条在 STOP 前已有更早的错误，
+不算 U1。图和表由 `scripts/figures/plot_results.py` 生成（`figures/user_sim*`）。
+
 **不用的后端**：火山 `deepseek-v4-flash-ga-260731` 约 2.2% 的调用把回复放在 `reasoning_content`、`content`
 为空，集中在确认轮。 误启动的 GA 运行（606–608）已停止，目录和 smoke 产物已删，`launch.sh` 里的 GA 选项已去掉。另外火山订阅接口会把
 `deepseek-v4-flash*` 静默映射到 GA，只有写全 `deepseek-v4-1-flash-260910` 才拿到 9 月版。
