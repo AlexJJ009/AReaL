@@ -72,7 +72,8 @@ case study 都发现失败约 92% 是 agent 的错，约 8% 是用户的错，�
 - [user-error-judge-validation/](user-error-judge-validation/REPORT.md)：带剧本的用户错误 judge 在
   v3/v4 标注上的离线验证 （G+T recall 约 80%，U3 约 57%；约 30% 的 agent 致败被误判为用户错误）。
 - [user-error-detectors/](user-error-detectors/REPORT.md)：规则、gold、因果 judge 三类检测器在标注集和
-  critic 前向边界上的离线比较（U7a 规则主要误标 agent 错误；只有 Flash 开 thinking 的因果 judge 能抓 U3）。
+  critic 前向边界上的离线比较。训练轨迹上用户致败几乎都是 U1，失败门控的 U1 规则 precision 约 82%，judge 没有增量；
+  训练检测器定为失败门控的 U1 规则。
 
 ### 训练
 
