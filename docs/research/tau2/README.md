@@ -67,6 +67,8 @@ case study 都发现失败约 92% 是 agent 的错，约 8% 是用户的错，�
 - [capability-gaps.md](capability-gaps.md)：模型能力缺口与训练期问题的 case study。
 - [user-sim-case-study-20261012/](user-sim-case-study-20261012/REPORT.md)、[user-sim-case-study-v3/](user-sim-case-study-v3/REPORT.md)：用户模拟器
   case study 报告及标注。
+- [telecom-case-study-d1/](telecom-case-study-d1/REPORT.md)：Qwen3-4B-2507 在官方 Telecom full 上的失败来源（随机失败样本中
+  agent 59/60、用户 0/60）、"恰好 2 GB"题错和 249 道训练题的筛选。
 
 ### 训练
 
