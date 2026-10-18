@@ -57,6 +57,8 @@
 
 ## 4 待定的问题
 
+第二轮（规则 + 因果 judge）和规则、gold 检测器的比较见 [user-error-detectors/](../user-error-detectors/REPORT.md)。
+
 **截断位置按"第一处用户违规"还是"致败的用户错误"？**
 
 - 按第一处违规：judge 只需判断违规，任务更简单；但成功轨迹和 agent 先犯错的轨迹里也有违规，会多截掉一部分 agent 信号。
