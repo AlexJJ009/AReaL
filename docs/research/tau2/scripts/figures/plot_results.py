@@ -318,7 +318,7 @@ def plot_cause_figure(rows, fails, failed_tasks, out, name, bold_best=True):
         for y, x0, v in zip(ys, left, vals):
             if v >= 6:
                 bar.text(
-                    l + v / 2,
+                    x0 + v / 2,
                     y,
                     str(v),
                     ha="center",
