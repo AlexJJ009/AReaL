@@ -1,0 +1,8 @@
+USER_SCENARIO
+{complete user_scenario JSON}
+
+USER_SIMULATION_GUIDELINES (verbatim)
+{guidelines.md}
+
+FULL_CONVERSATION (original 0-based array indices, all tools included)
+{messages JSON array, msg_index added; content and tool calls unchanged}
