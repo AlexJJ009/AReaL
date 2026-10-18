@@ -44,6 +44,12 @@ Codex 单人完成的代理标签，不是独立人工标注。
 且没有失败门控（成功轨迹上 U1 会命中 34 次），需要改成只用 U1、只在 reward \< 1 时标记。judge 能否单独覆盖 U1 的测试 不再需要：在训练轨迹上
 judge 没有独立贡献。
 
+**已实现（pueue 635，`codex/sao-math` 的 `1939fa5d`）：** 配置 `+train_user_boundary_values=true
++user_boundary_detector=u1 +user_td_beta_flagged=0.0`。`rules` 选项删除；所有检测器（包括以后注入的）都在最终训练 reward（fixed
+转人工规则之后）< 1 时才保留标记，成功轨迹上被抑制的命中记为 `user_boundary/gate_suppressed_count`。先红后绿（实现前 53
+个失败），把门控反转后 28 个测试失败；合并后复跑 189 个相关测试通过。产物：
+`_artifacts/AReaL/codex-sao-math/tau2-u1-failure-gate-20261018/`。
+
 ## 1 结论（627 / 630，规则、gold、judge 第一次比较）
 
 1. **U7a 规则（用户发 TRANSFER 而此前没有转接工具调用）不能当用户错误检测器。** 标注集上只算失败轨迹时，precision 也只有 60% / 46%
