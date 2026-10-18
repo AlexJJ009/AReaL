@@ -151,7 +151,10 @@ def ev_series(cs):
 
 
 def rolling(xs, w):
-    return [sum(xs[max(0, i - w + 1) : i + 1]) / len(xs[max(0, i - w + 1) : i + 1]) for i in range(len(xs))]
+    return [
+        sum(xs[max(0, i - w + 1) : i + 1]) / len(xs[max(0, i - w + 1) : i + 1])
+        for i in range(len(xs))
+    ]
 
 
 def plot_baselines(cs, out):
@@ -173,15 +176,27 @@ def plot_baselines(cs, out):
                 lo.append(100 * a)
                 hi.append(100 * b)
             ax.fill_between(steps, lo, hi, color=color, alpha=0.13, linewidth=0)
-            ax.plot(steps, mean, color=color, marker="o", markersize=2.8, linewidth=1.3, label=run)
+            ax.plot(
+                steps,
+                mean,
+                color=color,
+                marker="o",
+                markersize=2.8,
+                linewidth=1.3,
+                label=run,
+            )
         ax.axvline(65, color="#9a9a9a", linestyle=":", linewidth=0.9)
         ax.set_title(title)
         ax.set_xlabel("Training step")
         ax.set_ylabel("mean@4 (%)")
         ax.set_xlim(-3, 123)
     axs[0, 0].text(
-        67, axs[0, 0].get_ylim()[1], "SAO eval: new\nDeepSeek user", fontsize=6,
-        color="#7a7a7a", va="top",
+        67,
+        axs[0, 0].get_ylim()[1],
+        "SAO eval: new\nDeepSeek user",
+        fontsize=6,
+        color="#7a7a7a",
+        va="top",
     )
     axs[0, 0].legend(frameon=False, loc="lower right")
 
@@ -190,7 +205,13 @@ def plot_baselines(cs, out):
         series = [(s, v) for s, v in sorted(series)]
         xs, ys = [s for s, _ in series], [v for _, v in series]
         ax.plot(xs, ys, color=ALGO_COLOR[run], alpha=0.25, linewidth=0.7)
-        ax.plot(xs, rolling(ys, 10), color=ALGO_COLOR[run], linewidth=1.4, label=f"{run} (10-step mean)")
+        ax.plot(
+            xs,
+            rolling(ys, 10),
+            color=ALGO_COLOR[run],
+            linewidth=1.4,
+            label=f"{run} (10-step mean)",
+        )
     ax.axhline(0, color="#9a9a9a", linewidth=0.7)
     ax.set_title("Critic explained variance (training batch, pre-update)")
     ax.set_xlabel("Training step")
@@ -215,7 +236,7 @@ def load_labels(paths):
             if float(r["score"]) != 0.0:  # success anomalies (U6, early TRANSFER)
                 continue
             fails[r["run_key"]].append(r["primary"])
-            failed_tasks[r["run_key"]].add(f'{r["domain"]}:{r["task_id"]}')
+            failed_tasks[r["run_key"]].add(f"{r['domain']}:{r['task_id']}")
     return fails, failed_tasks
 
 
@@ -248,7 +269,12 @@ def plot_cause_figure(rows, fails, failed_tasks, out, name, bold_best=True):
     tab.axis("off")
     tab.set_xlim(0, 1)
     tab.set_ylim(*ylim)
-    cols = [(0.0, "User simulator", "left"), (0.62, "mean@4", "center"), (0.77, r"pass$^4$", "center"), (0.92, "User-caused", "center")]
+    cols = [
+        (0.0, "User simulator", "left"),
+        (0.62, "mean@4", "center"),
+        (0.77, r"pass$^4$", "center"),
+        (0.92, "User-caused", "center"),
+    ]
     y_head = n - 0.05
     for x, h, ha in cols:
         tab.text(x, y_head, h, ha=ha, va="center", fontsize=7.5)
@@ -261,26 +287,62 @@ def plot_cause_figure(rows, fails, failed_tasks, out, name, bold_best=True):
         tab.text(0.0, y, s["label"], ha="left", va="center", fontsize=7.5)
         for x, v, best in ((0.62, s["mean4"], best_m), (0.77, s["pass4"], best_p)):
             bold = bold_best and abs(v - best) < 1e-9
-            tab.text(x, y, f"{v:.1f}", ha="center", va="center", fontsize=7.5, fontweight="bold" if bold else "normal")
-        tab.text(0.92, y, f"{s['user_share']:.0f}%", ha="center", va="center", fontsize=7.5)
+            tab.text(
+                x,
+                y,
+                f"{v:.1f}",
+                ha="center",
+                va="center",
+                fontsize=7.5,
+                fontweight="bold" if bold else "normal",
+            )
+        tab.text(
+            0.92, y, f"{s['user_share']:.0f}%", ha="center", va="center", fontsize=7.5
+        )
 
     # Right: stacked horizontal bars, first row on top.
     ys = list(range(n))[::-1]
     left = [0] * n
     for cause, color in CAUSES:
         vals = [s["counts"].get(cause, 0) for s in stats]
-        bar.barh(ys, vals, left=left, height=0.55, color=color, edgecolor="white", linewidth=0.6, label=cause)
-        for y, l, v in zip(ys, left, vals):
+        bar.barh(
+            ys,
+            vals,
+            left=left,
+            height=0.55,
+            color=color,
+            edgecolor="white",
+            linewidth=0.6,
+            label=cause,
+        )
+        for y, x0, v in zip(ys, left, vals):
             if v >= 6:
-                bar.text(l + v / 2, y, str(v), ha="center", va="center", fontsize=6, color="white")
-        left = [l + v for l, v in zip(left, vals)]
+                bar.text(
+                    l + v / 2,
+                    y,
+                    str(v),
+                    ha="center",
+                    va="center",
+                    fontsize=6,
+                    color="white",
+                )
+        left = [x0 + v for x0, v in zip(left, vals)]
     bar.set_yticks([])
     bar.spines["left"].set_visible(False)
     bar.grid(axis="y", visible=False)
     bar.set_xlim(0, max(left) * 1.08)
     bar.set_xlabel(f"Failed episodes (of {n_ep})")
     handles, labels = bar.get_legend_handles_labels()
-    fig.legend(handles, labels, frameon=False, ncol=5, loc="lower center", bbox_to_anchor=(0.5, 0.97), columnspacing=1.0, handlelength=1.1)
+    fig.legend(
+        handles,
+        labels,
+        frameon=False,
+        ncol=5,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.97),
+        columnspacing=1.0,
+        handlelength=1.1,
+    )
     save(fig, out, name)
 
 
@@ -295,7 +357,9 @@ def main():
     plot_baselines(a.sao_case_study, a.out)
     fails, failed_tasks = load_labels(a.labels)
     plot_cause_figure(SIM_ROWS, fails, failed_tasks, a.out, "user_sim")
-    plot_cause_figure(PATCH_ROWS, fails, failed_tasks, a.out, "user_sim_patch", bold_best=False)
+    plot_cause_figure(
+        PATCH_ROWS, fails, failed_tasks, a.out, "user_sim_patch", bold_best=False
+    )
 
 
 if __name__ == "__main__":
