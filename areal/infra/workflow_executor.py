@@ -1154,7 +1154,12 @@ class WorkflowExecutor:
             tensor = traj.get(tensor_key)
             if tensor is not None:
                 fields[record_key] = tensor[row, :seqlen].tolist()
-        for tensor_key in ("terminated", "truncated", "bootstrap_mask"):
+        for tensor_key in (
+            "terminated",
+            "truncated",
+            "bootstrap_mask",
+            "user_boundary_gate_suppressed",
+        ):
             tensor = traj.get(tensor_key)
             if tensor is not None:
                 fields[tensor_key] = bool(tensor[row].item())

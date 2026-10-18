@@ -387,6 +387,13 @@ class InteractionWithTokenLogpReward:
                 )
                 result["user_boundary_flags"] = aligned_flags
                 result["user_boundary_detector_ids"] = aligned_ids
+                suppressed = self.episode_metadata.get("user_boundary_gate_suppressed")
+                if suppressed is not None:
+                    if not isinstance(suppressed, bool):
+                        raise ValueError("user_boundary_gate_suppressed must be a bool")
+                    result["user_boundary_gate_suppressed"] = torch.tensor(
+                        [suppressed], dtype=torch.bool
+                    )
                 beta = self.episode_metadata["user_td_beta_flagged"]
                 if (
                     isinstance(beta, bool)

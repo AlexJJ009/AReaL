@@ -647,7 +647,7 @@ class Tau2AgentWorkflow:
             algorithm="ppo",
             train_user_boundary_values=train_user_boundary_values,
             user_td_beta=user_td_beta,
-            user_boundary_detector="rules"
+            user_boundary_detector="u1"
             if callable(user_boundary_detector)
             else user_boundary_detector,
             user_td_beta_flagged=user_td_beta_flagged,
@@ -655,7 +655,7 @@ class Tau2AgentWorkflow:
         self.user_td_beta = 1.0 if user_td_beta is None else user_td_beta
         self.user_boundary_detector = (
             RuleUserBoundaryDetector()
-            if user_boundary_detector == "rules"
+            if user_boundary_detector == "u1"
             else user_boundary_detector
         )
         self.user_td_beta_flagged = user_td_beta_flagged
@@ -841,7 +841,11 @@ class Tau2AgentWorkflow:
         if self.train_user_boundary_values:
             if self.user_boundary_detector is not None:
                 boundary_metadata = await detect_user_boundaries(
-                    run_info.messages, run_info.stop_reason, self.user_boundary_detector
+                    run_info.messages,
+                    run_info.stop_reason,
+                    self.user_boundary_detector,
+                    # Runner has finalized timeout/budget and fixed transfer scoring.
+                    final_reward=float(run_info.reward),
                 )
                 boundary_metadata["user_td_beta_flagged"] = self.user_td_beta_flagged
             else:

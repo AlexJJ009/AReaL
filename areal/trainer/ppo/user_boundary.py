@@ -13,8 +13,8 @@ import torch
 from areal.utils import stats_tracker
 from areal.utils.stats_tracker import ReduceType
 
-# Stable transport IDs. Gold/judge are reserved for future injected detectors;
-# this change implements only the U1 and U7a rules.
+# Stable transport IDs: 2=U7a remains reserved for historical dumps.
+# Training selects U1 only; gold/judge names support injected callables.
 USER_BOUNDARY_DETECTOR_NAMES = (None, "U1", "U7a", "gold", "judge")
 
 
@@ -127,6 +127,9 @@ def log_user_boundary_stats(data: dict[str, Any]) -> None:
         if "user_boundary_flags" in data:
             flags = data["user_boundary_flags"]
             stats_tracker.denominator(flagged_count=flags)
+            suppressed = data.get("user_boundary_gate_suppressed")
+            if suppressed is not None:
+                stats_tracker.denominator(gate_suppressed_count=suppressed)
             ids = data["user_boundary_detector_ids"]
             for detector_id, name in enumerate(USER_BOUNDARY_DETECTOR_NAMES[1:], 1):
                 stats_tracker.denominator(

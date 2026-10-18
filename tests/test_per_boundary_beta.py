@@ -136,26 +136,26 @@ def test_invalid_boundary_transport_refuses_early(mutation):
 @pytest.mark.parametrize(
     "kwargs",
     [
-        {"user_boundary_detector": "rules"},
+        {"user_boundary_detector": "u1"},
         {"train_user_boundary_values": True, "user_boundary_detector": "judge"},
         {
             "train_user_boundary_values": True,
-            "user_boundary_detector": "rules",
+            "user_boundary_detector": "u1",
             "user_td_beta": 1.0,
         },
         {
             "train_user_boundary_values": True,
-            "user_boundary_detector": "rules",
+            "user_boundary_detector": "u1",
             "user_td_beta": 0.5,
         },
         {
             "train_user_boundary_values": True,
-            "user_boundary_detector": "rules",
+            "user_boundary_detector": "u1",
             "user_td_beta_flagged": -1,
         },
         {
             "train_user_boundary_values": True,
-            "user_boundary_detector": "rules",
+            "user_boundary_detector": "u1",
             "user_td_beta_flagged": True,
         },
     ],
@@ -184,7 +184,7 @@ def test_detector_recipe_structured_overrides_validate(
             "--config",
             f"examples/tau2/config_{algorithm}.yaml",
             "+train_user_boundary_values=true",
-            "+user_boundary_detector=rules",
+            "+user_boundary_detector=u1",
             "+user_td_beta_flagged=0.25",
         ],
         Tau2PPOConfig,
@@ -203,7 +203,7 @@ def test_detector_recipe_structured_overrides_validate(
     [
         ("u1_positive", "U1"),
         ("u1_negative", None),
-        ("u7a_positive", "U7a"),
+        ("u7a_positive", None),
         ("u7a_negative", None),
     ],
 )
@@ -215,7 +215,7 @@ async def test_recorded_rule_detector_cases(name, expected):
 
     record = json.loads((FIXTURES / "tau2_boundary_detectors.json").read_text())[name]
     result = await detect_user_boundaries(
-        record["messages"], record["stop"], RuleUserBoundaryDetector()
+        record["messages"], record["stop"], RuleUserBoundaryDetector(), final_reward=0.0
     )
     assert result["user_boundary_flags"][-1] == (expected is not None)
     assert result["user_boundary_detectors"][-1] == expected
@@ -236,7 +236,9 @@ async def test_async_detector_sees_each_user_boundary_and_only_prior_history():
         assert context.messages[-1]["role"] == "user"
         return BoundaryDetection(flag=True, detector="gold")
 
-    result = await detect_user_boundaries(messages, "user_stop", detector)
+    result = await detect_user_boundaries(
+        messages, "user_stop", detector, final_reward=0.0
+    )
     assert result["user_boundary_flags"] == [True, False, True]
     assert result["user_boundary_detectors"] == ["gold", None, "gold"]
     assert len(seen) == 2
@@ -262,6 +264,7 @@ def test_flag_transport_batching_dump_and_forward_filter(warm_cache):
                 "user_boundary_flags": [True, False],
                 "user_boundary_detectors": ["U1", None],
                 "user_td_beta_flagged": 0.0,
+                "user_boundary_gate_suppressed": False,
             },
         ),
         episode_id=1,
@@ -282,11 +285,14 @@ def test_flag_transport_batching_dump_and_forward_filter(warm_cache):
                 "user_boundary_flags": [False],
                 "user_boundary_detectors": [None],
                 "user_td_beta_flagged": 0.5,
+                "user_boundary_gate_suppressed": True,
             },
         ),
         episode_id=2,
     )
     other_payload = longer.to_tensor_dict()
+    assert payload["user_boundary_gate_suppressed"].tolist() == [False]
+    assert other_payload["user_boundary_gate_suppressed"].tolist() == [True]
     rows = batched_call(lambda data: data, [payload, other_payload])
     torch.testing.assert_close(
         rows[0]["user_boundary_flags"], payload["user_boundary_flags"], rtol=0, atol=0
@@ -295,6 +301,7 @@ def test_flag_transport_batching_dump_and_forward_filter(warm_cache):
         "user_boundary_flags",
         "user_boundary_detector_ids",
         "user_td_beta_flagged",
+        "user_boundary_gate_suppressed",
     ):
         torch.testing.assert_close(rows[1][key], other_payload[key], rtol=0, atol=0)
     fields = WorkflowExecutor._trajectory_replay_fields(
@@ -304,6 +311,7 @@ def test_flag_transport_batching_dump_and_forward_filter(warm_cache):
     assert fields["user_boundary_detectors"][3] == "U1"
     assert fields["user_boundary_detectors"][7] is None
     assert fields["user_td_beta_flagged"] == 0
+    assert fields["user_boundary_gate_suppressed"] is False
     inputs = dict(payload)
     drop_non_model_forward_metadata(inputs)
     assert not any(k.startswith("user_") for k in inputs)
@@ -370,8 +378,11 @@ def test_flagged_statistics_count_detectors_and_initial_user_segments():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reward", [0.0, 0.5, 1.0, 1.25])
+@pytest.mark.parametrize("stop", ["user_stop", "timeout", "context_limit"])
+@pytest.mark.parametrize("injected", [False, True])
 async def test_workflow_records_detected_boundaries_before_tensor_export(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, reward, stop, injected
 ):
     import examples.tau2.agent as module
     from examples.tau2.utils import Tau2EnvConfig
@@ -393,10 +404,10 @@ async def test_workflow_records_detected_boundaries_before_tensor_export(
             return SimpleNamespace(
                 messages=messages,
                 reward_info=None,
-                reward=0.0,
-                terminated=True,
-                truncated=False,
-                stop_reason=record["stop"],
+                reward=reward,
+                terminated=stop == "user_stop",
+                truncated=stop != "user_stop",
+                stop_reason=stop,
                 error_type=None,
             )
 
@@ -407,6 +418,11 @@ async def test_workflow_records_detected_boundaries_before_tensor_export(
     )
     monkeypatch.delenv("TAU2_USAGE_LOG", raising=False)
     monkeypatch.setenv("TAU2_BOUNDARY_TEST_KEY", "test-user")
+    from examples.tau2.user_boundary import BoundaryDetection
+
+    async def detector(context):
+        return BoundaryDetection(True, "judge")
+
     workflow = module.Tau2AgentWorkflow(
         econfig=Tau2EnvConfig(
             user_llm="test-user",
@@ -414,7 +430,7 @@ async def test_workflow_records_detected_boundaries_before_tensor_export(
             user_llm_api_key_env="TAU2_BOUNDARY_TEST_KEY",
         ),
         train_user_boundary_values=True,
-        user_boundary_detector="rules",
+        user_boundary_detector=detector if injected else "u1",
         trajectory_dir=str(tmp_path),
     )
 
@@ -430,13 +446,195 @@ async def test_workflow_records_detected_boundaries_before_tensor_export(
         base_url="http://policy.invalid/v1",
         api_key="test-policy",
     )
-    assert result.metadata["user_boundary_flags"][-1] is True
-    assert result.metadata["user_boundary_detectors"][-1] == "U1"
+    hit = injected or stop == "user_stop"
+    flagged = hit and reward < 1
+    assert result.reward == reward
+    assert result.metadata["user_boundary_flags"][-1] == flagged
+    assert result.metadata["user_boundary_detectors"][-1] == (
+        ("judge" if injected else "U1") if flagged else None
+    )
+    assert result.metadata["user_boundary_gate_suppressed"] == (hit and reward >= 1)
     assert result.metadata["user_td_beta_flagged"] == 0
     assert "user_td_beta" not in result.metadata
     for key in (
         "user_boundary_types",
         "user_boundary_flags",
         "user_boundary_detectors",
+        "user_boundary_gate_suppressed",
     ):
         assert written[0][key] == result.metadata[key]
+
+
+@pytest.mark.parametrize("name", ["rules", "u7a", "U7a"])
+def test_removed_training_detectors_are_rejected(name):
+    with pytest.raises(ValueError, match="user_boundary_detector"):
+        Tau2PPOConfig(
+            algorithm="ppo",
+            train_user_boundary_values=True,
+            user_boundary_detector=name,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reward", [0.0, 0.999, 1.0, 1.5])
+@pytest.mark.parametrize("name", ["u1_positive", "u7a_positive", "u1_negative"])
+async def test_u1_failure_gate_records_only_suppressed_hits(reward, name):
+    from examples.tau2.user_boundary import (
+        RuleUserBoundaryDetector,
+        detect_user_boundaries,
+    )
+
+    record = json.loads((FIXTURES / "tau2_boundary_detectors.json").read_text())[name]
+    result = await detect_user_boundaries(
+        record["messages"],
+        record["stop"],
+        RuleUserBoundaryDetector(),
+        final_reward=reward,
+    )
+    hit = name == "u1_positive"
+    assert result["user_boundary_flags"][-1] == (hit and reward < 1)
+    assert result["user_boundary_detectors"][-1] == (
+        "U1" if hit and reward < 1 else None
+    )
+    assert result["user_boundary_gate_suppressed"] == (hit and reward >= 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reward", [0.0, 1.0])
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_injected_detector_is_gated_at_every_user_boundary(reward, is_async):
+    from examples.tau2.user_boundary import BoundaryDetection, detect_user_boundaries
+
+    messages = json.loads((FIXTURES / "tau2_user_boundaries_202.json").read_text())[
+        "messages"
+    ]
+    seen = []
+
+    def detector(context):
+        seen.append(context.boundary_type)
+        return BoundaryDetection(True, "gold")
+
+    async def async_detector(context):
+        return detector(context)
+
+    result = await detect_user_boundaries(
+        messages,
+        "timeout",
+        async_detector if is_async else detector,
+        final_reward=reward,
+    )
+    assert seen == [1, 3]
+    assert result["user_boundary_flags"] == [reward < 1, False, reward < 1]
+    assert result["user_boundary_detectors"] == (
+        ["gold", None, "gold"] if reward < 1 else [None, None, None]
+    )
+    assert result["user_boundary_gate_suppressed"] == (reward >= 1)
+
+
+def test_gate_suppression_stats_count_episodes_not_boundaries():
+    from areal.trainer.ppo.user_boundary import log_user_boundary_stats
+
+    stats_tracker.export_all()
+    data = actor(1.0)._compute_advantages(flagged_batch(()))
+    data = {
+        key: value.repeat(3, *([1] * (value.ndim - 1))) for key, value in data.items()
+    }
+    data["user_boundary_gate_suppressed"] = torch.tensor([True, False, True])
+    log_user_boundary_stats(data)
+    stats = stats_tracker.export_all()
+    assert stats["user_boundary/gate_suppressed_count"] == 2
+    assert stats["user_boundary/flagged_count"] == 0
+    assert stats["user_boundary/detector_U1_count"] == 0
+    data["user_boundary_gate_suppressed"].fill_(False)
+    log_user_boundary_stats(data)
+    assert stats_tracker.export_all()["user_boundary/gate_suppressed_count"] == 0
+
+
+def test_detector_transport_ids_remain_stable():
+    from areal.trainer.ppo.user_boundary import USER_BOUNDARY_DETECTOR_NAMES
+
+    assert USER_BOUNDARY_DETECTOR_NAMES == (None, "U1", "U7a", "gold", "judge")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requires_transfer", [False, True])
+async def test_workflow_gate_uses_reward_after_fixed_transfer_rule(
+    monkeypatch, tmp_path, requires_transfer
+):
+    from contextlib import nullcontext
+
+    from tau2.data_model.simulation import RewardInfo
+    from tau2.data_model.tasks import Task
+
+    import examples.tau2.agent as module
+    from examples.tau2.utils import Tau2EnvConfig
+
+    class Message(SimpleNamespace):
+        def model_dump(self, **kwargs):
+            return vars(self)
+
+    messages = [
+        Message(
+            role="assistant", content="Shall I proceed?", tool_calls=[], raw_data={}
+        ),
+        Message(
+            role="user", content="Yes, please. ###STOP###", tool_calls=[], raw_data=None
+        ),
+    ]
+    task = Task(
+        id="test",
+        user_scenario={"instructions": "Please help me."},
+        evaluation_criteria={
+            "actions": [
+                {
+                    "action_id": "transfer",
+                    "name": "transfer_to_human_agents",
+                    "arguments": {},
+                }
+            ]
+            if requires_transfer
+            else []
+        },
+    )
+    monkeypatch.setattr(module, "_get_task", lambda **kwargs: task)
+    monkeypatch.setattr(module.Tau2Runner, "_get_environment", lambda self: object())
+    monkeypatch.setattr(
+        module.Tau2Runner, "_get_agent_and_user", lambda self, **kwargs: (None, None)
+    )
+    monkeypatch.setattr(
+        module.Tau2Runner, "_nl_assertion_evaluation", lambda self: nullcontext()
+    )
+    monkeypatch.setattr(
+        module.Tau2Runner,
+        "_get_orchestrator",
+        lambda self, **kwargs: SimpleNamespace(
+            run=lambda: SimpleNamespace(
+                messages=messages, termination_reason="user_stop"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        module, "evaluate_simulation", lambda **kwargs: RewardInfo(reward=1.0)
+    )
+    monkeypatch.setenv("TAU2_BOUNDARY_TEST_KEY", "test-user")
+    monkeypatch.setenv("TAU2_RUN_ROOT", str(tmp_path))
+    monkeypatch.delenv("TAU2_USAGE_LOG", raising=False)
+    workflow = module.Tau2AgentWorkflow(
+        econfig=Tau2EnvConfig(
+            domain="telecom",
+            benchmark_variant="fixed",
+            user_llm="test-user",
+            user_llm_base_url="http://user.invalid/v1",
+            user_llm_api_key_env="TAU2_BOUNDARY_TEST_KEY",
+        ),
+        train_user_boundary_values=True,
+        user_boundary_detector="u1",
+    )
+    result = await workflow.run(
+        {"task_id": "test"}, base_url="http://policy.invalid/v1", api_key="test"
+    )
+    assert result.reward == (0.0 if requires_transfer else 1.0)
+    assert result.metadata["user_boundary_flags"] == [requires_transfer]
+    assert result.metadata["user_boundary_gate_suppressed"] is (not requires_transfer)
+    if requires_transfer:
+        assert result.metadata["reward_info"]["info"]["official_reward"] == 1.0

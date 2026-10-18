@@ -122,7 +122,7 @@ def is_u1_rule(e: dict[str, Any]) -> dict[str, int] | None:
 
 
 class RuleUserBoundaryDetector:
-    """U1 confirmation+STOP and U7a TRANSFER without a prior agent tool call."""
+    """U1 confirmation+STOP, using the faithful offline rule port."""
 
     def __call__(self, context: UserBoundaryContext) -> BoundaryDetection:
         messages = [
@@ -136,17 +136,6 @@ class RuleUserBoundaryDetector:
         ]
         if is_u1_rule({"stop": context.stop_reason, "msgs": messages}):
             return BoundaryDetection(True, "U1")
-        user = messages[-1]
-        if "###TRANSFER###" in (user["content"] or ""):
-            transferred = any(
-                _field(call, "name", _field(_field(call, "function", {}), "name"))
-                == "transfer_to_human_agents"
-                for message in messages[:-1]
-                if message["role"] == "assistant"
-                for call in message["tc"]
-            )
-            if not transferred:
-                return BoundaryDetection(True, "U7a")
         return BoundaryDetection(False)
 
 
@@ -154,11 +143,15 @@ async def detect_user_boundaries(
     messages: Sequence[Any],
     stop_reason: str | None,
     detector: UserBoundaryDetector,
+    *,
+    final_reward: float,
 ) -> dict[str, Any]:
     """Call a sync/async detector once per official user boundary after an episode.
 
-    Gold and judge detectors can implement this callable contract later. Tool
-    boundaries are unflagged; they never trigger a detector call.
+    Flags require the final training reward < 1, after fixed-variant scoring.
+    Evaluate candidates even on success so suppressed hits remain observable.
+    The same gate applies to every sync/async callable. Tool boundaries never
+    trigger a detector call.
     """
     from areal.trainer.ppo.user_boundary import USER_BOUNDARY_DETECTOR_NAMES
 
@@ -170,6 +163,8 @@ async def detect_user_boundaries(
         and _field(message, "raw_data") is not None
     ]
     flags, names = [], []
+    failed = final_reward < 1
+    gate_suppressed = False
     for index, kind in zip(policy_indices, kinds, strict=True):
         detection = BoundaryDetection(False)
         if kind in (1, 3):
@@ -188,10 +183,14 @@ async def detect_user_boundaries(
                 or detection.flag != (detection.detector is not None)
             ):
                 raise ValueError("Invalid user boundary detector result")
+        if detection.flag and not failed:
+            gate_suppressed = True
+            detection = BoundaryDetection(False)
         flags.append(detection.flag)
         names.append(detection.detector)
     return {
         "user_boundary_types": kinds,
         "user_boundary_flags": flags,
         "user_boundary_detectors": names,
+        "user_boundary_gate_suppressed": gate_suppressed,
     }

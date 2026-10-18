@@ -39,6 +39,7 @@ NON_MODEL_FORWARD_METADATA_KEYS = frozenset(
         "user_td_beta",
         "user_boundary_flags",
         "user_boundary_detector_ids",
+        "user_boundary_gate_suppressed",
         "user_td_beta_flagged",
     }
 )

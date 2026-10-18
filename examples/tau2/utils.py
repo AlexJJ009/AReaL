@@ -197,8 +197,8 @@ def validate_user_td_settings(
         ):
             raise ValueError(f"{name} must be finite and in [0, 1]")
     if user_boundary_detector is not None:
-        if user_boundary_detector != "rules":
-            raise ValueError("user_boundary_detector currently supports only 'rules'")
+        if user_boundary_detector != "u1":
+            raise ValueError("user_boundary_detector currently supports only 'u1'")
         if not train_user_boundary_values:
             raise ValueError(
                 "user_boundary_detector requires train_user_boundary_values"
@@ -257,7 +257,7 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
     # None preserves effective legacy beta=1 while detecting an explicitly
     # supplied legacy beta (including 1) together with the detector mode.
     user_td_beta: float | None = None
-    # rules enables boundary detection; None leaves legacy behavior unchanged.
+    # u1 detects confirmation+STOP only on failed episodes; None keeps legacy behavior.
     user_boundary_detector: str | None = None
     # In [0, 1], used only at flagged user boundaries; all others use beta=1.
     user_td_beta_flagged: float = 0.0
