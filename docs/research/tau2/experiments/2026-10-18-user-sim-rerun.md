@@ -2,7 +2,7 @@
 
 | 项   | 内容                                                                            |
 | ---- | ------------------------------------------------------------------------------- |
-| 状态 | 596–604 完成；补充 610（火山 V4.1-260910）完成；逐条标注见 case study v4          |
+| 状态 | 596–604 完成；补充 610（火山 V4.1-260910）完成；逐条标注见 case study v4        |
 | 批准 | 用户 2026-10-18 批准（API + GPU）                                               |
 | 产物 | `_artifacts/AReaL/codex-sao-math/user-sim-rerun-20261018/`                      |
 | 对照 | [user-simulator.md §2](../user-simulator.md) 的 v3 五组（`user-sim-20261012/`） |
@@ -95,22 +95,23 @@ patch 效果：Turbo +10.0pp（95% CI \[+2.1, +17.9\]，p=0.015），Lite +7.5pp
 
 ## 5. 补充：火山 `deepseek-v4-1-flash-260910`（pueue 610）
 
-DeepSeek 官方 API 在 10-17 换成 10 月版 V4.1（[issue](../issues/2026-10-17-deepseek-user-backend-switch.md)），596–598
-因此不是 v3 和 PPO v3 训练所用的后端。火山订阅接口上的 `deepseek-v4-1-flash-260910`（9 月版 V4.1）用作旧后端的替代，
-用户和 NL judge 都换成它，其余同 596。
+DeepSeek 官方 API 在 10-17 换成 10 月版
+V4.1（[issue](../issues/2026-10-17-deepseek-user-backend-switch.md)），596–598 因此不是 v3 和
+PPO v3 训练所用的后端。火山订阅接口上的 `deepseek-v4-1-flash-260910`（9 月版 V4.1）用作旧后端的替代， 用户和 NL judge
+都换成它，其余同 596。
 
-| 运行                         | mean@4 | 失败 | U1（规则） |
-| ---------------------------- | ------ | ---- | ---------- |
-| 火山 260910（用户 + judge）  | 0.7125 | 69   | 12         |
-| v3 旧官方后端（10-12）       | 0.7208 | 67   | 13         |
+| 运行                        | mean@4 | 失败 | U1（规则） |
+| --------------------------- | ------ | ---- | ---------- |
+| 火山 260910（用户 + judge） | 0.7125 | 69   | 12         |
+| v3 旧官方后端（10-12）      | 0.7208 | 67   | 13         |
 
-按题配对差 −0.83pp（95% CI \[−7.08, +5.00\]）。1,379 次用户调用无空 content。结论：260910 的行为与旧官方后端一致，
-β 训练（`tau2-ppo-beta-20261018/`）的用户和 judge 用它，可与 PPO v3 基线比较。
+按题配对差 −0.83pp（95% CI \[−7.08, +5.00\]）。1,379 次用户调用无空 content。结论：260910 的行为与旧官方后端一致， β
+训练（`tau2-ppo-beta-20261018/`）的用户和 judge 用它，可与 PPO v3 基线比较。
 
-**不用的后端**：火山 `deepseek-v4-flash-ga-260731` 约 2.2% 的调用把回复放在 `reasoning_content`、`content` 为空，集中在确认轮。
-误启动的 GA 运行（606–608）已停止，目录和 smoke 产物已删，`launch.sh` 里的 GA 选项已去掉。另外火山订阅接口会把
+**不用的后端**：火山 `deepseek-v4-flash-ga-260731` 约 2.2% 的调用把回复放在 `reasoning_content`、`content`
+为空，集中在确认轮。 误启动的 GA 运行（606–608）已停止，目录和 smoke 产物已删，`launch.sh` 里的 GA 选项已去掉。另外火山订阅接口会把
 `deepseek-v4-flash*` 静默映射到 GA，只有写全 `deepseek-v4-1-flash-260910` 才拿到 9 月版。
 
-**事故记录**：610 运行中改了 `api-user/launch.sh`，bash 按偏移读到改动后的内容，610 在 outcome-check 处退出（exit 2），
-依赖它的 612/613 被标 DependencyFailed。评测本身已完成（240/240），手动补跑 outcome-check 通过（judge host 全为 ark，76 次），
-结果写入 `outcome-check.json` 并注明；612/613 重新入队。规则：不改正在被运行任务执行的脚本，改副本。
+**事故记录**：610 运行中改了 `api-user/launch.sh`，bash 按偏移读到改动后的内容，610 在 outcome-check 处退出（exit
+2）， 依赖它的 612/613 被标 DependencyFailed。评测本身已完成（240/240），手动补跑 outcome-check 通过（judge host
+全为 ark，76 次）， 结果写入 `outcome-check.json` 并注明；612/613 重新入队。规则：不改正在被运行任务执行的脚本，改副本。
