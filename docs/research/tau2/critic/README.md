@@ -14,4 +14,6 @@ head、数据配比、EV 上限和 case study。
   [issue](../issues/2026-10-14-critic-ev-case-study.md)。
 - [critic-accuracy-and-ppo.md](critic-accuracy-and-ppo.md)：critic 不准时 PPO
   能不能训——文献调研、多轮工具调用场景下 critic 在学什么、研究缺口与当前 PPO 的诊断计划。
+- [user-boundary-forward.md](user-boundary-forward.md)：PPO / SAO critic 在 agent→用户边界上的离线前向（$U$ 能否反映提议质量、
+  用户段意外落在哪里）。
 - SAO 使用的 critic：[sao-runs.md](../sao-runs.md)。
