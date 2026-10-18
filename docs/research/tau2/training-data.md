@@ -432,4 +432,7 @@ Qwen3-4B-2507 在官方 `telecom_full`（2,285 题 × 4，D1）上 mean@4 19.6%�
   下有同名软链）。题目与官方原题逐字一致，gold 1 / 空 0， 与 test、v2 pack 无重合。与 v2 合并后每 epoch 996 题（Airline
   410、Retail 337、Telecom 249），batch 128 时 8 步；配置覆盖项见
   `_artifacts/AReaL/codex-sao-math/tau2-telecom-pack-20261018/REPORT.md`。
-- **状态：§5 的逐题审进行中**（pueue 620–622，`tau2-telecom-pack-20261018/review/`），结论出来之前不用于训练。
+- **逐题审（2026-10-18，pueue 620–622）：249 题全部 keep，无 fix、无 drop。** 三片各 83 题，校准沿用 §6 的
+  TELECOM_REVIEW2；每题对照 4 条 D1 轨迹（共 996 条），失败主因全部为 agent。逐个删除 gold 动作重放（共 1,263 次）：只有 2 题里
+  删掉一次冗余的 `reboot_device` 仍得 1 分（另一次重启覆盖了它），其余删除全部得 0。Claude 随机复核 3 题，结论一致。逐题结论在
+  `tau2-telecom-pack-20261018/review/out/r1_s{0,1,2}.jsonl`。pack 可用于训练。
