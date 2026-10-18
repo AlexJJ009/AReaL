@@ -69,6 +69,8 @@ case study 都发现失败约 92% 是 agent 的错，约 8% 是用户的错，�
   case study 报告及标注。
 - [telecom-case-study-d1/](telecom-case-study-d1/REPORT.md)：Qwen3-4B-2507 在官方 Telecom
   full 上的失败来源（随机失败样本中 agent 59/60、用户 0/60）、"恰好 2 GB"题错和 249 道训练题的筛选。
+- [user-error-judge-validation/](user-error-judge-validation/REPORT.md)：带剧本的用户错误 judge 在 v3/v4 标注上的离线验证
+  （G+T recall 约 80%，U3 约 57%；约 30% 的 agent 致败被误判为用户错误）。
 
 ### 训练
 
