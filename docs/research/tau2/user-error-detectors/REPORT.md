@@ -50,11 +50,12 @@ judge 没有独立贡献。
 `user_boundary/gate_suppressed_count`。先红后绿（实现前 53 个失败），把门控反转后 28 个测试失败；合并后复跑 189
 个相关测试通过。产物： `_artifacts/AReaL/codex-sao-math/tau2-u1-failure-gate-20261018/`。
 
-**训练（pueue 636，排在 631 之后，gpu8 一次只跑一个）：** `_artifacts/AReaL/codex-sao-math/tau2-ppo-u1beta-20261018/`，代码快照
-`src-a248182f`。配置与 631（统一 β=0.5）逐项比较，只差 `user_td_beta: null`、`user_boundary_detector: u1`、
+**训练（pueue 636，排在 631 之后，gpu8 一次只跑一个）：**
+`_artifacts/AReaL/codex-sao-math/tau2-ppo-u1beta-20261018/`，代码快照 `src-a248182f`。配置与
+631（统一 β=0.5）逐项比较，只差 `user_td_beta: null`、`user_boundary_detector: u1`、
 `user_td_beta_flagged: 0.0` 三项；并发、重试、episode 上限、题池（747 题）、评测都相同。注意：两组 β 训练的用户模拟器和 NL
-评分是火山 `deepseek-v4-1-flash-260910`，标准 PPO 基线（`tau2-ppo-extend-20261016`）是 DeepSeek 官方 `deepseek-flash`、并发
-128，三组之间不是只差 β。
+评分是火山 `deepseek-v4-1-flash-260910`，标准 PPO 基线（`tau2-ppo-extend-20261016`）是 DeepSeek 官方
+`deepseek-flash`、并发 128，三组之间不是只差 β。
 
 ## 1 结论（627 / 630，规则、gold、judge 第一次比较）
 
