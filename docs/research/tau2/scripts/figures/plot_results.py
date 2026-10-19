@@ -1,8 +1,9 @@
 """Figures for the tau2 user-reliability study (one script, all figures).
 
 Figures (PNG + PDF in --out):
-  baseline_curves   PPO vs SAO: eval mean@4 on Airline / Retail / Telecom with
-                    task-level bootstrap 95% CI, plus critic EV per training step.
+  baseline_curves   PPO vs SAO vs PPO + beta=0.5: eval mean@4 on Airline / Retail /
+                    Telecom with task-level bootstrap 95% CI, plus critic EV per
+                    training step; the per-step numbers go to baseline_table.csv.
   user_sim          Primary cause of each failed episode, per user simulator; the
                     companion table (mean@4, pass^4, user-caused share) is written
                     to user_sim_table.csv.
@@ -27,6 +28,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 ART = "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math"
 SAO_CS = f"{ART}/tau2-sao-case-study-20261017"
+BETA_RUN = f"{ART}/tau2-ppo-beta-20261018/ppo-formal-qwen3-beta05"  # pueue 631
 RERUN = f"{ART}/user-sim-rerun-20261018"
 LABELS = [
     f"{RERUN}/case-study-v4/labels.jsonl",
@@ -41,7 +43,8 @@ C_AGENT, C_STOP, C_DEV, C_EXIT, C_BENCH = (
     "#E87BA4",
     "#B4B2A9",
 )
-ALGO_COLOR = {"PPO": C_AGENT, "SAO": C_STOP}
+BETA = "PPO + β=0.5"
+ALGO_COLOR = {"PPO": C_AGENT, "SAO": C_STOP, BETA: C_DEV}
 
 # Failure-cause buckets of the paper figure; codes as in case study v4.
 CAUSES = [
@@ -131,6 +134,74 @@ def task_means(path):
     return {k: {t: sum(v) / len(v) for t, v in d.items()} for k, d in acc.items()}
 
 
+def beta_task_means(run_dir):
+    """Same shape as task_means, read from the run's async-eval trajectories.
+
+    Uses the last completed attempt per episode and drops episodes the eval
+    listed as infra-excluded.
+    """
+    acc = collections.defaultdict(lambda: collections.defaultdict(list))
+    ev_dir = f"{run_dir}/evidence/async-eval"
+    for name in os.listdir(ev_dir):
+        meta = json.load(open(f"{ev_dir}/{name}"))
+        step = int(name.removesuffix(".json"))
+        excluded = {x["source_id"] for x in meta["infra_excluded"]}
+        traj = meta["trajectory_dir"]
+        for src in os.listdir(traj):
+            if src in excluded:
+                continue
+            done = [json.load(open(f"{traj}/{src}/{f}")) for f in os.listdir(f"{traj}/{src}")]
+            done = [x for x in done if x["status"] == "completed"]
+            if not done:
+                continue
+            last = max(done, key=lambda x: x["recorded_at"])
+            acc[(BETA, step, last["domain"])][last["task_id"]].append(
+                float(last["official_score"])
+            )
+    return {k: {t: sum(v) / len(v) for t, v in d.items()} for k, d in acc.items()}
+
+
+def beta_ev(run_dir):
+    """Critic EV per training step from the run's offline wandb history."""
+    import glob
+
+    from wandb.proto.wandb_internal_pb2 import Record
+    from wandb.sdk.internal.datastore import DataStore
+
+    key = "critic/ppo_critic/critic_explained_variance"
+    (path,) = glob.glob(f"{run_dir}/logs/root/*/*/wandb/offline-run-*/*.wandb")
+    ds = DataStore()
+    ds.open_for_scan(path)
+    ev = []
+    while (blob := ds.scan_data()) is not None:
+        r = Record()
+        r.ParseFromString(blob)
+        if r.HasField("history"):
+            for i in r.history.item:
+                if (i.key or "/".join(i.nested_key)) == key:
+                    ev.append(float(json.loads(i.value_json)))
+    return list(enumerate(ev))  # one EV record per training step
+
+
+def write_table(tm, out):
+    """mean@4 per step: training domains (Airline + Retail) and Telecom."""
+    path = os.path.join(out, "baseline_table.csv")
+    runs = list(ALGO_COLOR)
+    steps = sorted({s for (_, s, _) in tm})
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["step"] + [f"{r} train" for r in runs] + [f"{r} telecom" for r in runs])
+        for s in steps:
+            row = [s]
+            for doms in (("airline", "retail"), ("telecom",)):
+                for r in runs:
+                    v = [x for d in doms for x in tm.get((r, s, d), {}).values()]
+                    ok = all((r, s, d) in tm for d in doms)
+                    row.append(f"{sum(v) / len(v):.3f}" if ok else "")
+            w.writerow(row)
+    print("wrote", path)
+
+
 def boot_ci(values, n=2000, seed=0):
     rng = random.Random(seed)
     m = len(values)
@@ -158,8 +229,10 @@ def rolling(xs, w):
     ]
 
 
-def plot_baselines(cs, out):
+def plot_baselines(cs, beta_run, out):
     tm = task_means(f"{cs}/eval_episodes.csv")
+    tm.update(beta_task_means(beta_run))
+    write_table(tm, out)
     fig, axs = plt.subplots(2, 2, figsize=(7.0, 4.6))
     panels = [
         ("airline", "Airline (20 tasks)"),
@@ -199,10 +272,12 @@ def plot_baselines(cs, out):
         color="#7a7a7a",
         va="top",
     )
-    axs[0, 0].legend(frameon=False, loc="lower right")
+    axs[0, 0].legend(frameon=False, loc="lower right", fontsize=6.5)
 
     ax = axs[1, 1]
-    for run, series in ev_series(cs).items():
+    evs = ev_series(cs)
+    evs[BETA] = beta_ev(beta_run)
+    for run, series in evs.items():
         series = [(s, v) for s, v in sorted(series)]
         xs, ys = [s for s, _ in series], [v for _, v in series]
         ax.plot(xs, ys, color=ALGO_COLOR[run], alpha=0.25, linewidth=0.7)
@@ -338,11 +413,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
     ap.add_argument("--sao-case-study", default=SAO_CS)
+    ap.add_argument("--beta-run", default=BETA_RUN)
     ap.add_argument("--labels", nargs="+", default=LABELS)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     style()
-    plot_baselines(a.sao_case_study, a.out)
+    plot_baselines(a.sao_case_study, a.beta_run, a.out)
     fails, failed_tasks = load_labels(a.labels)
     plot_cause_figure(SIM_ROWS, fails, failed_tasks, a.out, "user_sim")
     plot_cause_figure(PATCH_ROWS, fails, failed_tasks, a.out, "user_sim_patch")
