@@ -567,10 +567,24 @@ judge 的用法和 AutoForge 不同：AutoForge
 | 组                   | 说明                                                       |
 | -------------------- | ---------------------------------------------------------- |
 | PPO                  | baseline（已有，120 步）                                   |
-| PPO + $\beta=0.5$    | §4，所有用户回复统一乘 0.5（pueue 617 smoke / 618 formal） |
+| PPO + $\beta=0.5$    | §4，所有用户回复统一乘 0.5（pueue 631，已完成）            |
 | PPO + 整条 mask      | AutoForge 式 baseline，与截断用同一个检测器                |
 | PPO + 截断           | 本节；检测器分别用规则、judge、critic 读数                 |
 | PPO + 截断 + $\beta$ | 两部分合用                                                 |
 
 代码：现有实现已支持终止边界（类型 3）；需要新增按 episode 输入的出错边界编号，$b_k$ 之后的 actor mask，以及被标记 episode 的 critic
 loss mask。由 Codex 实现、Claude review，测试先红后绿。
+
+### 5.6 进展（2026-10-19）
+
+- **检测器**：离线评估后（[user-error-detectors/REPORT.md](../user-error-detectors/REPORT.md)），训练只用失败门控的
+  U1 规则。U7a 去掉（训练轨迹上主要是在给 agent 免责）；gold 不进检测器（用户决定）；judge 在 DeepSeek 用户的训练轨迹上几乎没有
+  增量，暂不接入；**critic 读数否决**：用户段下跌最大的边界全是终止边界，U1 只占约三分之一，其余是 agent 结算失败
+  （[critic/user-boundary-forward.md](../critic/user-boundary-forward.md)）。5.3 表里"部署时可用"的检测器因此只剩规则。
+- **$U_k$ 的位置**：value\[$b$\]、value\[$b-1$\]、末 8/32 token 均值、整段均值的 AUC 相差不超过 0.02，保留 value\[$b$\]；
+  但几种读法都分不出 agent 提议的对错，截断前的 $U_k-V_i$ 只是 critic 读数差，效果接近把结局 mask 掉。
+- **训练**：完整的截断 + bootstrap 还没跑。pueue 636 只在 U1 标记的边界取 $\beta=0$：U1 在终止边界，actor 一侧与截断等价；
+  critic 仍在被标记 episode 上训练，与 5.2 的设计不同。631（统一 $\beta=0.5$）在 checkpoint 70 后训练域低于 PPO 基线 6–12pp，
+  但用户后端、并发、timeout 都不同，不能归因于 $\beta$（[ppo-beta05-eval-drop/REPORT.md](../ppo-beta05-eval-drop/REPORT.md)）。
+- **与动机的冲突**：U3 只在弱用户上多，DeepSeek 用户的训练轨迹里几乎没有。"重点转到 U3"要求训练用弱用户，
+  即"弱用户 / 强用户各训一轮、再各加方法"的实验，尚未开始。
