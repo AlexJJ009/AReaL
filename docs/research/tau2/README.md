@@ -83,6 +83,8 @@ case study 都发现失败约 92% 是 agent 的错，约 8% 是用户的错，�
 - [sao-runs.md](sao-runs.md)：SAO mix pack + critic 510 第 55 步。
 - [experiments/2026-10-15-qwen3-ppo-grpo-sao.md](experiments/2026-10-15-qwen3-ppo-grpo-sao.md)：Qwen3
   上 PPO / GRPO / SAO 对比、OOM 和 SAO 崩溃的修复、两份 case study 的结论。
+- [ppo-beta05-eval-drop/](ppo-beta05-eval-drop/REPORT.md)：631（PPO + 全局 β=0.5）后期 eval 比基线低约 8.6pp 的诊断：
+  训练没崩、无 infra 污染，Retail 有策略退化迹象，但 user/judge 后端不同，不能归因到 β。
 - [ppo-training-budget-survey.md](ppo-training-budget-survey.md)：相关工作的训练步数、batch、lr
   与我们的对比。
 - [infra-issues.md](infra-issues.md)：proxy 容量泄漏、Qwen3 加速配置、SAO 推权重崩溃。
