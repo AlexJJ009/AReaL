@@ -44,7 +44,7 @@ test 结果（precision 以已有单 reader 主因标签为参考）：
 1. **成本**：每次调用平均 33.5k token（含 thinking），延迟均值 32 s、p95 83 s。
 
 结论：J 可以做离线分析和人工审读的候选，不直接用于训练的 $\beta_k$。老师 10-19 判断"加 judge
-的路线做不通"，方法转向用户池与用户能力（[research-direction/method-derivation.md](../research-direction/method-derivation.md)）；J
+的路线做不通"，方法转向用户池与用户能力（[research-direction/problem-and-plan.md §6](../research-direction/problem-and-plan.md)）；J
 保留作消融。
 
 ## 0a 更新（639，2026-10-19）：U1 规则召回高，问题在 precision
