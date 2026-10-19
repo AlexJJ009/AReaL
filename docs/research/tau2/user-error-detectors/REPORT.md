@@ -16,29 +16,36 @@ SAO step 59，30,083 个用户边界）上 离线比较三类检测器，不训�
 
 ## 0c 更新（643，2026-10-19）：全轨迹归因 judge J
 
-Codex 报告：`phai:_artifacts/AReaL/codex-sao-math/tau2-attribution-judge-20261019/REPORT.md`，案例在同目录
-`cases.md`。J 读完整轨迹（含工具调用、policy、账户初始事实，不含 gold），输出责任方、错误码、决定性消息和用户边界；判成 U1 时列出被打断的写操作，再用 640 的重放代码执行验证。数据按
-`domain:task` 切成 few-shot 池 / dev / test（67 / 158 / 226 题，失败轨迹 287 / 787 / 1048 条），只在 dev 上改 prompt，冻结后
-test 只跑一次。模型 `deepseek-v4-1-flash-261017`（我们的火山 plan），3,028 次请求返回的模型名全部一致，峰值并发 8，没有暂停。Claude
-核对了重放计数（accept 126 / reject 30 / unresolved 26，与报告一致）。
+Codex
+报告：`phai:_artifacts/AReaL/codex-sao-math/tau2-attribution-judge-20261019/REPORT.md`，案例在同目录
+`cases.md`。J 读完整轨迹（含工具调用、policy、账户初始事实，不含 gold），输出责任方、错误码、决定性消息和用户边界；判成 U1 时列出被打断的写操作，再用
+640 的重放代码执行验证。数据按 `domain:task` 切成 few-shot 池 / dev / test（67 / 158 / 226 题，失败轨迹 287 /
+787 / 1048 条），只在 dev 上改 prompt，冻结后 test 只跑一次。模型 `deepseek-v4-1-flash-261017`（我们的火山
+plan），3,028 次请求返回的模型名全部一致，峰值并发 8，没有暂停。Claude 核对了重放计数（accept 126 / reject 30 / unresolved
+26，与报告一致）。
 
 test 结果（precision 以已有单 reader 主因标签为参考）：
 
-| 子集 | 方法 | any-user P | R | agent→user 误归因 |
-| --- | --- | --- | --- | --- |
-| 旧 Doubao Turbo + Lite | J | 92.1% | 83.0% | 6.2% |
-| 旧 Doubao Turbo + Lite | U1 规则 | 94.4% | 75.0% | 3.9% |
-| 旧 Doubao Turbo + Lite | 仅重放通过的 U1 | 100%（55 条 flag 中可评估部分） | 49.1% | 0% |
-| 其他模拟器（含 qwen U3） | J | 87.1% | 83.1% | 1.7% |
-| 训练分布（DeepSeek 用户，含定向抽样） | J | 76.2% | 85.3% | 12.8%（20/156） |
-| 训练分布 | U1 规则 | 53.7% | 96.0% | 39.5% |
+| 子集                                  | 方法            | any-user P                      | R     | agent→user 误归因 |
+| ------------------------------------- | --------------- | ------------------------------- | ----- | ----------------- |
+| 旧 Doubao Turbo + Lite                | J               | 92.1%                           | 83.0% | 6.2%              |
+| 旧 Doubao Turbo + Lite                | U1 规则         | 94.4%                           | 75.0% | 3.9%              |
+| 旧 Doubao Turbo + Lite                | 仅重放通过的 U1 | 100%（55 条 flag 中可评估部分） | 49.1% | 0%                |
+| 其他模拟器（含 qwen U3）              | J               | 87.1%                           | 83.1% | 1.7%              |
+| 训练分布（DeepSeek 用户，含定向抽样） | J               | 76.2%                           | 85.3% | 12.8%（20/156）   |
+| 训练分布                              | U1 规则         | 53.7%                           | 96.0% | 39.5%             |
 
-1. **J 能认出 U3**：其他模拟器上 U3 precision 89%、recall 80%，规则完全认不出。U3 和 U1 一样需要读内容，J 解决了"规则穷举不了表达"的问题。
-1. **但在训练分布上不够准**：DeepSeek 用户的训练失败里，J 把 12.8% 的 agent 失败判成用户的错。638 的随机样本上 J 只标出 2 条，recall 25%。
-1. **重放验证不保证提案忠实**：一例中 J 自己从待执行操作里删掉了 agent 承诺的违规补偿，剩下的操作重放得 1 分。重放只能说明"存在一组能成功的写操作"，不能说明 agent 原计划正确。
+1. **J 能认出 U3**：其他模拟器上 U3 precision 89%、recall 80%，规则完全认不出。U3 和 U1 一样需要读内容，J
+   解决了"规则穷举不了表达"的问题。
+1. **但在训练分布上不够准**：DeepSeek 用户的训练失败里，J 把 12.8% 的 agent 失败判成用户的错。638 的随机样本上 J 只标出 2
+   条，recall 25%。
+1. **重放验证不保证提案忠实**：一例中 J 自己从待执行操作里删掉了 agent 承诺的违规补偿，剩下的操作重放得 1
+   分。重放只能说明"存在一组能成功的写操作"，不能说明 agent 原计划正确。
 1. **成本**：每次调用平均 33.5k token（含 thinking），延迟均值 32 s、p95 83 s。
 
-结论：J 可以做离线分析和人工审读的候选，不直接用于训练的 $\beta_k$。老师 10-19 判断"加 judge 的路线做不通"，方法转向用户池与用户能力（[research-direction/method-derivation.md](../research-direction/method-derivation.md)）；J 保留作消融。
+结论：J 可以做离线分析和人工审读的候选，不直接用于训练的 $\beta_k$。老师 10-19 判断"加 judge
+的路线做不通"，方法转向用户池与用户能力（[research-direction/method-derivation.md](../research-direction/method-derivation.md)）；J
+保留作消融。
 
 ## 0a 更新（639，2026-10-19）：U1 规则召回高，问题在 precision
 
