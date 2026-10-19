@@ -150,7 +150,10 @@ def beta_task_means(run_dir):
         for src in os.listdir(traj):
             if src in excluded:
                 continue
-            done = [json.load(open(f"{traj}/{src}/{f}")) for f in os.listdir(f"{traj}/{src}")]
+            done = [
+                json.load(open(f"{traj}/{src}/{f}"))
+                for f in os.listdir(f"{traj}/{src}")
+            ]
             done = [x for x in done if x["status"] == "completed"]
             if not done:
                 continue
@@ -190,7 +193,9 @@ def write_table(tm, out):
     steps = sorted({s for (_, s, _) in tm})
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["step"] + [f"{r} train" for r in runs] + [f"{r} telecom" for r in runs])
+        w.writerow(
+            ["step"] + [f"{r} train" for r in runs] + [f"{r} telecom" for r in runs]
+        )
         for s in steps:
             row = [s]
             for doms in (("airline", "retail"), ("telecom",)):
