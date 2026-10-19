@@ -190,7 +190,7 @@ def write_table(tm, out):
     """mean@4 per step: training domains (Airline + Retail) and Telecom."""
     path = os.path.join(out, "baseline_table.csv")
     runs = list(ALGO_COLOR)
-    steps = sorted({s for (_, s, _) in tm})
+    steps = sorted({s for (_, s, _) in tm if s % 10 == 0})
     with open(path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(
