@@ -242,13 +242,17 @@ DeepSeek 用户 U3 只占约 1%，测不出第 2 项，所以必须用多模拟�
 - **critic 学不会用剧本**：D1、D2 会显示出来。
 - **剧本泄露答案**：剧本里有订单号、用户真实意图，比用户身份多很多信息。它不是 gold，但"gold 不进 critic"的旧决定是否允许剧本进
   critic，需要用户确认。
-- **新颖性**：特权 critic 本身不新（Le Critique 给答案，SWEET-RL 给参考答案，asymmetric actor-critic 给完整状态）。差别在于给的是用户剧本、目的是把用户的作用和 agent 的作用分到不同的段；能不能站住取决于 D2、D3。2026-10-19 的定向检索（约 5 次检索，打开了下列页面）没有找到"critic 看用户隐藏剧本、并在用户回复边界上分开用户偏离和 agent 错误"的工作，这是"没找到"，不是"不存在"。最近的邻居：
+- **新颖性**：特权 critic 本身不新（Le Critique 给答案，SWEET-RL 给参考答案，asymmetric actor-critic
+  给完整状态）。差别在于给的是用户剧本、目的是把用户的作用和 agent 的作用分到不同的段；能不能站住取决于 D2、D3。2026-10-19 的定向检索（约 5
+  次检索，打开了下列页面）没有找到"critic 看用户隐藏剧本、并在用户回复边界上分开用户偏离和 agent 错误"的工作，这是"没找到"，不是"不存在"。最近的邻居：
   - Le Critique（2608.16739）：critic 看标准答案、同组其他回答、数独解盘；没有用户。
-  - SWEET-RL（2503.15478）：advantage 以参考代码或网页为条件，Bradley-Terry 训练后做 DPO；模拟用户也看参考答案，不区分用户错误。
+  - SWEET-RL（2503.15478）：advantage 以参考代码或网页为条件，Bradley-Terry 训练后做
+    DPO；模拟用户也看参考答案，不区分用户错误。
   - SIAPO（2605.22240）：模拟用户有隐藏的顾虑和逐轮意愿；隐藏状态用于自蒸馏的 teacher，不进 value；GRPO，无 critic。
   - AutoForge（2512.22857）：judge 读用户意图，整条 mask；无 critic。
   - FACA（2608.17499）：用户下一句回复当作局部 advantage 加到结局上；不看剧本。
-  - Asymmetric Actor-Critic for Multi-turn LLM Agents（2604.00304）：运行时 critic 监督固定的 actor，不看用户目标，也不是 RL 的 value。
+  - Asymmetric Actor-Critic for Multi-turn LLM Agents（2604.00304）：运行时 critic 监督固定的
+    actor，不看用户目标，也不是 RL 的 value。
 
 ## 6 之后：按 persona 缩放（D2、D3 通过后再做）
 
