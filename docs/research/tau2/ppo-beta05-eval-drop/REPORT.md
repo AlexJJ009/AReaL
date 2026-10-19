@@ -62,3 +62,39 @@ checkpoint 对齐。
 - 单 seed；比较窗口是看到曲线后选的，区间是探索性估计。
 - 训练 batch 是用日志约束离线重建的，没有 optimizer 原生的 episode-ID 清单。
 - 案例是机制取证，不是随机抽样；主因由单个 Codex 判定。
+
+## 5 β=0.5 改变了什么（pueue 644，2026-10-19）
+
+离线分析（只读日志、轨迹和 checkpoint，无 GPU、无 API），Codex 报告：
+`phai:_artifacts/AReaL/codex-sao-math/tau2-beta05-mechanism-20261019/REPORT.md`，配对案例在同目录 `cases.md`，入口
+`run_analysis.sh`。Claude 用 `evidence/async-eval/{0,120}.json` 复核了 Retail 的终点和初始数字。
+
+1. **Retail 差距一直持续到终点。** checkpoint 120 Retail 52.5% 对 66.25%，差 −13.75 [−22.5, −5.6] pp（按 task
+   聚类）；70–120 合并 −11.7 [−18.2, −5.8] pp。overall 45.25 对 50.5。训练集只有 Airline 和 Retail，Telecom 的 eval
+   是跨域泛化。
+1. **训练集上 Retail 也学得少，但没有回落。** Retail 训练成功率在 41–60 步开始落后（78.2 对 80.9），最后 20 步 80.8 对
+   83.6，早于 checkpoint 70 的 eval 差距。eval 差距比训练差距大。
+1. **β 的作用（代码层面已确认）。** 有终止用户边界时，actor advantage 对 $R$ 的直接系数是 β，其余经过 critic：
+   $A_t = 0.5(R-U_\text{last}) + (U_\text{last}-V_t) + \dots$。约 90% 的 episode 以用户 STOP 结束，所以几乎每条都被改写。
+   但两组都做 batch mean/std 归一化，整体缩放会被抵消，"惩罚减半"不等于梯度减半；真正改变的是 advantage 中真实结局与
+   critic 估计的相对比重。终止边界占用户边界 TD 二阶矩的约 89%，中间用户轮的影响小。
+1. **critic 没有全面变坏。** 631 的 explained variance 在 61–70 步落后（0.264 对 0.365），终点恢复并超过基线（0.390 对
+   0.329）。新增 U 位置只占 critic loss token 的约 0.35%。训练时没有保存逐 token 的 value，所以无法测失败轨迹上
+   $U_\text{last}$ 是否偏高，这是 H1（critic 看不出的错误只受到部分惩罚）证据链最关键的缺口。
+1. **Retail 行为漂移部分符合 H1。** 相对基线，631 后期更多出现：写入了没有来源的地址（+2.2 pp）、无效的 item
+   replacement 数组（+3.8 pp）、与参考不符的整单取消（+3.2 pp），以及严格 U1 候选（+5.2 pp）。前两类和取消类错误工具未必报错，
+   用户也会道谢，只有 DB 检查判失败，与 H1 一致；但无效 item 数组会直接报错，不属于"只有结局才能发现"的错误。工具调用数、
+   重复调用、未见 ID 写入和 transfer 没有特异漂移。
+1. **backend 混杂仍未排除。** 同一个初始 actor（checkpoint 0）在火山用户下 Retail 43.1%，官方 DeepSeek 下 47.5%（−4.4
+   pp，区间含零）。NL judge 的直接影响很小：Retail eval 只靠 NL 判零分的 631 为 0 条、基线 4 条；相同写操作序列的配对中 DB
+   判定无一不同。即使把 631 所有严格 U1 候选零分都改成成功，checkpoint 120 仍差 5 pp。
+1. **结论。** β=0.5 改变 credit 的方式已在代码层面确认，Retail 行为漂移与"critic 看不出的错误被少罚"的解释一致，但真实训练中的
+   因果归因置信度中低：训练和 eval 的用户、judge 都不同，也没有 value 可以还原 advantage。
+
+决定性实验（644 只设计，未运行，均需 GPU）：
+
+- 用同一个用户和 judge（豆包 Turbo + 261017）重评两边 checkpoint 60/70/120 的 actor，先只跑 Retail（6 个 actor × 160 =
+  960 episode）。若差距仍在，就排除了"只是 eval 用户不同"。
+- 把保存的 critic（checkpoint 60/70 对应下一训练 batch）跑在 Retail 轨迹上，比较成功和失败轨迹的 $U_\text{last}$，并在整个
+  batch 上复原归一化后的 advantage，直接检验 H1。checkpoint 路径和输入清单在 `followup_plan.json`、`followup_inputs.jsonl`。
+- 豆包下的 β=1 对照要保留 `train_user_boundary_values=true`，只改 β，才能把 β 和 U 监督分开。
