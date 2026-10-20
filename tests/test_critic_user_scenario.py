@@ -27,6 +27,16 @@ from areal.utils.data import (
 )
 from areal.utils.functional import loss_reduction_weight
 
+EXPECTED_PROFILE_HEADER = (
+    "Privileged context for value estimation. The text below is the hidden scenario "
+    "given to the simulated user of this conversation: why the user is contacting "
+    "the assistant, what the user knows and does not know, and how the user has "
+    "been instructed to behave. The assistant never sees this text. Use it to "
+    "estimate how likely the conversation is to end with the task completed "
+    "correctly, and to tell whether later user messages follow or deviate from "
+    "this scenario."
+)
+
 
 @pytest.fixture(autouse=True)
 def isolate_statistics():
@@ -81,6 +91,8 @@ def test_profile_is_exact_simulator_text_and_excludes_evaluation_fields():
     rendered = render_critic_profile(source)
     assert rendered == (
         "<|im_start|>system\n<user_profile>\n"
+        + EXPECTED_PROFILE_HEADER
+        + "\n\n"
         + str(source.user_scenario)
         + "\n</user_profile><|im_end|>\n"
     )
@@ -100,6 +112,58 @@ def test_profile_is_exact_simulator_text_and_excludes_evaluation_fields():
     changed = source.model_copy(deep=True)
     changed.evaluation_criteria.nl_assertions = ["OTHER_GOLD_999"]
     assert render_critic_profile(changed) == rendered
+
+
+def test_profile_header_is_identical_for_airline_retail_and_pack(tmp_path):
+    import hashlib
+
+    from examples.tau2 import task_pack
+    from examples.tau2.critic_scenario import render_critic_profile
+
+    sources = []
+    for domain, task_id in (
+        ("airline", "airline-test"),
+        ("retail", "retail-test"),
+    ):
+        source = task().model_copy(deep=True)
+        source.id = task_id
+        source.user_scenario.instructions.domain = domain
+        source.user_scenario.instructions.reason_for_call = task_id
+        sources.append(source)
+    pack_source = task().model_copy(deep=True)
+    pack_source.id = "pack-test"
+    pack_source.user_scenario.instructions = "Return my pack order."
+    domain_dir = tmp_path / "retail"
+    domain_dir.mkdir()
+    files = {
+        "retail/tasks.json": json.dumps([pack_source.model_dump()]),
+        "retail/task_db.json": json.dumps({"pack-test": "retail/db.json"}),
+        "retail/db.json": "{}",
+    }
+    for name, content in files.items():
+        (tmp_path / name).write_text(content)
+    (tmp_path / "manifest.json").write_text(
+        json.dumps(
+            {
+                "name": "header-test",
+                "source": "unit-test",
+                "files": {
+                    name: hashlib.sha256(content.encode()).hexdigest()
+                    for name, content in files.items()
+                },
+            }
+        )
+    )
+    sources.append(task_pack.get_task(str(tmp_path), "retail", "pack-test"))
+    headers = [
+        render_critic_profile(source).split(str(source.user_scenario), 1)[0]
+        for source in sources
+    ]
+    assert (
+        headers
+        == ["<|im_start|>system\n<user_profile>\n" + EXPECTED_PROFILE_HEADER + "\n\n"]
+        * 3
+    )
 
 
 def test_missing_or_unexpected_scenario_fails_before_rendering():
