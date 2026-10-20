@@ -33,6 +33,7 @@ pueue 642（PPO + 全局 β=0.5，豆包 Turbo 用户）在 14:11 完成 step 24
 
 ## 后续（2026-10-20）
 
-用户开通了新的火山 plan 订阅，key 存在 `tau2-doubao/ark-plan-20261020.env`（权限 600，变量名同为 `ARK_PLAN_API_KEY`，sha256 前缀
-`68b698be`）。旧的 `ark-plan.env` 保持不动。10-20 的探测结果：`doubao-seed-2-1-turbo-260628` 和 `deepseek-v4-1-flash-261017`
+用户开通了新的火山 plan 订阅，key 存在 `tau2-doubao/ark-plan-20261020.env`（权限 600，变量名同为
+`ARK_PLAN_API_KEY`，sha256 前缀 `68b698be`）。旧的 `ark-plan.env` 保持不动。10-20
+的探测结果：`doubao-seed-2-1-turbo-260628` 和 `deepseek-v4-1-flash-261017`
 直接可用，返回的模型名与请求一致，不需要另外开通；按 260910 请求，返回的仍是 261017。新 run 读新的 key 文件；GPU run 仍需用户批准。
