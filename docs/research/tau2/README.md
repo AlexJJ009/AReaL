@@ -91,6 +91,8 @@ case study 都发现失败约 92% 是 agent 的错，约 8% 是用户的错，�
 - [issues/](issues/)：给 Codex 的 issue 记录。
   - [issues/2026-10-19-volcano-deepseek-model-switch.md](issues/2026-10-19-volcano-deepseek-model-switch.md)：火山
     plan 上 260910 在 10-19 03:26 被静默换成 261017，636 作废，训练用户改为豆包 Turbo（642）。
+  - [issues/2026-10-19-volcano-weekly-quota-exhausted.md](issues/2026-10-19-volcano-weekly-quota-exhausted.md)：火山
+    plan 周额度在 10-19 14:02 用尽，642 停在 step 24 后被 kill（recover 在 step 20），后续实验暂停到换接口。
 - [reports/](reports/README.md)：Codex / Claude 的最终报告（xccl、critic recover、SAO mix），critic
   的报告在 [critic/reports/](critic/reports/ev-case-study-codex.md)。
 
