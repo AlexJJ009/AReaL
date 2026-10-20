@@ -206,6 +206,10 @@ class OpenAIProxyWorkflow(RolloutWorkflow):
                 return await self._arun_episode(engine, data)
             except Exception as exc:
                 retryable = should_retry is not None and should_retry(exc)
+                if reject_exhausted and (not retryable or attempt == retries):
+                    on_rejected = getattr(self.agent, "on_episode_rejected", None)
+                    if on_rejected is not None:
+                        await on_rejected(exc)
                 if attempt == retries and retryable and reject_exhausted:
                     logger.warning(
                         "Episode failed after %d retries; dropping it from its group: %s",

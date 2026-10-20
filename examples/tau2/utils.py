@@ -82,7 +82,7 @@ class Tau2EnvConfig:
         default=None, metadata={"help": "The arguments for the user LLM."}
     )
     user_llm_num_retries: int = field(
-        default=3,
+        default=8,
         metadata={"help": "Maximum retries for one user-simulator request."},
     )
     nl_judge_llm: str | None = field(
@@ -101,7 +101,29 @@ class Tau2EnvConfig:
         metadata={"help": "NL judge arguments; temperature defaults to zero."},
     )
     nl_judge_llm_num_retries: int = field(
-        default=3, metadata={"help": "Maximum retries for one NL judge request."}
+        default=8, metadata={"help": "Maximum retries for one NL judge request."}
+    )
+    user_llm_request_timeout: float = field(
+        default=120.0, metadata={"help": "Timeout in seconds for one user API attempt."}
+    )
+    nl_judge_llm_request_timeout: float = field(
+        default=120.0,
+        metadata={"help": "Timeout in seconds for one judge API attempt."},
+    )
+    api_retry_budget_seconds: float = field(
+        default=600.0,
+        metadata={"help": "Total request retry budget, including backoff."},
+    )
+    quota_breaker_threshold: int = field(
+        default=3,
+        metadata={"help": "Quota errors in the window before stopping the run."},
+    )
+    quota_breaker_window_seconds: float = field(
+        default=300.0, metadata={"help": "Sliding quota-error window in seconds."}
+    )
+    _quota_breaker_state_path: str | None = field(
+        default=None,
+        metadata={"help": "Internal shared state path, unique per run invocation."},
     )
     benchmark_variant: str = field(
         default="official",
@@ -140,6 +162,17 @@ class Tau2EnvConfig:
             )
         if self.nl_judge_llm_num_retries < 0:
             raise ValueError("nl_judge_llm_num_retries must be non-negative")
+        if self.quota_breaker_threshold < 1:
+            raise ValueError("quota_breaker_threshold must be positive")
+        for name in (
+            "user_llm_request_timeout",
+            "nl_judge_llm_request_timeout",
+            "api_retry_budget_seconds",
+            "quota_breaker_window_seconds",
+        ):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
 
 
 def nl_judge_metadata(econfig: Tau2EnvConfig) -> dict:

@@ -5,6 +5,7 @@ import time
 from functools import partial
 from pathlib import Path
 
+from examples.tau2.api_reliability import Tau2ApiStatsMixin
 from examples.tau2.official_runner import (
     INFRASTRUCTURE_ERROR,
     collect_episodes,
@@ -12,6 +13,7 @@ from examples.tau2.official_runner import (
     official_metrics,
 )
 
+from areal import PPOTrainer
 from areal.trainer.async_eval import AsyncEvalPPOTrainer
 from areal.trainer.rollout_batch import (
     FiniteEpochBatcher,
@@ -21,7 +23,11 @@ from areal.trainer.rollout_batch import (
 from areal.utils.stats_logger import StatsLogger
 
 
-class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
+class Tau2SyncTrainer(Tau2ApiStatsMixin, PPOTrainer):
+    """Synchronous recipe with the same run-wide API failure metrics."""
+
+
+class Tau2AsyncEvalTrainer(Tau2ApiStatsMixin, AsyncEvalPPOTrainer):
     """Reuse GPU allocation/checkpoint loading; summarize official domain rewards."""
 
     _snapshot_evidence = False
@@ -112,7 +118,9 @@ class Tau2AsyncEvalTrainer(AsyncEvalPPOTrainer):
 
     def _additional_stats(self) -> dict[str, float]:
         # Real coverage is distinct from physical DP tail replication.
-        return dict(self._batch_counts)
+        stats = super()._additional_stats()
+        stats.update(self._batch_counts)
+        return stats
 
     def _init_dedicated_eval_rollout(self):
         super()._init_dedicated_eval_rollout()

@@ -9,12 +9,14 @@ import warnings
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from datasets import Dataset
 from omegaconf import OmegaConf
 from tau2.registry import registry
 
 from examples.tau2 import benchmark_variant
+from examples.tau2.api_reliability import quota_exit_guard, train_with_quota_exit
 from examples.tau2.contracts import (
     MAX_ASSISTANT_TOKENS,
     build_sampling_schedule,
@@ -28,7 +30,6 @@ from examples.tau2.contracts import (
 )
 from examples.tau2.utils import Tau2PPOConfig
 
-from areal import PPOTrainer
 from areal.api.cli_args import load_expr_config
 from areal.utils import logging
 
@@ -628,7 +629,11 @@ def main(
         }
         if train_ids & validation_ids:
             raise ValueError("Tau2 policy train/validation task split is not disjoint")
-    from examples.tau2.evaluation import Tau2AsyncEvalTrainer, Tau2PPOTrainer
+    from examples.tau2.evaluation import (
+        Tau2AsyncEvalTrainer,
+        Tau2PPOTrainer,
+        Tau2SyncTrainer,
+    )
 
     use_native_async_eval = config.algorithm in ("grpo", "ppo") or (
         config.algorithm == "sao"
@@ -640,7 +645,7 @@ def main(
         if config.algorithm == "ppo" or (matched_pool and config.algorithm == "sao")
         else Tau2AsyncEvalTrainer
         if use_native_async_eval
-        else PPOTrainer
+        else Tau2SyncTrainer
     )
     trainer_cls.validate_config(config)
     if options.check_config:
@@ -668,6 +673,12 @@ def main(
     # Convert econfig to dict for workflow kwargs
     from dataclasses import asdict
 
+    # Pass one shared path to every training/evaluation worker, independent of
+    # inherited environment. Recovery gets a fresh breaker, not a stale trip.
+    run_root = Path(os.environ.get("TAU2_RUN_ROOT", config.cluster.fileroot))
+    econfig._quota_breaker_state_path = str(
+        run_root.resolve() / f"quota-breaker-{uuid4().hex}.json"
+    )
     econfig_dict = asdict(econfig)
 
     # Build workflow kwargs
@@ -728,11 +739,14 @@ def main(
         max_completion_tokens=config.eval_gconfig.max_new_tokens,
     )
 
-    with trainer_cls(
-        config,
-        train_dataset=train_dataset,
-        valid_dataset=valid_dataset,
-    ) as trainer:
+    with (
+        quota_exit_guard(econfig),
+        trainer_cls(
+            config,
+            train_dataset=train_dataset,
+            valid_dataset=valid_dataset,
+        ) as trainer,
+    ):
         # Record the controller only after dataset/snapshot resolution and engine
         # initialization. Worker records independently describe loaded objects.
         from areal.utils.runtime_audit import write_runtime_audit
@@ -753,7 +767,8 @@ def main(
         dynamic_filter_fn = (
             "examples.tau2.train.group_filter" if config.dynamic_group_filter else None
         )
-        trainer.train(
+        train_with_quota_exit(
+            trainer,
             workflow="examples.tau2.agent.Tau2AgentWorkflow",
             workflow_kwargs=workflow_kwargs,
             eval_workflow="examples.tau2.agent.Tau2AgentWorkflow",

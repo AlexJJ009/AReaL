@@ -37,6 +37,7 @@ from areal.experimental.openai.types import (
     concat_string_interactions,
 )
 from areal.utils import logging, perf_tracer, stats_tracker
+from areal.utils.rollout_error import FatalRolloutError
 from areal.infra.utils.concurrent import get_executor
 from areal.utils.data import concat_padded_tensors, cycle_dataloader
 from areal.utils.perf_tracer import trace_perf, trace_session_event
@@ -349,9 +350,20 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
             if self._thread_exception is None:
                 self._thread_exception = exc
 
+    def abort(self, exc: Exception) -> None:
+        """Stop new submissions and wake callers waiting for a fatal run failure."""
+        self._set_thread_exception(exc)
+        self.runner.pause()
+        with self._result_cv:
+            self._result_cv.notify_all()
+        with self._input_cv:
+            self._input_cv.notify_all()
+
     def _check_thread_exception(self):
         """Check if any background thread has failed and raise if so."""
         with self._thread_exception_lock:
+            if isinstance(self._thread_exception, FatalRolloutError):
+                raise self._thread_exception
             if self._thread_exception is not None:
                 raise RuntimeError(
                     f"Background thread failed: {self._thread_exception}"
@@ -628,6 +640,7 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
 
                 self._result_cv.wait(timeout=remaining)
 
+            self._check_thread_exception()
             drained: list[TimedResult[TResult]] = list(self._pending_results.values())
             self._pending_results.clear()
 
@@ -673,6 +686,7 @@ class BatchTaskDispatcher(Generic[TInput, TResult]):
 
                 self._result_cv.wait(timeout=remaining)
 
+            self._check_thread_exception()
             found_result = self._pending_results.pop(task_id)
             self._active_task_ids.remove(task_id)
             self._active_task_inputs.pop(task_id, None)
@@ -1603,6 +1617,8 @@ class WorkflowExecutor:
                 await self._clear_rejected_trajectory(traj)
                 return None
 
+            except FatalRolloutError:
+                raise
             except Exception as exc:  # pragma: no cover - workflow execution errors
                 manager.on_rollout_rejected()
                 stats_tracker.get("rollout").scalar(rejected=1)
