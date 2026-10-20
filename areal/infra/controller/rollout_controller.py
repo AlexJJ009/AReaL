@@ -42,6 +42,7 @@ from areal.utils import logging, perf_tracer
 from areal.utils.dynamic_import import import_from_string
 from areal.utils.network import find_free_ports, format_hostport, gethostip
 from areal.utils.perf_tracer import trace_perf
+from areal.utils.rollout_error import FatalRolloutError
 
 from ..staleness_manager import StalenessManager
 from ..workflow_executor import (
@@ -931,6 +932,8 @@ class RolloutController:
                     logger.info(f"Finish but reject rollout. {self._rollout_stats()}")
                 return None
 
+            except FatalRolloutError:
+                raise
             except TimeoutError:
                 if task_id is not None:
                     with self._futures_lock:

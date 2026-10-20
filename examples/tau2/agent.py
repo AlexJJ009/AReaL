@@ -36,6 +36,11 @@ from tau2.user.user_simulator_base import HalfDuplexUser
 
 # Import utilities (also patches tau2.utils.llm_utils)
 from examples.tau2 import benchmark_variant, task_pack
+from examples.tau2.api_reliability import (
+    QuotaCircuitBreaker,
+    bounded_call,
+    classify_api_error,
+)
 from examples.tau2.contracts import bind_policy_request, strip_policy_reasoning
 from examples.tau2.critic_scenario import critic_scenario_metadata
 from examples.tau2.user_boundary import (
@@ -59,6 +64,7 @@ from areal.experimental.openai.types import (
     InteractionWithTokenLogpReward,
 )
 from areal.utils import logging
+from areal.utils.rollout_error import FatalRolloutError
 
 logger = logging.getLogger("Tau2Agent")
 _T = TypeVar("_T")
@@ -72,6 +78,16 @@ class Tau2InfrastructureError(RuntimeError):
 
 class Tau2ExportCardinalityError(RuntimeError):
     """Retryable proxy export shape failure before tensors enter training."""
+
+
+def _has_fatal_cause(exc: BaseException) -> bool:
+    seen: set[int] = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, FatalRolloutError):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
 
 
 def is_context_budget_error(exc: BaseException) -> bool:
@@ -335,7 +351,7 @@ class Tau2Runner:
         args.update(
             api_base=self.econfig.user_llm_base_url,
             api_key=self.user_api_key,
-            timeout=min(self.timeout, 120.0),
+            timeout=min(self.timeout, self.econfig.user_llm_request_timeout),
             num_retries=self.econfig.user_llm_num_retries,
         )
         return args
@@ -352,7 +368,7 @@ class Tau2Runner:
             args.update(
                 api_base=self.econfig.nl_judge_llm_base_url,
                 api_key=self.nl_judge_api_key,
-                timeout=min(self.timeout, 120.0),
+                timeout=min(self.timeout, self.econfig.nl_judge_llm_request_timeout),
                 num_retries=self.econfig.nl_judge_llm_num_retries,
             )
         else:
@@ -367,6 +383,9 @@ class Tau2Runner:
             if not model:
                 raise ValueError("User simulator model is required for NL evaluation")
             args = self._user_llm_args()
+            args["timeout"] = min(
+                self.timeout, self.econfig.nl_judge_llm_request_timeout
+            )
         tau2_nl_evaluator.DEFAULT_LLM_NL_ASSERTIONS = _litellm_user_model(model)
         tau2_nl_evaluator.DEFAULT_LLM_NL_ASSERTIONS_ARGS = args
 
@@ -394,7 +413,9 @@ class Tau2Runner:
                 }
                 self.nl_judge_calls.append(call)
                 try:
-                    response = generate(*positional, **kwargs)
+                    response = bounded_call(
+                        generate, *positional, config=self.econfig, **kwargs
+                    )
                 except BaseException as exc:
                     call.update(status="error", error_type=type(exc).__name__)
                     raise
@@ -458,6 +479,7 @@ class Tau2Runner:
                 instructions=str(task.user_scenario),
                 llm=_litellm_user_model(self.econfig.user_llm),
                 llm_args=self._user_llm_args(),
+                retry_config=self.econfig,
             )
             self.user_llm_requests = user.calls
         return agent, user
@@ -512,6 +534,8 @@ class Tau2Runner:
         try:
             simulation, elapsed = await asyncio.to_thread(run_simulation)
             run_info.messages = self.messages = simulation.messages
+        except FatalRolloutError:
+            raise
         except Exception as e:
             run_info.messages = self.messages = orchestrator.get_trajectory()
             run_info.error = str(e)
@@ -570,6 +594,8 @@ class Tau2Runner:
                 reward_info = benchmark_variant.apply_transfer_rule(
                     task, simulation.messages, reward_info, domain
                 )
+        except FatalRolloutError:
+            raise
         except Exception as e:
             # Official τ² scores inside the simulation run, so a scoring failure
             # replays the whole episode through the episode-level retry.
@@ -690,11 +716,21 @@ class Tau2AgentWorkflow:
 
     @staticmethod
     def should_retry_episode(exc: Exception) -> bool:
-        """Replay any failed attempt, as `tau2.runner.progress` does.
+        """Replay failed attempts except quota exhaustion and a fatal run failure.
 
         Cancellation is a BaseException and never reaches this check.
         """
-        return isinstance(exc, Exception)
+        return (
+            isinstance(exc, Exception)
+            and not isinstance(exc, FatalRolloutError)
+            and classify_api_error(exc) != "quota"
+            and not _has_fatal_cause(exc)
+        )
+
+    async def on_episode_rejected(self, exc: Exception) -> None:
+        """Count failed episodes, including members of a surviving group."""
+        if not _has_fatal_cause(exc):
+            await asyncio.to_thread(QuotaCircuitBreaker(self.econfig).record_rejection)
 
     @staticmethod
     def validate_exported_interactions(
@@ -748,7 +784,12 @@ class Tau2AgentWorkflow:
         # Override econfig from data if provided
         econfig = self.econfig
         if "econfig" in data:
-            econfig = Tau2EnvConfig(**data["econfig"])
+            econfig = Tau2EnvConfig(
+                **{
+                    **data["econfig"],
+                    "_quota_breaker_state_path": self.econfig._quota_breaker_state_path,
+                }
+            )
         data_domain = data.get("domain")
         if data_domain is not None:
             if econfig.domain != "mixed" and data_domain != econfig.domain:
@@ -757,6 +798,8 @@ class Tau2AgentWorkflow:
                     f"{econfig.domain}"
                 )
             econfig = replace(econfig, domain=str(data_domain))
+
+        await asyncio.to_thread(QuotaCircuitBreaker(econfig).check)
 
         # Override gen_args from data if provided
         gen_args = self.gen_args.copy()

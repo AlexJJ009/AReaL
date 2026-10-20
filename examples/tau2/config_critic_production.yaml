@@ -224,11 +224,11 @@ econfig:
   user_llm_base_url: https://api.deepseek.com
   user_llm: deepseek-flash
   user_llm_api_key_env: DEEPSEEK_API_KEY
-  user_llm_num_retries: 3
+  user_llm_num_retries: 8
   nl_judge_llm: deepseek-flash
   nl_judge_llm_base_url: https://api.deepseek.com
   nl_judge_llm_api_key_env: DEEPSEEK_API_KEY
-  nl_judge_llm_num_retries: 3
+  nl_judge_llm_num_retries: 8
   nl_judge_llm_args:
     temperature: 0.0
   # official = tau2-bench b7ea907; fixed = upstream fixes (ADR 0010).

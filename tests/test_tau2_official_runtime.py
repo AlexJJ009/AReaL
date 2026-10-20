@@ -141,7 +141,7 @@ def test_policy_transport_uses_episode_budget_without_changing_user_or_orchestra
     assert runner._agent_llm_args()["timeout"] == episode_timeout
     assert runner._agent_llm_args()["num_retries"] == 0
     assert runner._user_llm_args()["timeout"] == min(episode_timeout, 120.0)
-    assert runner._user_llm_args()["num_retries"] == 3
+    assert runner._user_llm_args()["num_retries"] == 8
     orchestrator = runner._get_orchestrator(object(), object(), object(), object())
     assert orchestrator["timeout"] == episode_timeout
     assert orchestrator["max_steps"] == 200
@@ -174,7 +174,7 @@ def test_nl_assertion_evaluator_reuses_qualified_user_route(monkeypatch):
         "api_base": "https://api.deepseek.com",
         "api_key": "deepseek-provider-key",
         "timeout": 120.0,
-        "num_retries": 3,
+        "num_retries": 8,
     }
 
 

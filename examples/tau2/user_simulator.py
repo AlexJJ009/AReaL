@@ -2,19 +2,36 @@
 
 import json
 import os
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 from uuid import uuid4
 
+import tau2.user.user_simulator as simulator_module
 from tau2.data_model.message import UserMessage
 from tau2.user.user_simulator import UserSimulator
 from tau2.user.user_simulator_base import UserState, ValidUserInputMessage
 from tau2.utils.llm_utils import to_litellm_messages
 
+from examples.tau2.api_reliability import bounded_call
+
 from areal.utils import logging
 
 logger = logging.getLogger("Tau2Agent")
+_RETRY_CONFIG = ContextVar("tau2_user_retry_config", default=None)
+_OFFICIAL_GENERATE = simulator_module.generate
+
+
+def _bounded_user_generate(*args, **kwargs):
+    config = _RETRY_CONFIG.get()
+    if config is None:
+        return _OFFICIAL_GENERATE(*args, **kwargs)
+    return bounded_call(_OFFICIAL_GENERATE, *args, config=config, **kwargs)
+
+
+# Only the simulator binding is replaced; policy generation stays untouched.
+simulator_module.generate = _bounded_user_generate
 
 
 class EmptyUserResponseError(ValueError):
@@ -24,12 +41,15 @@ class EmptyUserResponseError(ValueError):
 class RecordingUserSimulator(UserSimulator):
     """Official user simulator that keeps evidence of failed calls.
 
-    Failures are not retried here. As in `tau2 run`, the exception ends the
-    attempt and the episode-level retry replays the whole episode.
+    Provider retries wrap generate, after the official simulator updates state
+    once. Exhausted failures end the attempt without duplicating history.
     """
 
-    def __init__(self, *, debug_dir: Path, task_id: str, domain: str, **kwargs):
+    def __init__(
+        self, *, debug_dir: Path, task_id: str, domain: str, retry_config=None, **kwargs
+    ):
         super().__init__(**kwargs)
+        self.retry_config = retry_config
         self.debug_dir = debug_dir
         self.task_id = task_id
         self.domain = domain
@@ -44,12 +64,15 @@ class RecordingUserSimulator(UserSimulator):
             "status": "started",
         }
         self.calls.append(call)
+        token = _RETRY_CONFIG.set(self.retry_config)
         try:
             response = super()._generate_next_message(message, state)
         except Exception as exc:
             call.update(status="error", error_type=type(exc).__name__)
             self._record(state, error=exc)
             raise
+        finally:
+            _RETRY_CONFIG.reset(token)
         if not (response.has_content() or response.is_tool_call()):
             call.update(status="error", error_type="EmptyUserResponseError")
             path = self._record(state, response=response)
