@@ -37,6 +37,7 @@ from tau2.user.user_simulator_base import HalfDuplexUser
 # Import utilities (also patches tau2.utils.llm_utils)
 from examples.tau2 import benchmark_variant, task_pack
 from examples.tau2.contracts import bind_policy_request, strip_policy_reasoning
+from examples.tau2.critic_scenario import critic_scenario_metadata
 from examples.tau2.user_boundary import (
     RuleUserBoundaryDetector,
     UserBoundaryDetector,
@@ -625,6 +626,8 @@ class Tau2AgentWorkflow:
         user_td_beta: float | None = None,
         user_boundary_detector: str | UserBoundaryDetector | None = None,
         user_td_beta_flagged: float = 0.0,
+        critic_user_scenario: bool = False,
+        critic_tokenizer_path: str | None = None,
     ):
         if econfig is None:
             econfig = Tau2EnvConfig()
@@ -642,6 +645,17 @@ class Tau2AgentWorkflow:
         self.evaluation = evaluation
         self.trajectory_dir = trajectory_dir
         self.train_user_boundary_values = train_user_boundary_values
+        self.critic_user_scenario = critic_user_scenario
+        self.critic_tokenizer_path = critic_tokenizer_path
+        if critic_user_scenario:
+            if user_boundary_detector is not None:
+                raise ValueError(
+                    "critic_user_scenario and user_boundary_detector are mutually exclusive"
+                )
+            if not critic_tokenizer_path:
+                raise ValueError(
+                    "critic_user_scenario requires the actor tokenizer path"
+                )
         # Reuse the example configuration's validation for direct workflow use.
         validate_user_td_settings(
             algorithm="ppo",
@@ -773,6 +787,17 @@ class Tau2AgentWorkflow:
         else:
             task = _get_task(domain=domain, task_id=task_id, split=split)
             task_db = None
+
+        scenario_metadata = {}
+        if self.critic_user_scenario:
+            from areal.utils.hf_utils import load_hf_tokenizer
+
+            def build_scenario_metadata():
+                return critic_scenario_metadata(
+                    task, load_hf_tokenizer(self.critic_tokenizer_path)
+                )
+
+            scenario_metadata = await asyncio.to_thread(build_scenario_metadata)
 
         # The official pinned τ² orchestrator is synchronous. Tau2Runner executes
         # it in a worker thread and binds two independent OpenAI-compatible
@@ -908,5 +933,6 @@ class Tau2AgentWorkflow:
                 "failure_class": run_info.error_type,
                 **runner.llm_route_evidence(),
                 **boundary_metadata,
+                **scenario_metadata,
             },
         )

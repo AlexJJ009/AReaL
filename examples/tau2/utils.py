@@ -261,6 +261,8 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
     user_boundary_detector: str | None = None
     # In [0, 1], used only at flagged user boundaries; all others use beta=1.
     user_td_beta_flagged: float = 0.0
+    # PPO only: prepend the simulator scenario to critic inputs, never actor inputs.
+    critic_user_scenario: bool = False
     critic_head_lr: float | None = None
     # Episode attempts after the first, as `tau2 run --max-retries` (default 3).
     infra_retries: int = 3
@@ -301,6 +303,15 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
 
     def validate_user_td_split(self) -> None:
         """Validate opt-in user-boundary settings, including structured loading."""
+        if not isinstance(self.critic_user_scenario, bool):
+            raise ValueError("critic_user_scenario must be a bool")
+        if self.critic_user_scenario:
+            if self.algorithm != "ppo" or self.critic is None:
+                raise ValueError("critic_user_scenario requires PPO with a critic")
+            if self.user_boundary_detector is not None:
+                raise ValueError(
+                    "critic_user_scenario and user_boundary_detector are mutually exclusive"
+                )
         validate_user_td_settings(
             train_user_boundary_values=self.train_user_boundary_values,
             user_td_beta=self.user_td_beta,

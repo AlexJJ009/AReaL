@@ -314,6 +314,23 @@ class InteractionWithTokenLogpReward:
             [self.episode_metadata.get("failure_class") == "task_budget"],
             dtype=torch.bool,
         )
+        if "critic_prefix_input_ids" in self.episode_metadata:
+            prefix = self.episode_metadata["critic_prefix_input_ids"]
+            if (
+                not isinstance(prefix, list)
+                or not prefix
+                or not all(
+                    isinstance(token, int)
+                    and not isinstance(token, bool)
+                    and token >= 0
+                    for token in prefix
+                )
+            ):
+                raise ValueError("Invalid critic scenario prefix token IDs")
+            result["critic_prefix_input_ids"] = torch.tensor([prefix], dtype=torch.long)
+            result["critic_prefix_lengths"] = torch.tensor(
+                [len(prefix)], dtype=torch.long
+            )
         if "user_boundary_types" in self.episode_metadata:
             kinds = self.episode_metadata["user_boundary_types"]
             origin = result["action_origin_mask"][0].bool()

@@ -691,6 +691,11 @@ def main(
             user_boundary_detector=config.user_boundary_detector,
             user_td_beta_flagged=config.user_td_beta_flagged,
         )
+    if config.critic_user_scenario:
+        workflow_kwargs.update(
+            critic_user_scenario=True,
+            critic_tokenizer_path=config.tokenizer_path,
+        )
     from areal.utils.stats_logger import StatsLogger
 
     log_path = StatsLogger.get_log_path(
@@ -705,6 +710,8 @@ def main(
 
     # Evaluation sampling is explicit and shared across dev/test.
     eval_workflow_kwargs = workflow_kwargs.copy()
+    eval_workflow_kwargs.pop("critic_user_scenario", None)
+    eval_workflow_kwargs.pop("critic_tokenizer_path", None)
     eval_workflow_kwargs.pop("train_user_boundary_values", None)
     eval_workflow_kwargs.pop("user_td_beta", None)
     eval_workflow_kwargs.pop("user_boundary_detector", None)

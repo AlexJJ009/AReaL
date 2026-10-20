@@ -23,6 +23,8 @@ from areal.utils.seqpack import get_allocate_fn
 
 logger = logging.getLogger("DataUtils")
 
+CRITIC_PREFIX_KEYS = frozenset({"critic_prefix_input_ids", "critic_prefix_lengths"})
+
 
 NON_MODEL_FORWARD_METADATA_KEYS = frozenset(
     {
@@ -41,6 +43,7 @@ NON_MODEL_FORWARD_METADATA_KEYS = frozenset(
         "user_boundary_detector_ids",
         "user_boundary_gate_suppressed",
         "user_td_beta_flagged",
+        *CRITIC_PREFIX_KEYS,
     }
 )
 
@@ -374,7 +377,8 @@ def split_and_unpad_tensor(
         for key, value in result.items():
             if isinstance(value, torch.Tensor) and value.shape[0] == total:
                 splits = _unpad_splits(
-                    list(value.split(traj_group_sizes, dim=0)), traj_seqlens
+                    list(value.split(traj_group_sizes, dim=0)),
+                    None if key in CRITIC_PREFIX_KEYS else traj_seqlens,
                 )
                 for i, s in enumerate(splits):
                     split_result[i][key] = s
@@ -553,7 +557,8 @@ def pack_tensor_dict(data: dict[str, Any]) -> dict[str, Any]:
             continue
         # tensor and of shape [B, S, ...]
         if (
-            torch.is_tensor(value)
+            key not in CRITIC_PREFIX_KEYS
+            and torch.is_tensor(value)
             and value.ndim >= 2
             and value.shape[0] == bs
             and value.shape[1] == seq_len
@@ -771,8 +776,10 @@ def split_padded_tensor_dict_into_mb_list(
     for key, value in data.items():
         if key in multimodal_keys:
             continue
-        if key == "position_ids" or (
-            torch.is_tensor(value) and value.numel() == bs * max_seqlen
+        if (
+            key in CRITIC_PREFIX_KEYS
+            or key == "position_ids"
+            or (torch.is_tensor(value) and value.numel() == bs * max_seqlen)
         ):
             # NOTE: qwen2.5-vl position_ids.numel() == bs * max_seqlen * 3
             to_split[key] = value

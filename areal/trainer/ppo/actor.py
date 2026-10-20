@@ -10,6 +10,7 @@ from areal.api import TrainEngine
 from areal.api.cli_args import MicroBatchSpec, PPOActorConfig, RejectionSamplingConfig
 from areal.infra import TrainController
 from areal.infra.rpc.serialization import serialize_value
+from areal.trainer.ppo.critic_input import actor_input
 from areal.trainer.ppo.dis import DirectDISLoss
 from areal.trainer.ppo.gae import (
     _build_gae_lambda_context,
@@ -180,7 +181,7 @@ class PPOActor:
     def _compute_logp(self, data: dict[str, Any]) -> torch.Tensor | None:
         self.engine.eval()
         return self.engine.forward(
-            input_=data,
+            input_=actor_input(data),
             aggregate_fn=lambda xs: torch.cat(xs, dim=-1),
         )
 
@@ -478,6 +479,7 @@ class PPOActor:
         return batched_call(self._ppo_update, data, unpack=False)
 
     def _ppo_update(self, data: dict[str, Any]) -> dict[str, float]:
+        data = actor_input(data)
         attn_mask = data["attention_mask"]
         loss_mask = data["loss_mask"]
         reward_score = data["rewards"]
