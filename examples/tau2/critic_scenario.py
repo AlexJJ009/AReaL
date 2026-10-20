@@ -8,6 +8,16 @@ from tau2.data_model.tasks import StructuredUserInstructions, UserScenario
 
 from areal.utils import stats_tracker
 
+CRITIC_PROFILE_HEADER = (
+    "Privileged context for value estimation. The text below is the hidden scenario"
+    " given to the simulated user of this conversation: why the user is contacting "
+    "the assistant, what the user knows and does not know, and how the user has "
+    "been instructed to behave. The assistant never sees this text. Use it to "
+    "estimate how likely the conversation is to end with the task completed "
+    "correctly, and to tell whether later user messages follow or deviate from this"
+    " scenario."
+)
+
 
 def render_critic_profile(task: Any) -> str:
     """Validate the simulator's scenario field by field before calling its str().
@@ -50,6 +60,8 @@ def render_critic_profile(task: Any) -> str:
         raise ValueError("Missing user scenario instructions")
     return (
         "<|im_start|>system\n<user_profile>\n"
+        + CRITIC_PROFILE_HEADER
+        + "\n\n"
         + str(scenario)
         + "\n</user_profile><|im_end|>\n"
     )
