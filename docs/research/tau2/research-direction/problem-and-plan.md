@@ -285,6 +285,15 @@ DeepSeek 用户 U3 只占约 1%，测不出第 2 项，所以必须用多模拟�
 | eval         | 100 个 task（airline 20、retail 40、telecom 40）× 4 次，temperature 0；第 0 步和之后每 10 步一次                             | eval 的用户也是 261017，会消耗额度                                                                       |
 | 保存         | recover 和 checkpoint 都是每 10 步                                                                                           | seed 42                                                                                                  |
 
+**smoke 与启动（2026-10-20）**：pueue 648 是 smoke，带剧本的 critic，β=1，DeepSeek 261017 用户，代码快照 `src-e12482ef`。02:35–03:58 跑完 2 步训练和 1 次 eval，exit 0：
+
+- rejected 0，RateLimit 和额度报错都是 0，没有 OOM；`EmptyUserResponseError` 4 次，都在重试后成功。
+- 剧本前缀平均 623 token，最长 1827 token。
+- 第 1 步训练 reward 0.656。EV ≈ 0，因为 value head 初始权重为 0，这在预期之内。
+- 第 2 步之后的 eval 成功率：overall 44.0%（airline 21.25%、retail 54.4%、telecom 45.0%），pass^4 为 23.0%。这基本可以当作 DeepSeek 261017 用户下的起点；631 用 260910 时第 0 步是 41.5%，642 用豆包时是 31.0%。
+
+正式 run 是 pueue 649 `ppo-formal-privileged-beta1`，代码快照 `src-af9d6042`（剧本说明 + 额度熔断），03:58 启动，overrides 在 `formal-beta1-overrides.txt`。
+
 需要确认的地方：
 
 1. **value head 的 bias 初值 0.6205**，来自旧用户下 run 480 的训练成功率（927/1494）。DeepSeek 261017
