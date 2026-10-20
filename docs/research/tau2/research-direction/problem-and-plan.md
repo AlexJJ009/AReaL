@@ -147,7 +147,7 @@ reason_for_call / known_info / unknown_info / task_instructions / persona
 Hi, I want to return ...              ← 从这里起两边完全一样
 ```
 
-- 剧本取自 τ² 任务的 `user_scenario`（用户模拟器拿到的就是它，`examples/tau2/agent.py:457`）。**不放**
+- 剧本取自 τ² 任务的 `user_scenario`（用户模拟器拿到的就是它，`examples/tau2/agent.py:457`），真实样例见[附录 C](#附录-c剧本样例)。**不放**
   `evaluation_criteria`：没有 gold 动作序列、没有 NL 断言、没有 reward 规则。
 - actor 的输入、loss、GAE 都不变。critic 的训练目标仍是 $R$（$\lambda_{\text{critic}}=1$）。
 - 插在对话之前，critic 序列里此后所有位置统一偏移 $L$ 个 token，读 value 时减掉偏移即可与 actor 对齐。
@@ -205,6 +205,8 @@ critic 知道用户应该怎么做之后：
   378 s，631 的 DeepSeek 89 s）。代价：642（豆包，停在 step 24）不再是单变量对照，对照 run 0 要用 DeepSeek
   重跑；DeepSeek 用户在训练分布里 U3 只占约 1%，训练指标上方法能修的用户错误少，D2 仍靠 §5.2 的多模拟器数据测。user 和 judge
   是同一个模型。
+- **β 待定（2026-10-20 用户提出 0.5 是否过猛）**：(C) 成立时，任何 β 都不改变期望梯度，用户段的方差按 $\beta^2$
+  缩小（β=0.5 缩掉 75%）。(C) 不成立时，偏差和 $1-\beta$ 成正比；而训练早期 critic 不准，(C) 最难成立。候选做法是先跑 run 2（带剧本、β=1）：没有偏差风险，D1–D4 只看 critic，和 β 无关，都能测；诊断通过后再定 β。
 - **先跑 run 1。** 它是完整方法，先确认能跑通、critic 学会用剧本（D1）。run 0 和它只差 critic 的输入，单变量。critic 训练不依赖
   β（target 都是 $R$），所以 run 1 和 run 0 的 critic 可以直接比较诊断指标。
 - run 2、run 3 在 run 1 的诊断通过后再跑，补齐"剧本的作用"和"β 的作用"。
@@ -262,7 +264,33 @@ DeepSeek 用户 U3 只占约 1%，测不出第 2 项，所以必须用多模拟�
   与代码快照：`_artifacts/AReaL/codex-sao-math/tau2-ppo-privileged-deepseek-20261020/`（`src-e12482ef`，用户和
   judge 都是 DeepSeek 261017，用新 key），check-config 已通过。
 
-### 5.5 风险
+### 5.5 run 1 的设置（跑之前逐项确认）
+
+来源：`tau2-ppo-privileged-deepseek-20261020/check-config.log`（2026-10-20，代码快照 `src-e12482ef`）。
+
+| 类别 | 设置 | 备注 |
+| --- | --- | --- |
+| 模型 | actor、critic 都是 Qwen3-4B-Instruct-2507@`cdbee75f` | critic 从同一个 checkpoint 初始化，value head 权重 0、bias 0.6205 |
+| 算法 | PPO，$\gamma=1$，actor/critic $\lambda=1$，advantage 白化，clip 0.2，value clip 0.5 | decoupled loss，重算 logprob，`max_head_offpolicyness=2` |
+| 学习率 | actor 1e-6，critic 1e-5，常数，无 warmup，梯度裁剪 1.0 | critic 的 attention 不冻结 |
+| 数据 | 每步 128 条 episode，每个 task 每个 epoch 采 1 条，每个 epoch 747 个 task（airline 410、retail 337），20 个 epoch，共 120 步 | 训练集不含 telecom，telecom 只出现在 eval 里 |
+| 生成 | temperature 1.0，每轮最多 4096 token，上下文 32768，最多 200 步 | |
+| 用户 / judge | 火山 plan 上的 `deepseek-v4-1-flash-261017`，temperature 0，新 key | 重试 120 次是旧值，要等 646 改 |
+| 超时 | 每个 episode 1800 s，并发 rollout 24 | |
+| 方法 | `critic_user_scenario=true`，`train_user_boundary_values=true`，$\beta$ 待定（§5.1） | critic 的 `max_tokens_per_mb=36864`（§5.4） |
+| eval | 100 个 task（airline 20、retail 40、telecom 40）× 4 次，temperature 0；第 0 步和之后每 10 步一次 | eval 的用户也是 261017，会消耗额度 |
+| 保存 | recover 和 checkpoint 都是每 10 步 | seed 42 |
+
+需要确认的地方：
+
+1. **value head 的 bias 初值 0.6205**，来自旧用户下 run 480 的训练成功率（927/1494）。DeepSeek 261017 下的初始成功率还没测过。在线训练几步后会自己纠正，但前几步的 EV 会受影响。
+1. **用户 temperature 为 0。** 给定同一段历史，用户的回复几乎是确定的（provider 不保证完全确定）。所以 $V_{k+1}-U_k$
+   里"用户的运气"这部分会很小，β 降方差的空间也跟着变小。
+1. **eval 数字不能和 631/642 直接比**：用户模型不同。
+1. **每个 epoch 最后一步的 batch 特别大**：642 里最后一步是 428 条，其他步是 128 条。631 也是这样，是已有的行为，没有改。
+1. **β 的取值**：见 §5.1。
+
+### 5.6 风险
 
 - **critic 学不会用剧本**：D1、D2 会显示出来。
 - **剧本泄露答案**：剧本里有订单号、用户真实意图，比用户身份多很多信息。它不是 gold；用户 2026-10-20 批准剧本进
@@ -784,3 +812,99 @@ token 仍是 $\lambda=1$，critic 的误差只在用户边界进入 advantage。
 
 **分工与实验。** 带剧本的 critic 让 (C) 尽量成立，β 才只缩用户的运气；β 把这份运气从 agent 的分数里拿掉。2×2 实验（§5.1）里 run
 1（带剧本 + β=0.5）对 run 2（带剧本 + β=1），测的就是：在带剧本的 critic 下，β 降方差的收益是否大于 (C) 不完全成立带来的偏差。
+
+## 附录 C：剧本样例
+
+critic 前缀就是下面这样的文本。它和用户模拟器拿到的 `str(task.user_scenario)` 完全一样，外面套上 `<user_profile>`
+块。Token 数用 Qwen3 tokenizer 计算，包括首尾的特殊 token。训练 pack 里的剧本长度：airline 中位数 416、最长 1917；retail 中位数
+784、最长 1532。
+
+**官方 airline_0（150 token）**：
+
+```text
+<|im_start|>system
+<user_profile>
+Instructions:
+	Domain: airline
+	Reason for call:
+		You want to cancel reservation EHGLP3.
+
+		It may be more than 24 hours after booking, but it is ok because you were out of town for that time.
+	Known info:
+		You are Emma Kim.
+		Your user id is emma_kim_9957.
+	Task instructions:
+		If Agent tells you that cancellation is not possible,
+		mention that you were told that you didn't need to get insurance because your previous trip was booked with the same agency with insurance.
+
+		You don't want to cancel if you don't get a refund.
+</user_profile><|im_end|>
+```
+
+**pack airline_1147（416 token，airline 的中位长度）**：
+
+```text
+<|im_start|>system
+<user_profile>
+Instructions:
+	Domain: airline
+	Reason for call:
+		Upgrade cabin class from basic economy to economy for existing reservation
+	Known info:
+		user_id: anya_anderson_8585, reservation_id: 2KZLFK, current_cabin: basic_economy, desired_cabin: economy, payment_method: credit_card_4619444
+	Task instructions:
+		You are Anya Anderson, a gold member with user_id 'anya_anderson_8585'. You have a basic economy reservation (reservation ID: 2KZLFK) for a one-way trip from Boston (BOS) to Phoenix (PHX) on May 16, 2024, with a connection in Orlando (MCO). You want to upgrade to economy class for more comfort and flexibility.
+
+		Your task is to:
+		1. Contact the airline agent and provide your user_id when asked: 'anya_anderson_8585'
+		2. Tell the agent you want to upgrade your reservation from basic economy to economy class
+		3. Provide your reservation ID when asked: '2KZLFK'
+		4. When the agent explains the price difference, confirm that you understand and want to proceed
+		5. When asked for a payment method, provide one of your credit cards: 'credit_card_4619444'
+		6. Confirm the modification when the agent requests final confirmation
+		7. After the modification is completed, thank the agent
+
+		Important guidelines:
+		- Be clear that you want to upgrade the cabin class to economy, not change the flights
+		- You are willing to pay the price difference
+		- If asked about baggage, mention that you don't need to add any checked bags at this time
+		- Answer any verification questions truthfully based on your user information
+</user_profile><|im_end|>
+```
+
+**pack retail_492（784 token，retail 的中位长度）**：
+
+```text
+<|im_start|>system
+<user_profile>
+Instructions:
+	Domain: retail
+	Reason for call:
+		Customer wants to cancel all pending orders and update addresses across multiple orders
+	Known info:
+		{"name": {"first_name": "Iris", "last_name": "Cox"}, "user_id": "iris_cox_9643", "email": "iris.cox7821@example.com", "order_ids": ["#W3310761", "#W6417791", "#W7904368"], "order_items": [...5 个商品及其选项...]}
+	Task instructions:
+		**User Goals:**
+		1) Cancel ALL pending orders - customer has multiple orders with different statuses and wants to cancel every order that is still pending
+		2) Update shipping addresses on all three orders - customer recently moved and needs to change the delivery address on all their orders to the new address
+
+		**Details:**
+		- Customer has 3 orders total: 2 pending orders and 1 delivered order
+		- Customer wants to cancel both pending orders with reason 'no longer needed'
+		- Customer needs to update addresses on all 3 orders to new address: 742 Elm Street, Apt 5B, Seattle, WA 98101
+		- Customer will authenticate via email: iris.cox7821@example.com
+
+		**Constraints & Behavior:**
+		[Pattern A] User behavior: User mentions ALL goals at once in the first message - ...
+		- User will confirm each cancellation when prompted
+		- User will provide new address details when asked
+		- For address updates, user wants the same new address applied to all orders
+		Update the shipping addresses of my eligible pending orders before cancelling them. Do not change my default profile address.
+		Whenever you give an address, the country is USA (say exactly "USA").
+</user_profile><|im_end|>
+```
+
+（retail_492 的 `order_items` 和 `[Pattern A]` 那一行在这里有删节，critic 实际读到的是全文。）
+
+**要注意的一点**：pack 里的剧本比官方任务详细得多。它常常写出逐步的流程（"1. 提供 user_id……6. 确认修改"）、要用的参数（取消原因、新地址），有时还写了操作顺序（"先改地址再取消"）。这虽然不是 `evaluation_criteria`，但已经接近正确的动作序列，critic 几乎能直接判断 agent 每一步对不对。对 baseline 的无偏性没有影响（剧本在 episode 开始前就固定了），但论文里不能把它说成"只给了用户身份"，应该写成"给了用户模拟器拿到的全部剧本，其中可能含有接近解答的步骤"。
+
