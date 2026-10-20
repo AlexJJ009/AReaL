@@ -1165,6 +1165,12 @@ class WorkflowExecutor:
                 fields[tensor_key] = bool(tensor[row].item())
         if "user_td_beta" in traj:
             fields["user_td_beta"] = float(traj["user_td_beta"][row].item())
+        if "critic_prefix_input_ids" in traj:
+            prefix_len = int(traj["critic_prefix_lengths"][row].item())
+            fields["critic_prefix_lengths"] = prefix_len
+            fields["critic_prefix_input_ids"] = traj["critic_prefix_input_ids"][
+                row, :prefix_len
+            ].tolist()
         if "user_td_beta_flagged" in traj:
             from areal.trainer.ppo.user_boundary import USER_BOUNDARY_DETECTOR_NAMES
 

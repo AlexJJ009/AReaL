@@ -10,6 +10,7 @@ from areal.api import TrainEngine
 from areal.api.cli_args import MicroBatchSpec, PPOCriticConfig
 from areal.infra import TrainController
 from areal.infra.rpc.serialization import serialize_value
+from areal.trainer.ppo.critic_input import align_critic_values, prepare_critic_input
 from areal.trainer.ppo.stats import infer_token_denominator
 from areal.trainer.ppo.update import summarize_updates
 from areal.trainer.ppo.user_boundary import critic_loss_mask, log_user_boundary_stats
@@ -38,10 +39,11 @@ class PPOCritic:
 
     def _compute_values(self, data: dict[str, Any]) -> torch.Tensor:
         self.engine.eval()
-        return self.engine.forward(
-            input_=data,
+        values = self.engine.forward(
+            input_=prepare_critic_input(data),
             aggregate_fn=lambda xs: torch.cat([x.squeeze(-1) for x in xs], dim=-1),
         )
+        return align_critic_values(values, data)
 
     @trace_perf("ppo_critic.ppo_update", category="compute")
     @stats_tracker.scope_func_wrapper("ppo_critic")
@@ -75,6 +77,7 @@ class PPOCritic:
             raise NotImplementedError(
                 "critic grad-norm diagnostics require an engine grad_norm_batch method"
             )
+        data = prepare_critic_input(data)
         for key in ["rewards", "tot_rewards", "kl_rewards", "versions"]:
             data.pop(key, None)
         self.engine.train()
@@ -101,6 +104,17 @@ class PPOCritic:
     ) -> dict[str, float]:
         if log_boundaries:
             log_user_boundary_stats(data)
+        if "critic_prefix_lengths" in data and log_boundaries:
+            with stats_tracker.scope("critic_scenario"):
+                lengths = data["critic_prefix_lengths"].float()
+                stats_tracker.denominator(
+                    trajectories=torch.ones_like(lengths, dtype=torch.bool)
+                )
+                stats_tracker.stat(prefix_len=lengths, denominator="trajectories")
+                stats_tracker.denominator(
+                    missing_scenario=torch.zeros_like(lengths, dtype=torch.bool)
+                )
+        data = prepare_critic_input(data)
         ########## Logging code starts ##########
         scalars = dict(
             mask_no_eos_with_zero=self.config.mask_no_eos_with_zero,
