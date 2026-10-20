@@ -37,3 +37,11 @@ pueue 642（PPO + 全局 β=0.5，豆包 Turbo 用户）在 14:11 完成 step 24
 `ARK_PLAN_API_KEY`，sha256 前缀 `68b698be`）。旧的 `ark-plan.env` 保持不动。10-20
 的探测结果：`doubao-seed-2-1-turbo-260628` 和 `deepseek-v4-1-flash-261017`
 直接可用，返回的模型名与请求一致，不需要另外开通；按 260910 请求，返回的仍是 261017。新 run 读新的 key 文件；GPU run 仍需用户批准。
+
+## 修复：额度熔断（pueue 646，2026-10-20 合入 `500bd211`）
+
+- **分类**：响应体 `error.code` 为 `AccountQuotaExceeded` 或 `insufficient_quota` 时判为额度用完。另有一条保守的兜底规则：message 里写着 usage quota exceeded 时也判为额度用完；LiteLLM 有时会把 body 弄丢，这条规则就是为这种情况准备的。`AccountRateLimitExceeded` 和其他 429、5xx、超时都判为偶发错误。
+- **额度用完**：只请求一次，不在请求级重试，也不换新 session 重放 episode。所有 rollout 进程共用一个状态文件（加 `flock`），5 分钟内累计 3 次就锁定 fatal。trainer 每 0.1 s 检查一次这个文件，发现后停止派发，以退出码 86 退出，并在日志里写明额度重置时间。还没凑齐的 batch 不会被当成一步训练保存；之后从 recover checkpoint 续跑。
+- **偶发错误**：最多重试 8 次，退避 1、2、4、8、16、30、30、30 s，每个请求超时 120 s，总预算 600 s。仍然失败就照旧 reject 这个 episode，训练继续。
+- **新增统计**：`rollout/quota_errors`、`rollout/transient_api_errors`、`rollout/rejected_episodes`。
+- **还没验证过的**：真实 GPU 训练里的熔断和退出、跨节点挂载下 `flock` 是否可用。
