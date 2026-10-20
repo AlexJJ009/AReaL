@@ -244,26 +244,29 @@ DeepSeek 用户 U3 只占约 1%，测不出第 2 项，所以必须用多模拟�
 1. 配置开关放在 tau2 的配置类（`examples/tau2/utils.py`），不改 `areal/api/cli_args.py`。
 1. 序列长度：剧本一般几百 token，只加在 critic 侧；检查 critic 的 max length 和显存。
 
-**状态（2026-10-20）**：pueue 645（Codex）实现，Claude review 后合入 `codex/sao-math`（`6bf88fbd`，merge `e12482ef`）。
+**状态（2026-10-20）**：pueue 645（Codex）实现，Claude review 后合入
+`codex/sao-math`（`6bf88fbd`，merge `e12482ef`）。
 
 - 开关 `critic_user_scenario`，与 `user_boundary_detector` 互斥，可与 `user_td_beta` 同开。
 - 剧本作为独立的 system 消息放在 critic 序列**最前面**（不是 §4.1 示意的插进原 system 消息），每条样本只整体右移 $L_i$。critic
   前向后逐行丢掉前 $L_i$ 个读数，外部的 GAE、β、EV 都看原 shape。
-- 剧本逐字段从 `task.user_scenario` 取（persona 与 domain / reason_for_call / known_info / unknown_info /
-  task_instructions），不读 `Task` 的其他字段，多出字段直接报错。用真实 tokenizer 抽查：`<|im_start|>`、`<|im_end|>`
-  各编码成一个特殊 token。
+- 剧本逐字段从 `task.user_scenario` 取（persona 与 domain / reason_for_call / known_info /
+  unknown_info / task_instructions），不读 `Task` 的其他字段，多出字段直接报错。用真实 tokenizer
+  抽查：`<|im_start|>`、`<|im_end|>` 各编码成一个特殊 token。
 - 测试：先红后绿；故意错一位对齐时测试变红；CPU 主套件 372 passed。没有在 GPU 上跑过。
-- 长度：剧本 Airline 中位 416、最长 1917 token，Retail 中位 784、最长 1532 token。按 642 保存的 2991 条序列算，2 条加剧本后超过 critic
-  的 `max_tokens_per_mb=32768`，而单条超出时 micro-batch 分配会直接报错。所以 run 配置把 critic 的 `max_tokens_per_mb` 提到
-  36864（vLLM `max_model_len=32768`，加最长剧本也不超过 34685），actor 不变。
-- run 1 的 launcher 与代码快照：`_artifacts/AReaL/codex-sao-math/tau2-ppo-privileged-deepseek-20261020/`（`src-e12482ef`，用户和 judge
-  都是 DeepSeek 261017，用新 key），check-config 已通过。
+- 长度：剧本 Airline 中位 416、最长 1917 token，Retail 中位 784、最长 1532 token。按 642 保存的 2991 条序列算，2
+  条加剧本后超过 critic 的 `max_tokens_per_mb=32768`，而单条超出时 micro-batch 分配会直接报错。所以 run 配置把
+  critic 的 `max_tokens_per_mb` 提到 36864（vLLM `max_model_len=32768`，加最长剧本也不超过
+  34685），actor 不变。
+- run 1 的 launcher
+  与代码快照：`_artifacts/AReaL/codex-sao-math/tau2-ppo-privileged-deepseek-20261020/`（`src-e12482ef`，用户和
+  judge 都是 DeepSeek 261017，用新 key），check-config 已通过。
 
 ### 5.5 风险
 
 - **critic 学不会用剧本**：D1、D2 会显示出来。
-- **剧本泄露答案**：剧本里有订单号、用户真实意图，比用户身份多很多信息。它不是 gold；用户 2026-10-20 批准剧本进 critic，`evaluation_criteria`
-  仍不进。
+- **剧本泄露答案**：剧本里有订单号、用户真实意图，比用户身份多很多信息。它不是 gold；用户 2026-10-20 批准剧本进
+  critic，`evaluation_criteria` 仍不进。
 - **新颖性**：特权 critic 本身不新（Le Critique 给答案，SWEET-RL 给参考答案，asymmetric actor-critic
   给完整状态）。差别在于给的是用户剧本、目的是把用户的作用和 agent 的作用分到不同的段；能不能站住取决于 D2、D3。2026-10-19 的定向检索（约 5
   次检索，打开了下列页面）没有找到"critic 看用户隐藏剧本、并在用户回复边界上分开用户偏离和 agent 错误"的工作，这是"没找到"，不是"不存在"。最近的邻居：
