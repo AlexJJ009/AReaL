@@ -272,18 +272,18 @@ DeepSeek 用户 U3 只占约 1%，测不出第 2 项，所以必须用多模拟�
 来源：`tau2-ppo-privileged-deepseek-20261020/check-config.log`（2026-10-20，代码快照
 `src-e12482ef`）。
 
-| 类别         | 设置                                                                                                                         | 备注                                                              |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| 模型         | actor、critic 都是 Qwen3-4B-Instruct-2507@`cdbee75f`                                                                         | critic 从同一个 checkpoint 初始化，value head 权重 0、bias 0.6205 |
-| 算法         | PPO，$\gamma=1$，actor/critic $\lambda=1$，advantage 白化，clip 0.2，value clip 0.5                                          | decoupled loss，重算 logprob，`max_head_offpolicyness=2`          |
-| 学习率       | actor 1e-6，critic 1e-5，常数，无 warmup，梯度裁剪 1.0                                                                       | critic 的 attention 不冻结                                        |
-| 数据         | 每步 128 条 episode，每个 task 每个 epoch 采 1 条，每个 epoch 747 个 task（airline 410、retail 337），20 个 epoch，共 120 步 | 训练集不含 telecom，telecom 只出现在 eval 里                      |
-| 生成         | temperature 1.0，每轮最多 4096 token，上下文 32768，最多 200 步                                                              |                                                                   |
+| 类别         | 设置                                                                                                                         | 备注                                                                                                     |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 模型         | actor、critic 都是 Qwen3-4B-Instruct-2507@`cdbee75f`                                                                         | critic 从同一个 checkpoint 初始化，value head 权重 0、bias 0.6205                                        |
+| 算法         | PPO，$\gamma=1$，actor/critic $\lambda=1$，advantage 白化，clip 0.2，value clip 0.5                                          | decoupled loss，重算 logprob，`max_head_offpolicyness=2`                                                 |
+| 学习率       | actor 1e-6，critic 1e-5，常数，无 warmup，梯度裁剪 1.0                                                                       | critic 的 attention 不冻结                                                                               |
+| 数据         | 每步 128 条 episode，每个 task 每个 epoch 采 1 条，每个 epoch 747 个 task（airline 410、retail 337），20 个 epoch，共 120 步 | 训练集不含 telecom，telecom 只出现在 eval 里                                                             |
+| 生成         | temperature 1.0，每轮最多 4096 token，上下文 32768，最多 200 步                                                              |                                                                                                          |
 | 用户 / judge | 火山 plan 上的 `deepseek-v4-1-flash-261017`，temperature 0，新 key                                                           | 646 合入后：偶发错误重试 8 次、每个请求超时 120 s、总预算 600 s；额度用完 5 分钟内 3 次就熔断，退出码 86 |
-| 超时         | 每个 episode 1800 s，并发 rollout 24                                                                                         |                                                                   |
-| 方法         | `critic_user_scenario=true`，`train_user_boundary_values=true`，$\beta$ 待定（§5.1）                                         | critic 的 `max_tokens_per_mb=36864`（§5.4）                       |
-| eval         | 100 个 task（airline 20、retail 40、telecom 40）× 4 次，temperature 0；第 0 步和之后每 10 步一次                             | eval 的用户也是 261017，会消耗额度                                |
-| 保存         | recover 和 checkpoint 都是每 10 步                                                                                           | seed 42                                                           |
+| 超时         | 每个 episode 1800 s，并发 rollout 24                                                                                         |                                                                                                          |
+| 方法         | `critic_user_scenario=true`，`train_user_boundary_values=true`，$\beta$ 待定（§5.1）                                         | critic 的 `max_tokens_per_mb=36864`（§5.4）                                                              |
+| eval         | 100 个 task（airline 20、retail 40、telecom 40）× 4 次，temperature 0；第 0 步和之后每 10 步一次                             | eval 的用户也是 261017，会消耗额度                                                                       |
+| 保存         | recover 和 checkpoint 都是每 10 步                                                                                           | seed 42                                                                                                  |
 
 需要确认的地方：
 
@@ -292,11 +292,14 @@ DeepSeek 用户 U3 只占约 1%，测不出第 2 项，所以必须用多模拟�
 1. **用户 temperature 为 0。** 给定同一段历史，用户的回复几乎是确定的（provider 不保证完全确定）。所以 $V_{k+1}-U_k$
    里"用户的运气"这部分会很小，β 降方差的空间也跟着变小。
 1. **eval 数字不能和 631/642 直接比**：用户模型不同。
-1. **每个 epoch 最后一步的 batch 特别大**：642 里最后一步是 428 条或 212 条，其他步是 128 条。647 查明这是有意为之的复制，不是 bug。训练用 4 个 DP rank，每个 rank
-   要分到同样多的组，所以 `repeat_groups_for_dispatch` 把 $G$ 组整体复制 $r=4/\gcd(G,4)$ 次：107 组复制 4 次得 428 条，106 组复制 2 次得 212 条。复制的是同一份
-   rollout，不会再调用模拟器。token-mean loss 的分子和分母同比例放大，所以每个 task 的权重不变，optimizer 也只走一步。唯一的差别是无偏白化的分母变成 $rN-1$，带来约
-   2–3 ppm 的尺度变化，可以忽略。代价是这一步的更新计算量是平时的 2–4 倍。前 4 个 epoch 里，每个被训练到的 task 都只出现一次；第 3、4 个 epoch 各有 1 个 task
-   连续失败两次，按 `max_skipped_tasks_per_epoch=2` 被跳过。642 第 18、24 步慢（rollout 阶段约 2 小时），主要是 controller 超时后重放造成的，不是复制造成的。报告：
+1. **每个 epoch 最后一步的 batch 特别大**：642 里最后一步是 428 条或 212 条，其他步是 128 条。647 查明这是有意为之的复制，不是
+   bug。训练用 4 个 DP rank，每个 rank 要分到同样多的组，所以 `repeat_groups_for_dispatch` 把 $G$ 组整体复制
+   $r=4/\gcd(G,4)$ 次：107 组复制 4 次得 428 条，106 组复制 2 次得 212 条。复制的是同一份
+   rollout，不会再调用模拟器。token-mean loss 的分子和分母同比例放大，所以每个 task 的权重不变，optimizer
+   也只走一步。唯一的差别是无偏白化的分母变成 $rN-1$，带来约 2–3 ppm 的尺度变化，可以忽略。代价是这一步的更新计算量是平时的 2–4 倍。前 4 个
+   epoch 里，每个被训练到的 task 都只出现一次；第 3、4 个 epoch 各有 1 个 task 连续失败两次，按
+   `max_skipped_tasks_per_epoch=2` 被跳过。642 第 18、24 步慢（rollout 阶段约 2 小时），主要是 controller
+   超时后重放造成的，不是复制造成的。报告：
    `_artifacts/AReaL/codex-sao-math/tau2-critic-header-batch-20261020/REPORT.md`。
 1. **β 的取值**：见 §5.1。
 
