@@ -196,16 +196,17 @@ critic 知道用户应该怎么做之后：
 
 同一个用户、同一个 judge（都是火山 plan 上的 `deepseek-v4-1-flash-261017`）、同一套配置，2×2：
 
-|             | 普通 critic              | 带剧本的 critic                 |
-| ----------- | ------------------------ | ------------------------------- |
-| $\beta=0.5$ | 新 run 0（对照）         | **新 run 1**（完整方法）        |
-| $\beta=1$   | 新 run 3（PPO 基线）     | 新 run 2（只有更好的 baseline） |
+|             | 普通 critic          | 带剧本的 critic                 |
+| ----------- | -------------------- | ------------------------------- |
+| $\beta=0.5$ | 新 run 0（对照）     | **新 run 1**（完整方法）        |
+| $\beta=1$   | 新 run 3（PPO 基线） | 新 run 2（只有更好的 baseline） |
 
-- **用户模型（用户 2026-10-20 决定）**：先用 DeepSeek 261017 跑通，它比豆包 Turbo 快、便宜（642 的豆包 rollout 中位数 378 s，631 的
-  DeepSeek 89 s）。代价：642（豆包，停在 step 24）不再是单变量对照，对照 run 0 要用 DeepSeek 重跑；DeepSeek 用户在训练分布里 U3
-  只占约 1%，训练指标上方法能修的用户错误少，D2 仍靠 §5.2 的多模拟器数据测。user 和 judge 是同一个模型。
-- **先跑 run 1。** 它是完整方法，先确认能跑通、critic 学会用剧本（D1）。run 0 和它只差 critic 的输入，单变量。critic 训练不依赖 β（target 都是 $R$），所以
-  run 1 和 run 0 的 critic 可以直接比较诊断指标。
+- **用户模型（用户 2026-10-20 决定）**：先用 DeepSeek 261017 跑通，它比豆包 Turbo 快、便宜（642 的豆包 rollout 中位数
+  378 s，631 的 DeepSeek 89 s）。代价：642（豆包，停在 step 24）不再是单变量对照，对照 run 0 要用 DeepSeek
+  重跑；DeepSeek 用户在训练分布里 U3 只占约 1%，训练指标上方法能修的用户错误少，D2 仍靠 §5.2 的多模拟器数据测。user 和 judge
+  是同一个模型。
+- **先跑 run 1。** 它是完整方法，先确认能跑通、critic 学会用剧本（D1）。run 0 和它只差 critic 的输入，单变量。critic 训练不依赖
+  β（target 都是 $R$），所以 run 1 和 run 0 的 critic 可以直接比较诊断指标。
 - run 2、run 3 在 run 1 的诊断通过后再跑，补齐"剧本的作用"和"β 的作用"。
 - 每个 run 都需要用户批准 GPU；gpu8 只有一台，run 串行。
 
@@ -286,7 +287,7 @@ $\tau$ 取全体平均，样本少的 persona 向全局收缩。这是逆方差�
 | 10-18 | 加截断 + bootstrap，检测器可替换                                          | U1 能用 prompt 修掉，U3 修不掉、β 管不到                                                                            |
 | 10-19 | 放弃检测器路线（规则、judge），保留作消融                                 | 643：judge 在训练分布上把 12.8% 的 agent 失败判给用户；规则只认 U1；老师判断做不通                                  |
 | 10-19 | **新方法：给 critic 看用户剧本 + 用户段乘 β；先跑 run 1 并用 D1–D4 诊断** | 旧方法失败的共同原因是 critic 不知道真相；剧本在开始前确定，作为 baseline 输入无偏；不需要 judge 和 domain 专属分类 |
-| 10-20 | 剧本进 critic（不含 `evaluation_criteria`）；用户模型先用 DeepSeek 261017 | 用户批准剧本作 critic 输入；DeepSeek 比豆包快、便宜，先跑通；对照 run 0 用同一用户重跑 |
+| 10-20 | 剧本进 critic（不含 `evaluation_criteria`）；用户模型先用 DeepSeek 261017 | 用户批准剧本作 critic 输入；DeepSeek 比豆包快、便宜，先跑通；对照 run 0 用同一用户重跑                              |
 | 10-19 | critic 不做离线预训练，直接在 PPO 中训练                                  | $\lambda=1$ 时 critic 只是 baseline；离线 critic-only 的 EV 一直在 0.1–0.2 以下，PPO 中可到 0.3 以上                |
 
 ## 附录 A：一段对话在 token 序列上的样子，以及 critic 在哪里读数
