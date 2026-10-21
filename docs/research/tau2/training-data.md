@@ -436,3 +436,22 @@ Qwen3-4B-2507 在官方 `telecom_full`（2,285 题 × 4，D1）上 mean@4 19.6%�
   TELECOM_REVIEW2；每题对照 4 条 D1 轨迹（共 996 条），失败主因全部为 agent。逐个删除 gold 动作重放（共 1,263 次）：只有 2
   题里 删掉一次冗余的 `reboot_device` 仍得 1 分（另一次重启覆盖了它），其余删除全部得 0。Claude 随机复核 3 题，结论一致。逐题结论在
   `tau2-telecom-pack-20261018/review/out/r1_s{0,1,2}.jsonl`。pack 可用于训练。
+
+## 8 Telecom 训练题对 test 的覆盖（2026-10-21，pueue 667）
+
+Codex 按题目结构（问题类别、注入故障集合、persona、必要操作、充值/漫游/缴费/转人工）给官方 Telecom 分类，逐题比较 test 40
+题和 §7 的 249 题。产物：`_artifacts/AReaL/codex-sao-math/tau2-train-coverage-20261021/telecom/`（`REPORT.md`、
+`per_test_coverage.json`、`structural_features.json`）。
+
+- **完整类型（全部故障组合 + persona + 操作）覆盖为 0/40**，而且在整个 `telecom_full` 里每个 test 的完整类型只出现在 test
+  自己身上，任何不与 test 同状态的训练集都做不到。这个口径太严，不用来决策。
+- **按单个故障看，test 的 17 种故障里训练集缺 1 种：流量超额（`data_cap_exceeded`，修法是 `refuel_data(2.0)`）**，test 有
+  12 / 40 题需要充值，训练 0 题。原因是 D1 排除了全部"愿意充 2 GB / 评分要求恰好 2 GB"的歧义题，而带流量超额的题都属于这一类。
+  不与 test 同状态的流量超额题有 1,108 道，D1 下 0/1/2/3/4 次通过为 942/145/17/4/0（通过率是在歧义指令下测的）。
+- 训练偏 MMS（212 / 249），test 偏无服务（S 15、D 9、M 16）；无服务相关的故障训练里很少：SIM PIN 锁定 5（test 11）、合约到期
+  5（test 6）、欠费停机 3（test 6）。官方池里这几类本来就只有 10–15 道。
+- Codex 的扩展重选方案（`proposed_task_ids.json`，仍 249 题，换 38 题，含 7 道 0/4、20 道 4/4）把"同 persona、同商业动作、故障只差一项"的近邻覆盖从
+  14/40 提到 25/40，但补不了充值。新换入的题没有逐题审。
+- brief 里"训练题不能与 test 共用用户"的规则来自 Airline/Retail，对 Telecom 不适用：官方 Telecom 全部任务用同一个客户
+  C1001 / L1002。Telecom 仍按 D1 的"完整初始状态不重合"去重。Claude 用 `structural_features.json` 复算了训练和 test
+  的逐故障计数，与报告一致。
