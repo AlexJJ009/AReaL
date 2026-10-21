@@ -237,6 +237,22 @@ def write_summary(tm, evs, out, steps=(0, 120), ev_window=(101, 120)):
             ev = [v for s, v in evs[r] if lo <= s <= hi]
             row.append(f"{sum(ev) / len(ev):.3f}")
             w.writerow(row)
+        # Change from the first to the last step, paired by task.
+        s0, s1 = steps
+        w.writerow([])
+        w.writerow(["run"] + [f"{g} delta {s0}->{s1} [95% CI]" for g, _ in groups])
+        for r in ALGO_COLOR:
+            row = [r]
+            for _, doms in groups:
+                a = {(d, t): v for d in doms for t, v in tm[(r, s0, d)].items()}
+                b = {(d, t): v for d in doms for t, v in tm[(r, s1, d)].items()}
+                diff = [b[k] - a[k] for k in sorted(a.keys() & b.keys())]
+                ci_lo, ci_hi = boot_ci(diff, n=20000)
+                row.append(
+                    f"{100 * sum(diff) / len(diff):+.1f} "
+                    f"[{100 * ci_lo:+.1f}, {100 * ci_hi:+.1f}]"
+                )
+            w.writerow(row)
     print("wrote", path)
 
 
