@@ -366,6 +366,7 @@ $\tau$ 取全体平均，样本少的 persona 向全局收缩。这是逆方差�
 | 10-19 | **新方法：给 critic 看用户剧本 + 用户段乘 β；先跑 run 1 并用 D1–D4 诊断** | 旧方法失败的共同原因是 critic 不知道真相；剧本在开始前确定，作为 baseline 输入无偏；不需要 judge 和 domain 专属分类 |
 | 10-20 | 剧本进 critic（不含 `evaluation_criteria`）；用户模型先用 DeepSeek 261017 | 用户批准剧本作 critic 输入；DeepSeek 比豆包快、便宜，先跑通；对照 run 0 用同一用户重跑                              |
 | 10-19 | critic 不做离线预训练，直接在 PPO 中训练                                  | $\lambda=1$ 时 critic 只是 baseline；离线 critic-only 的 EV 一直在 0.1–0.2 以下，PPO 中可到 0.3 以上                |
+| 10-20 | 2×2 改用自部署 Qwen3.5-4B 用户（GPU 7，non-thinking，T=0）从头跑，先跑 run 3；judge 仍用火山 261017；在线 eval 用 Qwen 用户，DeepSeek 只评第 0/60/120 步；每个 epoch 尾步改成最少补齐（pueue 652），不改 `prox_logp_method` | 无额度和限流问题；Qwen 用户的用户致败多（U3 为主），方法有东西可分；649 的训练计算 40% 花在尾步的整批复制上 |
 
 ## 附录 A：一段对话在 token 序列上的样子，以及 critic 在哪里读数
 
