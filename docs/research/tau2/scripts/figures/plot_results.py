@@ -253,6 +253,7 @@ def write_summary(tm, evs, out, steps=(0, 120), ev_window=(101, 120)):
                     f"[{100 * ci_lo:+.1f}, {100 * ci_hi:+.1f}]"
                 )
             w.writerow(row)
+
         # PRIV minus PPO, paired by task: at each end, and difference in change.
         def paired(doms, f):
             a = {k: f(PRIV, k) for k in keys(doms)}
