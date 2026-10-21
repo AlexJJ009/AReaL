@@ -8,8 +8,10 @@ import argparse
 import json
 import math
 import os
+import subprocess
 import sys
 from collections import defaultdict
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
@@ -33,10 +35,13 @@ from examples.tau2.official_runner import (
 )
 from examples.tau2.train import get_tau2_dataset, validate_tau2_recipe
 from examples.tau2.utils import Tau2PPOConfig, nl_judge_metadata
+from scripts.tau2.checkpoint_eval import wait_http
 
 from areal.api.alloc_mode import ModelAllocation
 from areal.api.cli_args import SGLangConfig, load_expr_config
+from areal.api.io_struct import LocalInfServerInfo
 from areal.engine import RemoteSGLangEngine
+from areal.engine.sglang_remote import SGLangBackend
 from areal.infra import LocalScheduler
 from areal.utils import logging
 from areal.utils.printing import tabulate_stats
@@ -84,11 +89,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--check-config", action="store_true")
     parser.add_argument(
+        "--policy-port", type=int, help="Explicit single-GPU policy HTTP port."
+    )
+    parser.add_argument(
+        "--policy-nccl-port",
+        type=int,
+        help="Explicit policy NCCL port; requires --policy-port.",
+    )
+    parser.add_argument(
         "overrides",
         nargs="*",
         help="Hydra overrides applied to --config, e.g. econfig.user_llm=<model>.",
     )
     args = parser.parse_args(argv)
+    ports = (args.policy_port, args.policy_nccl_port)
+    if any(p is not None for p in ports) and (
+        any(p is None or not 1024 <= p <= 65535 for p in ports) or ports[0] == ports[1]
+    ):
+        parser.error(
+            "Supply distinct --policy-port and --policy-nccl-port in 1024..65535"
+        )
     if args.task_set == "ppo" and (
         args.repeats != 4
         or args.temperature != 0
@@ -487,6 +507,38 @@ def collect_eval_records(
     return records
 
 
+@contextmanager
+def policy_server(
+    server_args: dict[str, Any],
+    *,
+    port: int | None,
+    nccl_port: int | None,
+    timeout: float,
+):
+    """Own an explicitly addressed server; ordinary evaluations keep native launch."""
+    if port is None:
+        yield None
+        return
+    server_args = {
+        **server_args,
+        "host": "127.0.0.1",
+        "port": port,
+        "nccl_port": nccl_port,
+    }
+    process = SGLangBackend().launch_server(server_args)
+    try:
+        wait_http(f"http://127.0.0.1:{port}/health", process, timeout=timeout)
+        yield [LocalInfServerInfo(host="127.0.0.1", port=port, process=None)]
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+
 def run(argv: list[str]) -> dict[str, Any]:
     args = parse_args(argv)
     raw_config, config_file = load_eval_config(args)
@@ -535,6 +587,9 @@ def run(argv: list[str]) -> dict[str, Any]:
         "repeats": args.repeats,
         "planned_episodes": len(rows),
         "max_concurrent_episodes": max_inflight,
+        "policy_port": args.policy_port,
+        "policy_nccl_port": args.policy_nccl_port,
+        "areal_port_range": os.environ.get("AREAL_PORT_RANGE"),
         "dispatch_mode": "rolling",
         "global_seed": config.seed,
         "request_seed": config.eval_gconfig.seed,
@@ -570,6 +625,14 @@ def run(argv: list[str]) -> dict[str, Any]:
     alloc = ModelAllocation.from_str(
         config.evaluation_rollout.backend, name="eval-rollout"
     )
+    if args.policy_port is not None and (
+        alloc.parallel.dp_size != 1
+        or alloc.parallel.tp_size != 1
+        or alloc.parallel.pp_size != 1
+    ):
+        raise ValueError(
+            "Explicit policy ports require a single-GPU evaluation backend"
+        )
     server_args = SGLangConfig.build_args(
         sglang_config=config.sglang,
         tp_size=alloc.parallel.tp_size,
@@ -577,19 +640,28 @@ def run(argv: list[str]) -> dict[str, Any]:
         base_gpu_id=0,
     )
     controller = RemoteSGLangEngine.as_controller(config.evaluation_rollout, scheduler)
-    try:
-        controller.initialize(role="eval-rollout", server_args=server_args)
-        controller.start_proxy()
-        records = collect_eval_records(
-            controller,
-            rows,
-            workflow_kwargs=workflow_kwargs,
-            max_inflight=max_inflight,
-            output_root=output_root,
-            repeats=args.repeats,
-        )
-    finally:
-        controller.destroy()
+    with policy_server(
+        server_args,
+        port=args.policy_port,
+        nccl_port=args.policy_nccl_port,
+        timeout=config.evaluation_rollout.setup_timeout,
+    ) as infos:
+        try:
+            kwargs = {} if infos is None else {"server_infos": infos}
+            controller.initialize(
+                role="eval-rollout", server_args=server_args, **kwargs
+            )
+            controller.start_proxy()
+            records = collect_eval_records(
+                controller,
+                rows,
+                workflow_kwargs=workflow_kwargs,
+                max_inflight=max_inflight,
+                output_root=output_root,
+                repeats=args.repeats,
+            )
+        finally:
+            controller.destroy()
     summary = aggregate(records, planned=len(rows), repeats=args.repeats)
     summary["user_llm_usage"] = summarize_user_usage(
         output_root / "user-usage.jsonl", records

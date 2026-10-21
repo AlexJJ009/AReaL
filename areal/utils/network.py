@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import random
 import socket
 from ipaddress import ip_address
@@ -113,7 +114,7 @@ def split_hostport(addr: str) -> tuple[str, int]:
 
 def find_free_ports(
     count: int,
-    port_range: tuple = (10000, 32767),
+    port_range: tuple | None = None,
     exclude_ports: set[int] | None = None,
 ) -> list[int]:
     """
@@ -122,7 +123,9 @@ def find_free_ports(
     Args:
         count: Number of free ports to find
         port_range: Tuple of (min_port, max_port) to search within.
-            Defaults to (10000, 32767) to avoid the OS ephemeral range
+            Defaults to AREAL_PORT_RANGE (inclusive min:max), or (10000, 32767),
+            to allow concurrent standalone evaluations to use disjoint pools.
+            The ordinary default avoids the OS ephemeral range
             (typically 32768-60999 on Linux) which causes TOCTOU collisions.
         exclude_ports: Set of ports to exclude from search
 
@@ -132,6 +135,20 @@ def find_free_ports(
     Raises:
         ValueError: If unable to find requested number of free ports
     """
+    if port_range is None:
+        pool = os.environ.get("AREAL_PORT_RANGE")
+        if pool is None:
+            port_range = (10000, 32767)
+        else:
+            try:
+                low, high = map(int, pool.split(":"))
+                if not 1 <= low <= high <= 65535:
+                    raise ValueError
+            except ValueError as exc:
+                raise ValueError(
+                    "AREAL_PORT_RANGE must be inclusive min:max in 1..65535"
+                ) from exc
+            port_range = (low, high)
     if exclude_ports is None:
         exclude_ports = set()
 
