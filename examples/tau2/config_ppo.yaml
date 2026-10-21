@@ -7,6 +7,7 @@ defaults:
 
 experiment_name: tau2-ppo
 algorithm: ppo
+offline_eval_only: false
 enable_offload: true
 total_train_epochs: 8
 num_critic_only_steps: 0

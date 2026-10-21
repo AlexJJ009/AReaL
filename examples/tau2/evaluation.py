@@ -29,6 +29,47 @@ from areal.trainer.rollout_batch import (
 from areal.utils.stats_logger import StatsLogger
 
 
+def checkpoint_eval_stats(official: dict, repeats: int) -> dict:
+    """Shared online/offline checkpoint metrics from official episode results."""
+    domains = {
+        domain: {
+            "episodes": result["evaluated_episodes"],
+            "reward_mean": result["avg_reward"],
+            "infra_excluded_episodes": result["infra_excluded_episodes"],
+            "context_limit_episodes": result["context_limit_episodes"],
+            "policy_free_episodes": result["policy_free_episodes"],
+            "pass_hat_k": result["pass_hat_k"],
+            "mean_at_k": result["mean_at_k"],
+        }
+        for domain, result in official["by_domain"].items()
+    }
+    metrics = {}
+    for domain, result in domains.items():
+        for key in (
+            "episodes",
+            "reward_mean",
+            "infra_excluded_episodes",
+            "context_limit_episodes",
+            "policy_free_episodes",
+        ):
+            metrics[f"eval/{domain}/{key}"] = result[key]
+        metrics[f"eval/{domain}/mean@{repeats}"] = result["mean_at_k"]
+        for k, value in result["pass_hat_k"].items():
+            metrics[f"eval/{domain}/pass^{k}"] = value
+    overall = official["overall"]
+    metrics["eval/episodes"] = overall["evaluated_episodes"]
+    metrics["eval/reward_mean"] = overall["avg_reward"]
+    metrics["eval/infra_excluded_episodes"] = overall["infra_excluded_episodes"]
+    metrics["eval/context_limit_episodes"] = overall["context_limit_episodes"]
+    metrics[f"eval/mean@{repeats}"] = overall["mean_at_k"]
+    for k, value in overall["pass_hat_k"].items():
+        metrics[f"eval/pass^{k}"] = value
+    for k, tasks in overall["pass_hat_k_tasks"].items():
+        if tasks < overall["tasks"]:
+            metrics[f"eval/pass^{k}_tasks"] = tasks
+    return {"domains": domains, "metrics": metrics}
+
+
 class Tau2SyncTrainer(Tau2ApiStatsMixin, PPOTrainer):
     """Synchronous recipe with the same run-wide API failure metrics."""
 
@@ -39,9 +80,13 @@ class Tau2AsyncEvalTrainer(Tau2ApiStatsMixin, AsyncEvalPPOTrainer):
     _snapshot_evidence = False
     _recover_rollout_inputs = True
 
+    @property
+    def _offline_eval_only(self) -> bool:
+        return getattr(self.config, "offline_eval_only", False)
+
     @staticmethod
     def _validate_save_eval_sync(config):
-        if not config.offline_eval_only:
+        if not getattr(config, "offline_eval_only", False):
             return AsyncEvalPPOTrainer._validate_save_eval_sync(config)
         saver = config.saver
         if (
@@ -57,7 +102,7 @@ class Tau2AsyncEvalTrainer(Tau2ApiStatsMixin, AsyncEvalPPOTrainer):
             )
 
     def train(self, *args, eval_workflow=None, eval_workflow_kwargs=None, **kwargs):
-        if self.config.offline_eval_only:
+        if self._offline_eval_only:
             # Also bypass step-zero and recovered-eval schedule handling.
             eval_workflow = eval_workflow_kwargs = None
         return super().train(
@@ -68,28 +113,28 @@ class Tau2AsyncEvalTrainer(Tau2ApiStatsMixin, AsyncEvalPPOTrainer):
         )
 
     def _evaluate_fn(self, eval_workflow, eval_workflow_kwargs):
-        if not self.config.offline_eval_only:
+        if not self._offline_eval_only:
             return super()._evaluate_fn(eval_workflow, eval_workflow_kwargs)
 
     def _evaluate(
         self, eval_workflow, eval_workflow_kwargs, epoch, epoch_step, global_step
     ):
-        if not self.config.offline_eval_only:
+        if not self._offline_eval_only:
             return super()._evaluate(
                 eval_workflow, eval_workflow_kwargs, epoch, epoch_step, global_step
             )
 
     def _enqueue_eval(self, **kwargs):
-        if not self.config.offline_eval_only:
+        if not self._offline_eval_only:
             return super()._enqueue_eval(**kwargs)
 
     def _drain_evaluations(self):
-        if not self.config.offline_eval_only:
+        if not self._offline_eval_only:
             return super()._drain_evaluations()
 
     def _write_gpu_allocation(self):
         super()._write_gpu_allocation()
-        if self.config.offline_eval_only:
+        if self._offline_eval_only:
             path = Path(self.config.cluster.fileroot) / "evidence/gpu-allocation.json"
             if path.exists():
                 payload = json.loads(path.read_text(encoding="utf-8"))
@@ -192,7 +237,7 @@ class Tau2AsyncEvalTrainer(Tau2ApiStatsMixin, AsyncEvalPPOTrainer):
         return config
 
     def _init_dedicated_eval_rollout(self):
-        if self.config.offline_eval_only:
+        if self._offline_eval_only:
             return
         super()._init_dedicated_eval_rollout()
         self._async_eval_rollout.start_proxy()
@@ -222,45 +267,10 @@ class Tau2AsyncEvalTrainer(Tau2ApiStatsMixin, AsyncEvalPPOTrainer):
             trajectory_root=trajectory_root,
         )
         official = official_metrics(records, repeats=repeats)
-        domains = {
-            domain: {
-                "episodes": result["evaluated_episodes"],
-                "reward_mean": result["avg_reward"],
-                "infra_excluded_episodes": result["infra_excluded_episodes"],
-                "context_limit_episodes": result["context_limit_episodes"],
-                "policy_free_episodes": result["policy_free_episodes"],
-                "pass_hat_k": result["pass_hat_k"],
-                "mean_at_k": result["mean_at_k"],
-            }
-            for domain, result in official["by_domain"].items()
-        }
-        metrics = {}
-        for domain, result in domains.items():
-            for key in (
-                "episodes",
-                "reward_mean",
-                "infra_excluded_episodes",
-                "context_limit_episodes",
-                "policy_free_episodes",
-            ):
-                metrics[f"eval/{domain}/{key}"] = result[key]
-            metrics[f"eval/{domain}/mean@{repeats}"] = result["mean_at_k"]
-            for k, value in result["pass_hat_k"].items():
-                metrics[f"eval/{domain}/pass^{k}"] = value
-        overall = official["overall"]
-        metrics["eval/episodes"] = overall["evaluated_episodes"]
-        metrics["eval/reward_mean"] = overall["avg_reward"]
-        metrics["eval/infra_excluded_episodes"] = overall["infra_excluded_episodes"]
-        metrics["eval/context_limit_episodes"] = overall["context_limit_episodes"]
-        metrics[f"eval/mean@{repeats}"] = overall["mean_at_k"]
-        for k, value in overall["pass_hat_k"].items():
-            metrics[f"eval/pass^{k}"] = value
-        for k, tasks in overall["pass_hat_k_tasks"].items():
-            if tasks < overall["tasks"]:
-                metrics[f"eval/pass^{k}_tasks"] = tasks
+        stats = checkpoint_eval_stats(official, repeats)
         return {
             "split": "test" if self.config.experiment_mode == "formal" else "dev",
-            "domains": domains,
+            "domains": stats["domains"],
             "infra_excluded": [
                 {k: r.get(k) for k in ("source_id", "attempts", "error_type", "error")}
                 for r in records
@@ -268,7 +278,7 @@ class Tau2AsyncEvalTrainer(Tau2ApiStatsMixin, AsyncEvalPPOTrainer):
             ],
             "trajectory_dir": str(trajectory_root),
             "checkpoint_selection": False,
-            "metrics": metrics,
+            "metrics": stats["metrics"],
         }
 
 

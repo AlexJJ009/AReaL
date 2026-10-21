@@ -24,6 +24,7 @@ from examples.tau2.contracts import (
     normalize_domains,
     resolve_pinned_hf_snapshot,
 )
+from examples.tau2.evaluation import checkpoint_eval_stats
 from examples.tau2.official_runner import (
     INFRASTRUCTURE_ERROR,
     collect_episodes,
@@ -42,7 +43,7 @@ from areal.utils.printing import tabulate_stats
 
 logger = logging.getLogger("Tau2Train")
 
-TASK_SETS = ("test", "base", "full")
+TASK_SETS = ("test", "base", "full", "ppo")
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -61,7 +62,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="test",
         help="test: official test split only. base: the official leaderboard set "
         "(train+test), with per-split scores reported separately. "
-        "full: all 2285 official Telecom tasks (Telecom only).",
+        "full: all 2285 official Telecom tasks (Telecom only). "
+        "ppo: training's fixed 100-task checkpoint set, 4 trials at T=0.",
     )
     parser.add_argument(
         "--temperature",
@@ -86,7 +88,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         nargs="*",
         help="Hydra overrides applied to --config, e.g. econfig.user_llm=<model>.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.task_set == "ppo" and (
+        args.repeats != 4
+        or args.temperature != 0
+        or args.tasks is not None
+        or args.task_pack is not None
+    ):
+        parser.error(
+            "--task-set ppo requires 4 trials, temperature 0 and the full 100-task set"
+        )
+    return args
 
 
 def load_eval_config(args: argparse.Namespace) -> tuple[Tau2PPOConfig, str]:
@@ -171,6 +183,25 @@ def build_eval_rows(
 ) -> list[dict[str, Any]]:
     if task_set not in TASK_SETS:
         raise ValueError(f"Unsupported task set: {task_set}")
+    if task_set == "ppo":
+        from examples.tau2.ppo_data import build_ppo_eval_dataset
+
+        if (
+            repeats != 4
+            or config.eval_gconfig.temperature != 0
+            or config.econfig.benchmark_variant != "fixed"
+        ):
+            raise ValueError(
+                "PPO checkpoint evaluation requires fixed data, 4 trials and T=0"
+            )
+        return expand_trials(
+            list(
+                build_ppo_eval_dataset(
+                    config, {"seed": config.seed, "variant": "fixed"}
+                )
+            ),
+            repeats,
+        )
     domains = normalize_domains(config.domains)
     if task_set == "full" and domains != ("telecom",):
         raise ValueError("The full task set supports Telecom only")
@@ -372,6 +403,9 @@ def aggregate(
         }
         metrics[f"eval/{kind}/{key}/pass1_mean"] = sum(values) / len(values)
         metrics[f"eval/{kind}/{key}/episodes"] = len(values)
+    # Keep every metric emitted by the training checkpoint evaluator, including
+    # domain rewards and the denominators for partially excluded trial groups.
+    metrics.update(checkpoint_eval_stats(official, repeats)["metrics"])
     return {
         "status": "complete" if len(records) == planned else "partial",
         "repeats": repeats,
@@ -470,17 +504,22 @@ def run(argv: list[str]) -> dict[str, Any]:
     )
     workflow_kwargs = build_workflow_kwargs(config)
     max_inflight = resolve_eval_concurrency(config)
+    eval_domains = (
+        ("airline", "retail", "telecom")
+        if args.task_set == "ppo"
+        else normalize_domains(config.domains)
+    )
     manifest = {
         "schema_version": 1,
         "config_file": config_file,
         "tau2_revision": OFFICIAL_TAU2_REVISION,
         "benchmark_variant": config.econfig.benchmark_variant,
         "task_file_sha256": benchmark_variant.validate_task_files(
-            config.econfig.benchmark_variant, normalize_domains(config.domains)
+            config.econfig.benchmark_variant, eval_domains
         ),
         "model_path": model_path,
         "output_root": str(output_root),
-        "domains": list(normalize_domains(config.domains)),
+        "domains": list(eval_domains),
         "task_set": None if args.task_pack else args.task_set,
         "task_pack": None
         if args.task_pack is None

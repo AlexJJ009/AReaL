@@ -290,7 +290,7 @@ def validate_tau2_recipe(
                 "critic updates before the actor"
             )
     elif config.algorithm == "ppo":
-        validate_ppo_contract(config)
+        validate_ppo_contract(config, evaluation=evaluation)
     elif config.critic is not None or actor.use_direct_dis_loss:
         raise ValueError("Non-SAO paths must not silently enable the SAO critic/DIS")
     if config.algorithm == "grpo":
@@ -333,10 +333,12 @@ def validate_tau2_recipe(
     return domains
 
 
-def validate_ppo_contract(config: Tau2PPOConfig) -> None:
+def validate_ppo_contract(config: Tau2PPOConfig, *, evaluation: bool = False) -> None:
     """Standard clipped GAE PPO with the GRPO recipe's async correction."""
     actor, critic = config.actor, config.critic
-    if (
+    # Offline evaluation selects its actor via --model-path; resolved training
+    # configs may already contain a local snapshot instead of the pinned ID.
+    if not evaluation and (
         actor.path
         != "Qwen/Qwen3-4B-Instruct-2507@cdbee75f17c01a7cc42f958dc650907174af0554"
     ):

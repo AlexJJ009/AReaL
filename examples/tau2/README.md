@@ -65,6 +65,29 @@ loading a historical resolved training config. Use `--temperature 1` explicitly 
 reproduce the old sampling protocol. Report the temperature alongside the scores and
 keep results from the two protocols separate.
 
+Formal PPO can set `offline_eval_only=true` to allocate no dedicated evaluation worker
+or proxy and skip all online evaluation, including step 0 and the final drain. The
+validation dataset and train/test disjointness check remain active. Use
+`saver.freq_steps=10 saver.mode=sync` to retain actor and critic HF checkpoints every
+ten global steps plus the final step. The switch defaults to false.
+
+For saved PPO actor checkpoints, `--task-set ppo` reuses `build_ppo_eval_dataset`: 20
+fixed Airline, 40 fixed Retail and 40 official Telecom test tasks, each with four trials
+at temperature 0. It rejects task subsets, packs and protocol changes. The caller's
+config and Hydra overrides supply the user simulator and judge. `summary.json` includes
+every metric from the training checkpoint evaluator, alongside the standalone
+evaluator's existing metrics. Check the plan on CPU with:
+
+```bash
+python scripts/tau2/evaluate.py --config "$CONFIG" \
+  --model-path "$ACTOR_HF_CHECKPOINT" --output-root "$EVAL_OUTPUT" \
+  --task-set ppo --check-config
+```
+
+`ACTOR_HF_CHECKPOINT` selects the actor's `default/epoch...globalstep...` HF directory,
+not the critic or DCP recovery directory. `--check-config` writes the plan without
+launching a server or collecting episodes; omit it for evaluation.
+
 `evaluate.py --task-set test` (default) scores the official test split only, the
 held-out set for trained checkpoints. `--task-set base` scores the official leaderboard
 set, train plus test (50 airline and 114 retail tasks when Telecom is excluded). Its
