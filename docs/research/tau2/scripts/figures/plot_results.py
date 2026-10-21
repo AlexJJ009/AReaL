@@ -186,7 +186,7 @@ def run_ev(run_dir):
             for i in r.history.item:
                 if (i.key or "/".join(i.nested_key)) == key:
                     ev.append(float(json.loads(i.value_json)))
-    return list(enumerate(ev))  # one EV record per training step
+    return list(enumerate(ev, start=1))  # one EV record per step, 1-based like PPO/SAO
 
 
 def write_table(tm, out):
