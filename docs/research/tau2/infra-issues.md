@@ -178,34 +178,38 @@ SAO smoke 526 用修复后的代码跑了 2 步，两次推权重都成功，各
 
 ## 5 用户工具调用没有解析；run 3 重启为 673，并排好离线评测和 method run（2026-10-21）
 
-- **672 的 Telecom 不可用**：用户 SGLang 没开 tool-call parser，Qwen3.5 输出的 `<tool_call><function=...>` XML
-  全部留在文本里（874 次，解析 0 次），用户侧工具从未执行，54 条 Telecom 里 36 条撞 200 条消息上限，约 30 分钟一步。
-  672 已停。修复：`launch_ppo_qwenuser.sh` 给用户服务器加 `--tool-call-parser qwen3_coder`（SGLang 自带）。另修了
-  `pueue kill` 后用户服务器残留：`setsid` 可能 fork，改为由重启循环自己写 `user-server.pgid`。
-- **run 3 = 673（`run3-std-beta1-v3`）**：快照和参数同第 4 节。前 3 步：accepted 460、rejected 0、RateLimit
-  0、用户服务器重启 0，约 10.6 分钟一步；用户工具调用解析 4,466 次，文本残留 0。监控脚本
+- **672 的 Telecom 不可用**：用户 SGLang 没开 tool-call parser，Qwen3.5 输出的
+  `<tool_call><function=...>` XML 全部留在文本里（874 次，解析 0 次），用户侧工具从未执行，54 条 Telecom 里 36 条撞
+  200 条消息上限，约 30 分钟一步。 672 已停。修复：`launch_ppo_qwenuser.sh` 给用户服务器加
+  `--tool-call-parser qwen3_coder`（SGLang 自带）。另修了 `pueue kill` 后用户服务器残留：`setsid` 可能
+  fork，改为由重启循环自己写 `user-server.pgid`。
+- **run 3 = 673（`run3-std-beta1-v3`）**：快照和参数同第 4 节。前 3 步：accepted 460、rejected
+  0、RateLimit 0、用户服务器重启 0，约 10.6 分钟一步；用户工具调用解析 4,466 次，文本残留 0。监控脚本
   `tau2-ppo-qwenuser-20261021/run_status.sh`（只读日志和轨迹，不调 API）。
-- **Telecom 仍有约 45% 撞 200 条上限，但原因不同**：前 3 步 111 条 Telecom 里 50 条 `stop_reason=max_steps`、全部
-  0 分，比例从第一批起就稳定，没有随训练上升。抽查尾部：用户模拟器在长对话里把自己当客服（"你的 MMS 已经修好了，
-  我们做了 1. 关闭飞行模式……"），反复重复同一段且不发 STOP；agent 跟着输出 `{"error": "None"}` 之类的文本。51
-  条里只有 10 条有 agent 把工具调用写成裸 JSON。这是 Qwen3.5-4B 用户自身的错误（角色反转 + 不终止），Airline 和
-  Retail 基本没有（各 1 条）。它让 Telecom 的失败信号里有很大一部分来自用户，正是 M1/M2 要处理的情形；run 3 不停。
-- **M2 实现（Codex 674，`c281a20b`）**：默认关闭的 `user_reliability_weight`。在 fresh critic forward 之后读终止用户
-  边界（`user_boundary_types==3`）的 $U$，记录 $X=R-U$；每个 epoch 开始时只用之前 epoch 的记录算
+- **Telecom 仍有约 45% 撞 200 条上限，但原因不同**：前 3 步 111 条 Telecom 里 50 条
+  `stop_reason=max_steps`、全部 0 分，比例从第一批起就稳定，没有随训练上升。抽查尾部：用户模拟器在长对话里把自己当客服（"你的 MMS 已经修好了，
+  我们做了 1. 关闭飞行模式……"），反复重复同一段且不发 STOP；agent 跟着输出 `{"error": "None"}` 之类的文本。51 条里只有 10 条有
+  agent 把工具调用写成裸 JSON。这是 Qwen3.5-4B 用户自身的错误（角色反转 + 不终止），Airline 和 Retail 基本没有（各 1 条）。它让
+  Telecom 的失败信号里有很大一部分来自用户，正是 M1/M2 要处理的情形；run 3 不停。
+- **M2 实现（Codex 674，`c281a20b`）**：默认关闭的 `user_reliability_weight`。在 fresh critic forward
+  之后读终止用户 边界（`user_boundary_types==3`）的 $U$，记录 $X=R-U$；每个 epoch 开始时只用之前 epoch 的记录算
   $w_u=\tau_d/(\tau_d+\hat\sigma_u^2)$（$k=2$ 收缩，domain 内归一化到均值 1，前两轮 $w=1$），冻结整轮；乘在
-  whitening 之后的 actor advantage 上，critic 不变，padding 为 0。历史随 recover checkpoint 保存，每轮权重表写到
-  `<log dir>/user-reliability/epoch-XXXX.jsonl`。27 个新测试和 425 个回归测试通过，与 `analyze_noise.py` 的离线
-  估计逐项一致。Claude 复核：已知偏差是上一轮最后一批若在新一轮开始后才观测，会记到新一轮，晚一轮生效，仍只用过去数据。
-- **离线评测 runner（Codex 675，cherry-pick 为 `d9f6ebde`）**：`scripts/tau2/checkpoint_eval.py`。GPU 7 跑一个共享
-  用户服务器（与训练相同的 parser 和 0.75 显存），GPU 0–6 各跑一个 `evaluate.py --task-set ppo`（100 题 × 4、T=0、
-  policy parser `qwen25`），默认 step 0、10…120、126；step $N$ 对应
-  `epoch{(N-1)//9}epochstep{(N-1)%9}globalstep{N-1}`。judge 为火山 plan `deepseek-v4-1-flash-261017`（key
-  `ark-plan-20261020.env`），每个 evaluator 并发 1。完成判据是 400 条全部记账且凭据 hash 匹配，可断点续跑。169
-  测试通过。
+  whitening 之后的 actor advantage 上，critic 不变，padding 为 0。历史随 recover checkpoint
+  保存，每轮权重表写到 `<log dir>/user-reliability/epoch-XXXX.jsonl`。27 个新测试和 425 个回归测试通过，与
+  `analyze_noise.py` 的离线 估计逐项一致。Claude 复核：已知偏差是上一轮最后一批若在新一轮开始后才观测，会记到新一轮，晚一轮生效，仍只用过去数据。
+- **离线评测 runner（Codex 675，cherry-pick 为
+  `d9f6ebde`）**：`scripts/tau2/checkpoint_eval.py`。GPU 7 跑一个共享 用户服务器（与训练相同的 parser 和 0.75
+  显存），GPU 0–6 各跑一个 `evaluate.py --task-set ppo`（100 题 × 4、T=0、 policy parser
+  `qwen25`），默认 step 0、10…120、126；step $N$ 对应
+  `epoch{(N-1)//9}epochstep{(N-1)%9}globalstep{N-1}`。judge 为火山 plan
+  `deepseek-v4-1-flash-261017`（key `ark-plan-20261020.env`），每个 evaluator 并发 1。完成判据是 400
+  条全部记账且凭据 hash 匹配，可断点续跑。169 测试通过。
 - **gpu8 队列（顺序执行）**：代码快照 `tau2-ppo-qwenuser-20261021/src-d9f6ebde`（含 M2 和 runner）。
   - 673 run 3（快照 `src-a7dd717d`）。
-  - 676 `eval-run3-std-beta1-v3`：上面的 runner，输出 `run3-std-beta1-v3/offline-checkpoint-eval/`；dry-run 已通过。
-  - 677 `method-m2-priv-beta1`：run 3 参数加 `++critic_user_scenario=true critic.mb_spec.max_tokens_per_mb=36864
-    ++user_reliability_weight=true`，β=1（`method-m2-priv-overrides-v2.txt`）。新快照的 `config_ppo.yaml` 已有
-    `offline_eval_only` 键，`+` 前缀会报错，所以全部改用 `++`；CPU check-config 通过（126 步、开关读回为 true）。
+  - 676 `eval-run3-std-beta1-v3`：上面的 runner，输出
+    `run3-std-beta1-v3/offline-checkpoint-eval/`；dry-run 已通过。
+  - 677 `method-m2-priv-beta1`：run 3 参数加
+    `++critic_user_scenario=true critic.mb_spec.max_tokens_per_mb=36864 ++user_reliability_weight=true`，β=1（`method-m2-priv-overrides-v2.txt`）。新快照的
+    `config_ppo.yaml` 已有 `offline_eval_only` 键，`+` 前缀会报错，所以全部改用 `++`；CPU check-config
+    通过（126 步、开关读回为 true）。
   - method run 的离线评测还没排，677 开始后再排。
