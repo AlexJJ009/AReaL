@@ -300,7 +300,7 @@ DeepSeek 用户 U3 只占约 1%，测不出第 2 项，所以必须用多模拟�
 **中途结果（2026-10-20，第 100 步）**：eval overall 38.5% → 45.75%，其中 Retail 42.5% → 60.0%（配对
 +17.5pp，CI \[6.3, 28.8\]），Airline 和 Telecom 持平；EV 升到 0.44–0.49。诊断见
 [ppo-privileged-649-midrun/REPORT.md](../ppo-privileged-649-midrun/REPORT.md)。没有同一用户后端下的标准
-critic 对照（run 3），所以还不能归因到带剧本 critic。
+critic 对照（run 3），所以还不能归因到带剧本 critic。跑完（20:44，exit 0）：第 120 步 overall 52.5%（Airline 22.5、Retail 65.6、Telecom 54.4），同一步基线 v3 为 50.5%。
 
 需要确认的地方：
 
