@@ -159,16 +159,19 @@ SAO smoke 526 用修复后的代码跑了 2 步，两次推权重都成功，各
 
 ## 4 Qwen 用户服务器与 eval 共卡时崩溃；训练改为离线评测（2026-10-21，pueue 670–672）
 
-- **现象**：run 3 第一次启动（670）17 分钟后，GPU 7 上的 Qwen3.5-4B 用户 SGLang 服务报 `CUDA error: an illegal memory
-  access`（`process_batch_result_decode`），进程退出，之后所有 episode 连不上用户而被 rejected。670 已停，没有完成任何一步。
-- **可能原因（未确证）**：用户服务器与 dedicated eval 共用 GPU 7，只有 `--mem-fraction-static 0.15`，KV 池 54,736
-  token，崩溃前占用 0.86。10-18 的自部署用户重跑在独占卡上用 0.75，跑完 3,360 条没有出错。
+- **现象**：run 3 第一次启动（670）17 分钟后，GPU 7 上的 Qwen3.5-4B 用户 SGLang 服务报
+  `CUDA error: an illegal memory access`（`process_batch_result_decode`），进程退出，之后所有
+  episode 连不上用户而被 rejected。670 已停，没有完成任何一步。
+- **可能原因（未确证）**：用户服务器与 dedicated eval 共用 GPU 7，只有 `--mem-fraction-static 0.15`，KV 池
+  54,736 token，崩溃前占用 0.86。10-18 的自部署用户重跑在独占卡上用 0.75，跑完 3,360 条没有出错。
 - **处理（用户决定）**：用户服务器独占 GPU 7（`USER_MEM` 默认 0.75，KV 池 868,601 token），并在
-  `tau2-ppo-qwenuser-20261021/launch_ppo_qwenuser.sh` 里加了崩溃后 5 秒自动重启；rollout 保持 GPU 4–6。训练期不再做在线评测：
-  Codex 671 加了默认关闭的 `offline_eval_only`（`a7dd717d`），打开后不创建 dedicated eval，照常每 10 步和最后一步保存 actor 与
-  critic 的 HF checkpoint；离线评测入口 `scripts/tau2/evaluate.py --task-set ppo`（`e77c6350`）用同一 100 题、4 次、T=0。
-  测试先红（13 failed）后绿（130 passed）。Claude 复核了 A 的代码改动。
-- **run 3（672，`run3-std-beta1-v2`）**：代码快照 `src-a7dd717d`；训练题 Airline 417（含 668 救回的 7 题，pack
-  `tau2-areal-airline-recovered-pack-20261021-v1`）、Retail 337、Telecom 329（`tau2-official-telecom-pack-20261021-v2`），
-  每 epoch 9 步，14 epoch 共 126 步；参数在 `run3-formal-overrides-v3.txt`。run 2 用同一快照和参数，加 `+critic_user_scenario=true`。
-  上面第 3 节的 eval radix 开关在离线评测模式下不起作用。
+  `tau2-ppo-qwenuser-20261021/launch_ppo_qwenuser.sh` 里加了崩溃后 5 秒自动重启；rollout 保持 GPU
+  4–6。训练期不再做在线评测： Codex 671 加了默认关闭的 `offline_eval_only`（`a7dd717d`），打开后不创建 dedicated
+  eval，照常每 10 步和最后一步保存 actor 与 critic 的 HF checkpoint；离线评测入口
+  `scripts/tau2/evaluate.py --task-set ppo`（`e77c6350`）用同一 100 题、4 次、T=0。 测试先红（13
+  failed）后绿（130 passed）。Claude 复核了 A 的代码改动。
+- **run 3（672，`run3-std-beta1-v2`）**：代码快照 `src-a7dd717d`；训练题 Airline 417（含 668 救回的 7
+  题，pack `tau2-areal-airline-recovered-pack-20261021-v1`）、Retail 337、Telecom
+  329（`tau2-official-telecom-pack-20261021-v2`）， 每 epoch 9 步，14 epoch 共 126 步；参数在
+  `run3-formal-overrides-v3.txt`。run 2 用同一快照和参数，加 `+critic_user_scenario=true`。 上面第 3 节的
+  eval radix 开关在离线评测模式下不起作用。
