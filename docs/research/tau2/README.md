@@ -86,8 +86,8 @@ case study 都发现失败约 92% 是 agent 的错，约 8% 是用户的错，�
 - [ppo-beta05-eval-drop/](ppo-beta05-eval-drop/REPORT.md)：631（PPO + 全局 β=0.5）后期 eval
   比基线低约 8.6pp 的诊断： 训练没崩、无 infra 污染，Retail 有策略退化迹象，但 user/judge 后端不同，不能归因到 β。
 - [ppo-privileged-649-midrun/](ppo-privileged-649-midrun/REPORT.md)：649（带剧本 critic，β=1）第
-  100 步的中途诊断：Retail +17.5pp；Airline 的收益只在合成 pack 上；Telecom 转人工题变好、排障题变差，净变化≈0；Telecom
-  只在官方 DeepSeek 用户的基线里涨过。
+  100 步的中途诊断：Retail +17.5pp；Airline 的收益只在合成 pack 上；Telecom 转人工题变好、排障题变差，净变化≈0。基线的
+  Telecom 涨过（+9.4pp），差别在 agent 的账户操作，不在用户后端（651）。
 - [ppo-training-budget-survey.md](ppo-training-budget-survey.md)：相关工作的训练步数、batch、lr
   与我们的对比。
 - [infra-issues.md](infra-issues.md)：proxy 容量泄漏、Qwen3 加速配置、SAO 推权重崩溃。
