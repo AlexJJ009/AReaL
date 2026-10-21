@@ -88,9 +88,9 @@ case study 都发现失败约 92% 是 agent 的错，约 8% 是用户的错，�
 - [ppo-privileged-649-midrun/](ppo-privileged-649-midrun/REPORT.md)：649（带剧本 critic，β=1）第
   100 步的中途诊断：Retail +17.5pp；Airline 的收益只在合成 pack 上；Telecom 转人工题变好、排障题变差，净变化≈0。基线的
   Telecom 涨过（+9.4pp），差别在 agent 的账户操作，不在用户后端（651）。
-- [privileged-critic-case-study/](privileged-critic-case-study/REPORT.md)：649 带剧本 critic 的 EV 和 β 证据：晚期 EV
-  0.458 对 0.348；同一批 rollout 上题内 AUC 0.938 对 0.758，提升来自对对话状态的判断；中间用户回复处 value 没有下降；终止处的意外更集中在 U1
-  上，统一 β 的误伤比标准 critic 小（292 对 692）。
+- [privileged-critic-case-study/](privileged-critic-case-study/REPORT.md)：649 带剧本 critic
+  的 EV 和 β 证据：晚期 EV 0.458 对 0.348；同一批 rollout 上题内 AUC 0.938 对 0.758，提升来自对对话状态的判断；中间用户回复处
+  value 没有下降；终止处的意外更集中在 U1 上，统一 β 的误伤比标准 critic 小（292 对 692）。
 - [ppo-training-budget-survey.md](ppo-training-budget-survey.md)：相关工作的训练步数、batch、lr
   与我们的对比。
 - [infra-issues.md](infra-issues.md)：proxy 容量泄漏、Qwen3 加速配置、SAO 推权重崩溃。
