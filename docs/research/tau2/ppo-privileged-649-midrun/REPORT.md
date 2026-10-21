@@ -12,9 +12,10 @@
 
 ## 0 最终结果（2026-10-20 20:44 跑完）
 
-649 跑完 120 步，exit 0，rejected 0，checkpoint 到 `globalstep119`。第 120 步 eval：overall 52.5%（Airline 22.5、Retail
-65.6、Telecom 54.4），Retail pass^4 0.40。同一步的基线 v3 是 50.5%（23.8 / 66.2 / 48.1）。Telecom 在第 120 步从前几次的
-42–47 跳到 54.4；单次 eval 的波动约 5pp，这一跳不足以推翻下文"后期窗口没有净提升"的结论，下文的分析只用到第 110 步。
+649 跑完 120 步，exit 0，rejected 0，checkpoint 到 `globalstep119`。第 120 步 eval：overall
+52.5%（Airline 22.5、Retail 65.6、Telecom 54.4），Retail pass^4 0.40。同一步的基线 v3 是 50.5%（23.8 /
+66.2 / 48.1）。Telecom 在第 120 步从前几次的 42–47 跳到 54.4；单次 eval 的波动约
+5pp，这一跳不足以推翻下文"后期窗口没有净提升"的结论，下文的分析只用到第 110 步。
 
 ## 1 结论
 
