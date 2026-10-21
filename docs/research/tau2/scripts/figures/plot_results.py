@@ -253,6 +253,37 @@ def write_summary(tm, evs, out, steps=(0, 120), ev_window=(101, 120)):
                     f"[{100 * ci_lo:+.1f}, {100 * ci_hi:+.1f}]"
                 )
             w.writerow(row)
+        # PRIV minus PPO, paired by task: at each end, and difference in change.
+        def paired(doms, f):
+            a = {k: f(PRIV, k) for k in keys(doms)}
+            b = {k: f("PPO", k) for k in keys(doms)}
+            diff = [a[k] - b[k] for k in a]
+            ci_lo, ci_hi = boot_ci(diff, n=20000)
+            m = sum(diff) / len(diff)
+            return f"{100 * m:+.1f} [{100 * ci_lo:+.1f}, {100 * ci_hi:+.1f}]"
+
+        def keys(doms):
+            ks = [
+                {(d, t) for d in doms for t in tm[(r, st, d)]}
+                for r in (PRIV, "PPO")
+                for st in steps
+            ]
+            return sorted(set.intersection(*ks))
+
+        def at(st):
+            return lambda r, k: tm[(r, st, k[0])][k[1]]
+
+        def change(r, k):
+            return at(s1)(r, k) - at(s0)(r, k)
+
+        w.writerow([])
+        w.writerow([f"{PRIV} minus PPO"] + [g for g, _ in groups])
+        for label, f in (
+            (f"step {s0}", at(s0)),
+            (f"step {s1}", at(s1)),
+            (f"change {s0}->{s1}", change),
+        ):
+            w.writerow([label] + [paired(doms, f) for _, doms in groups])
     print("wrote", path)
 
 
