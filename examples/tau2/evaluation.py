@@ -2,6 +2,7 @@
 """Official tau2 evaluation on the existing dedicated checkpoint evaluator."""
 
 import time
+from copy import deepcopy
 from functools import partial
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from examples.tau2.official_runner import (
 )
 
 from areal import PPOTrainer
+from areal.api.cli_args import SGLangConfig
 from areal.trainer.async_eval import AsyncEvalPPOTrainer
 from areal.trainer.rollout_batch import (
     FiniteEpochBatcher,
@@ -124,6 +126,12 @@ class Tau2AsyncEvalTrainer(Tau2ApiStatsMixin, AsyncEvalPPOTrainer):
         stats = super()._additional_stats()
         stats.update(self._batch_counts)
         return stats
+
+    def _dedicated_eval_sglang_config(self) -> SGLangConfig:
+        config = deepcopy(super()._dedicated_eval_sglang_config())
+        if self.config.eval_enable_radix_cache:
+            config.disable_radix_cache = False
+        return config
 
     def _init_dedicated_eval_rollout(self):
         super()._init_dedicated_eval_rollout()

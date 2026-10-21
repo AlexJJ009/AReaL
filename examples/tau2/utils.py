@@ -270,6 +270,8 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
     # Evaluation wall clock, applied as `tau2 run --timeout`: a TIMEOUT episode is
     # scored 0 and counted.
     eval_episode_timeout_seconds: float = 1800.0
+    # Enable prefix caching only on the dedicated checkpoint evaluation server.
+    eval_enable_radix_cache: bool = False
     experiment_mode: str = "qualification"
     critic_dev_fraction: float = 0.2
     critic_tasks_per_domain: int | None = None

@@ -105,6 +105,10 @@ class AsyncEvalPPOTrainer(PPOTrainer):
 
         return None
 
+    def _dedicated_eval_sglang_config(self) -> SGLangConfig:
+        """Allow recipes to customize the dedicated server independently."""
+        return self.config.sglang
+
     def _init_dedicated_eval_rollout(self) -> None:
         self._assert_dedicated_eval_preconditions()
         config = deepcopy(self.config.evaluation_rollout)
@@ -113,7 +117,7 @@ class AsyncEvalPPOTrainer(PPOTrainer):
         config.max_head_offpolicyness = int(1e12)
         alloc = ModelAllocation.from_str(config.backend, name=self._DEDICATED_ROLE)
         server_args = SGLangConfig.build_args(
-            sglang_config=self.config.sglang,
+            sglang_config=self._dedicated_eval_sglang_config(),
             tp_size=alloc.parallel.tp_size,
             pp_size=alloc.parallel.pp_size,
             base_gpu_id=0,
