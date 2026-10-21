@@ -1,9 +1,10 @@
 """Figures for the tau2 user-reliability study (one script, all figures).
 
 Figures (PNG + PDF in --out):
-  baseline_curves   PPO vs SAO vs PPO + beta=0.5: eval mean@4 on Airline / Retail /
-                    Telecom with task-level bootstrap 95% CI, plus critic EV per
-                    training step; the per-step numbers go to baseline_table.csv.
+  baseline_curves   PPO vs SAO vs PPO + privileged critic: eval mean@4 on Airline /
+                    Retail / Telecom with task-level bootstrap 95% CI, plus critic EV
+                    per training step; per-step numbers go to baseline_table.csv and
+                    the step-0/120 summary with EV to baseline_summary.csv.
   user_sim          Primary cause of each failed episode, per user simulator; the
                     companion table (mean@4, pass^4, user-caused share) is written
                     to user_sim_table.csv.
@@ -28,7 +29,9 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 ART = "/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math"
 SAO_CS = f"{ART}/tau2-sao-case-study-20261017"
-BETA_RUN = f"{ART}/tau2-ppo-beta-20261018/ppo-formal-qwen3-beta05"  # pueue 631
+PRIV_RUN = (  # pueue 649
+    f"{ART}/tau2-ppo-privileged-deepseek-20261020/ppo-formal-privileged-beta1"
+)
 RERUN = f"{ART}/user-sim-rerun-20261018"
 LABELS = [
     f"{RERUN}/case-study-v4/labels.jsonl",
@@ -43,8 +46,8 @@ C_AGENT, C_STOP, C_DEV, C_EXIT, C_BENCH = (
     "#E87BA4",
     "#B4B2A9",
 )
-BETA = "PPO + β=0.5"
-ALGO_COLOR = {"PPO": C_AGENT, "SAO": C_STOP, BETA: C_DEV}
+PRIV = "PPO + privileged critic"
+ALGO_COLOR = {"PPO": C_AGENT, "SAO": C_STOP, PRIV: C_DEV}
 
 # Failure-cause buckets of the paper figure; codes as in case study v4.
 CAUSES = [
@@ -134,7 +137,7 @@ def task_means(path):
     return {k: {t: sum(v) / len(v) for t, v in d.items()} for k, d in acc.items()}
 
 
-def beta_task_means(run_dir):
+def run_task_means(run_dir):
     """Same shape as task_means, read from the run's async-eval trajectories.
 
     Uses the last completed attempt per episode and drops episodes the eval
@@ -158,13 +161,13 @@ def beta_task_means(run_dir):
             if not done:
                 continue
             last = max(done, key=lambda x: x["recorded_at"])
-            acc[(BETA, step, last["domain"])][last["task_id"]].append(
+            acc[(PRIV, step, last["domain"])][last["task_id"]].append(
                 float(last["official_score"])
             )
     return {k: {t: sum(v) / len(v) for t, v in d.items()} for k, d in acc.items()}
 
 
-def beta_ev(run_dir):
+def run_ev(run_dir):
     """Critic EV per training step from the run's offline wandb history."""
     import glob
 
@@ -207,6 +210,36 @@ def write_table(tm, out):
     print("wrote", path)
 
 
+def write_summary(tm, evs, out, steps=(0, 120), ev_window=(101, 120)):
+    """Per run: mean@4 by domain at the given steps, and mean EV over a window."""
+    path = os.path.join(out, "baseline_summary.csv")
+    groups = [
+        ("airline", ("airline",)),
+        ("retail", ("retail",)),
+        ("same-domain", ("airline", "retail")),
+        ("telecom", ("telecom",)),
+    ]
+    lo, hi = ev_window
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(
+            ["run"]
+            + [f"{g} step{s}" for g, _ in groups for s in steps]
+            + [f"EV steps {lo}-{hi}"]
+        )
+        for r in ALGO_COLOR:
+            row = [r]
+            for _, doms in groups:
+                for s in steps:
+                    v = [x for d in doms for x in tm.get((r, s, d), {}).values()]
+                    ok = all((r, s, d) in tm for d in doms)
+                    row.append(f"{sum(v) / len(v):.3f}" if ok else "")
+            ev = [v for s, v in evs[r] if lo <= s <= hi]
+            row.append(f"{sum(ev) / len(ev):.3f}")
+            w.writerow(row)
+    print("wrote", path)
+
+
 def boot_ci(values, n=2000, seed=0):
     rng = random.Random(seed)
     m = len(values)
@@ -234,10 +267,13 @@ def rolling(xs, w):
     ]
 
 
-def plot_baselines(cs, beta_run, out):
+def plot_baselines(cs, priv_run, out):
     tm = task_means(f"{cs}/eval_episodes.csv")
-    tm.update(beta_task_means(beta_run))
+    tm.update(run_task_means(priv_run))
+    evs = ev_series(cs)
+    evs[PRIV] = run_ev(priv_run)
     write_table(tm, out)
+    write_summary(tm, evs, out)
     fig, axs = plt.subplots(2, 2, figsize=(7.0, 4.6))
     panels = [
         ("airline", "Airline (20 tasks)"),
@@ -280,8 +316,6 @@ def plot_baselines(cs, beta_run, out):
     axs[0, 0].legend(frameon=False, loc="lower right", fontsize=6.5)
 
     ax = axs[1, 1]
-    evs = ev_series(cs)
-    evs[BETA] = beta_ev(beta_run)
     for run, series in evs.items():
         series = [(s, v) for s, v in sorted(series)]
         xs, ys = [s for s, _ in series], [v for _, v in series]
@@ -418,12 +452,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
     ap.add_argument("--sao-case-study", default=SAO_CS)
-    ap.add_argument("--beta-run", default=BETA_RUN)
+    ap.add_argument("--priv-run", default=PRIV_RUN)
     ap.add_argument("--labels", nargs="+", default=LABELS)
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
     style()
-    plot_baselines(a.sao_case_study, a.beta_run, a.out)
+    plot_baselines(a.sao_case_study, a.priv_run, a.out)
     fails, failed_tasks = load_labels(a.labels)
     plot_cause_figure(SIM_ROWS, fails, failed_tasks, a.out, "user_sim")
     plot_cause_figure(PATCH_ROWS, fails, failed_tasks, a.out, "user_sim_patch")
