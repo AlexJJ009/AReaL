@@ -59,12 +59,12 @@ Qwen3.5-4B 是 24 层 Gated DeltaNet 加 8 层 full attention；Qwen3-4B 是 36 
 
 **推理（SGLang）：**
 
-| 配置                                         | Qwen3 上                              | 说明                                               |
-| -------------------------------------------- | ------------------------------------- | -------------------------------------------------- |
-| `attention_backend: flashinfer` + CUDA graph | 可用                                  | 本次评测就在用；FA3 只支持 Hopper                  |
-| FLA / causal-conv1d                          | 不使用                                | 只服务于线性注意力层，装着也不影响                 |
-| KV cache 容量                                | 每卡 37.4 万 token，Qwen3.5 是 155 万 | `mem_fraction_static=0.75` 时实测，小 4.2 倍       |
-| `disable_radix_cache: true`                  | 训练 rollout 保持关闭；eval 卡可单独打开 | 见下文 radix 一节 |
+| 配置                                         | Qwen3 上                                 | 说明                                         |
+| -------------------------------------------- | ---------------------------------------- | -------------------------------------------- |
+| `attention_backend: flashinfer` + CUDA graph | 可用                                     | 本次评测就在用；FA3 只支持 Hopper            |
+| FLA / causal-conv1d                          | 不使用                                   | 只服务于线性注意力层，装着也不影响           |
+| KV cache 容量                                | 每卡 37.4 万 token，Qwen3.5 是 155 万    | `mem_fraction_static=0.75` 时实测，小 4.2 倍 |
+| `disable_radix_cache: true`                  | 训练 rollout 保持关闭；eval 卡可单独打开 | 见下文 radix 一节                            |
 
 - 评测时每个 SGLang 实例只有 4–10 条请求在跑，`num_retracted_reqs = 0`，瓶颈在 DeepSeek 用户的响应延迟。
 - 训练 rollout 时每个实例 64 条并发、上下文也更长，要关注 `num_retracted_reqs`，必要时调高 `mem_fraction_static`。
@@ -140,15 +140,19 @@ SAO smoke 526 用修复后的代码跑了 2 步，两次推权重都成功，各
 
 ## 3 Radix（前缀）缓存：只给 dedicated eval 打开（2026-10-20，pueue 656）
 
-- 到 649 为止，所有 PPO run 的训练 rollout 和 eval 都关着 radix（AReaL 默认 `disable_radix_cache: true`）。多轮对话每轮都要重算整段历史（约 9k token）的
-  prefill；rollout 在并发 24 左右就饱和，可能与此有关，尚未测量。
-- 换权重时缓存会被清掉：SGLang 的 `update_weights_from_disk/distributed/tensor` 请求里 `flush_cache` 默认为 `True`，AReaL 不覆盖这个默认值。
-- 新开关 `eval_enable_radix_cache=true`（`examples/tau2/utils.py`，默认关闭）只对 dedicated eval server 打开 radix，训练 rollout
-  保持关闭（commit 2e8a2228，Codex 实现、Claude review；测试 `tests/test_tau2_eval_radix.py` 先红后绿）。独立的 checkpoint 评测直接传
+- 到 649 为止，所有 PPO run 的训练 rollout 和 eval 都关着 radix（AReaL 默认
+  `disable_radix_cache: true`）。多轮对话每轮都要重算整段历史（约 9k token）的 prefill；rollout 在并发 24
+  左右就饱和，可能与此有关，尚未测量。
+- 换权重时缓存会被清掉：SGLang 的 `update_weights_from_disk/distributed/tensor` 请求里 `flush_cache`
+  默认为 `True`，AReaL 不覆盖这个默认值。
+- 新开关 `eval_enable_radix_cache=true`（`examples/tau2/utils.py`，默认关闭）只对 dedicated eval
+  server 打开 radix，训练 rollout 保持关闭（commit 2e8a2228，Codex 实现、Claude review；测试
+  `tests/test_tau2_eval_radix.py` 先红后绿）。独立的 checkpoint 评测直接传
   `sglang.disable_radix_cache=false`。
 - Qwen 用户 server（`sglang.launch_server` 直接启动）本来就开着 radix；它的权重不更新，没有风险。
-- 收益未测：回放 benchmark（`_artifacts/AReaL/codex-sao-math/tau2-eval-radix-20261020/run-bench.sh`，60 个 episode、738 轮，不调用 API）
-  等有空闲 GPU 时跑。2×2 里四个 run 的 radix 设置要一致，run 3 不打开。
-- 事故：656 检查独立评测的 override 时调用了 `load_expr_config`，它把解析后的配置写回了 649 run 目录的 `config.yaml`（把 radix 改成 false，
-  多出一个新字段）。Claude 已恢复原值，被改写的版本留在 656 任务目录 `overwritten-649-config.yaml`。以后的 brief 要求先把配置复制到任务目录再加载。
-
+- 收益未测：回放
+  benchmark（`_artifacts/AReaL/codex-sao-math/tau2-eval-radix-20261020/run-bench.sh`，60 个
+  episode、738 轮，不调用 API） 等有空闲 GPU 时跑。2×2 里四个 run 的 radix 设置要一致，run 3 不打开。
+- 事故：656 检查独立评测的 override 时调用了 `load_expr_config`，它把解析后的配置写回了 649 run 目录的
+  `config.yaml`（把 radix 改成 false， 多出一个新字段）。Claude 已恢复原值，被改写的版本留在 656 任务目录
+  `overwritten-649-config.yaml`。以后的 brief 要求先把配置复制到任务目录再加载。
