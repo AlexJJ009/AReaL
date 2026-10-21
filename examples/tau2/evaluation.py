@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Official tau2 evaluation on the existing dedicated checkpoint evaluator."""
 
+import json
 import time
 from copy import deepcopy
 from functools import partial
@@ -37,6 +38,63 @@ class Tau2AsyncEvalTrainer(Tau2ApiStatsMixin, AsyncEvalPPOTrainer):
 
     _snapshot_evidence = False
     _recover_rollout_inputs = True
+
+    @staticmethod
+    def _validate_save_eval_sync(config):
+        if not config.offline_eval_only:
+            return AsyncEvalPPOTrainer._validate_save_eval_sync(config)
+        saver = config.saver
+        if (
+            saver.mode != "sync"
+            or saver.freq_steps is None
+            or saver.freq_steps <= 0
+            or saver.freq_epochs is not None
+            or saver.freq_secs is not None
+        ):
+            raise ValueError(
+                "Offline evaluation requires saver.mode='sync', positive "
+                "saver.freq_steps and no epoch/time checkpoint cadence"
+            )
+
+    def train(self, *args, eval_workflow=None, eval_workflow_kwargs=None, **kwargs):
+        if self.config.offline_eval_only:
+            # Also bypass step-zero and recovered-eval schedule handling.
+            eval_workflow = eval_workflow_kwargs = None
+        return super().train(
+            *args,
+            eval_workflow=eval_workflow,
+            eval_workflow_kwargs=eval_workflow_kwargs,
+            **kwargs,
+        )
+
+    def _evaluate_fn(self, eval_workflow, eval_workflow_kwargs):
+        if not self.config.offline_eval_only:
+            return super()._evaluate_fn(eval_workflow, eval_workflow_kwargs)
+
+    def _evaluate(
+        self, eval_workflow, eval_workflow_kwargs, epoch, epoch_step, global_step
+    ):
+        if not self.config.offline_eval_only:
+            return super()._evaluate(
+                eval_workflow, eval_workflow_kwargs, epoch, epoch_step, global_step
+            )
+
+    def _enqueue_eval(self, **kwargs):
+        if not self.config.offline_eval_only:
+            return super()._enqueue_eval(**kwargs)
+
+    def _drain_evaluations(self):
+        if not self.config.offline_eval_only:
+            return super()._drain_evaluations()
+
+    def _write_gpu_allocation(self):
+        super()._write_gpu_allocation()
+        if self.config.offline_eval_only:
+            path = Path(self.config.cluster.fileroot) / "evidence/gpu-allocation.json"
+            if path.exists():
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                payload.update(offline_eval_only=True, online_eval_enabled=False)
+                path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     # The PPO recipe evaluates every global step interval, including warmup.
     @property
@@ -134,6 +192,8 @@ class Tau2AsyncEvalTrainer(Tau2ApiStatsMixin, AsyncEvalPPOTrainer):
         return config
 
     def _init_dedicated_eval_rollout(self):
+        if self.config.offline_eval_only:
+            return
         super()._init_dedicated_eval_rollout()
         self._async_eval_rollout.start_proxy()
 

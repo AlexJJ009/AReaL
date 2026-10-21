@@ -423,11 +423,17 @@ def validate_ppo_contract(config: Tau2PPOConfig) -> None:
         and config.valid_dataset is not None
         and config.eval_gconfig.n_samples == 4
         and config.eval_gconfig.temperature == 0
-        and config.evaluator.eval_before_train == (config.experiment_mode == "formal")
-        and config.evaluator.freq_steps is not None
-        and config.evaluator.freq_steps > 0
-        and config.evaluator.freq_epochs is None
-        and config.evaluator.freq_secs is None
+        and (
+            config.offline_eval_only
+            or (
+                config.evaluator.eval_before_train
+                == (config.experiment_mode == "formal")
+                and config.evaluator.freq_steps is not None
+                and config.evaluator.freq_steps > 0
+                and config.evaluator.freq_epochs is None
+                and config.evaluator.freq_secs is None
+            )
+        )
     ):
         raise ValueError(
             "PPO requires fixed test + official Telecom, 4 repeats at temperature 0, positive step cadence, step-0 eval only in formal"

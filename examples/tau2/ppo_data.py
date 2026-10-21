@@ -139,10 +139,16 @@ def ppo_config_summary(config: Tau2PPOConfig, train: Dataset, valid: Dataset) ->
         "eval_tasks": dict(Counter(r["domain"] for r in valid)),
         "eval_repeats": config.eval_gconfig.n_samples,
         "eval_temperature": config.eval_gconfig.temperature,
-        "eval_before_train": config.evaluator.eval_before_train,
-        "eval_every_global_steps": config.evaluator.freq_steps,
+        "eval_before_train": False
+        if config.offline_eval_only
+        else config.evaluator.eval_before_train,
+        "eval_every_global_steps": None
+        if config.offline_eval_only
+        else config.evaluator.freq_steps,
         "saver_every_global_steps": config.saver.freq_steps,
-        "eval_steps": sorted(
+        "eval_steps": []
+        if config.offline_eval_only
+        else sorted(
             {
                 *([0] if config.evaluator.eval_before_train else []),
                 *range(

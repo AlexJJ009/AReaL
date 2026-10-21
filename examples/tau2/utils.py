@@ -272,6 +272,8 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
     eval_episode_timeout_seconds: float = 1800.0
     # Enable prefix caching only on the dedicated checkpoint evaluation server.
     eval_enable_radix_cache: bool = False
+    # Save checkpoints for later evaluation without allocating an online eval GPU.
+    offline_eval_only: bool = False
     experiment_mode: str = "qualification"
     critic_dev_fraction: float = 0.2
     critic_tasks_per_domain: int | None = None
