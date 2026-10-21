@@ -8,6 +8,15 @@ from typing import Any
 import torch
 
 
+def training_sequence_mask(input_data: dict[str, Any]) -> torch.Tensor:
+    """Real padded rows, including real rows whose loss tokens were filtered."""
+    padding = input_data.get("is_padding")
+    if padding is not None:
+        return ~padding.any(dim=-1)
+    ids = input_data["input_ids"]
+    return torch.ones(ids.shape[0], device=ids.device, dtype=torch.bool)
+
+
 def _stat_key(scope: str, name: str) -> str:
     return f"{scope}/{name}" if scope else name
 
@@ -138,6 +147,11 @@ def infer_token_denominator(
     common_kwargs = {"dtype": torch.bool, "device": fallback.device}
 
     attention_mask = input_data.get("attention_mask")
+    padding = input_data.get("is_padding")
+    if isinstance(padding, torch.Tensor):
+        if isinstance(attention_mask, torch.Tensor):
+            return (~padding.any(-1, keepdim=True)).expand_as(attention_mask)
+        return ~padding.bool()
     if isinstance(attention_mask, torch.Tensor):
         return torch.ones_like(attention_mask, **common_kwargs)
 

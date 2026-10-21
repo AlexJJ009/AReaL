@@ -6,6 +6,8 @@ from typing import Any
 
 import torch
 
+from areal.trainer.ppo.stats import training_sequence_mask
+
 
 def action_trajectory_metadata(
     data: dict[str, Any], loss_mask: torch.Tensor
@@ -27,7 +29,8 @@ def action_trajectory_metadata(
         torch.all(terminated ^ truncated), "terminated XOR truncated is required"
     )
     active = loss_mask.bool()
-    torch._assert_async(torch.all(active.sum(-1) > 0), "Empty action episode")
+    real = training_sequence_mask(data)
+    torch._assert_async(torch.all(~real | active.any(-1)), "Empty action episode")
     attention = data["attention_mask"].bool()
     lengths = attention.sum(-1).long()
     positions = torch.arange(width, device=loss_mask.device).expand(bs, -1)
@@ -50,10 +53,10 @@ def action_trajectory_metadata(
         low = torch.where(active, ids, torch.iinfo(ids.dtype).max).amin(-1)
         high = torch.where(active, ids, -1).amax(-1)
         torch._assert_async(
-            torch.all((low == high) & (low >= 0)),
+            torch.all(~real | ((low == high) & (low >= 0))),
             "Separate packed episodes into rows before GAE",
         )
-    last_action = torch.where(active, positions, -1).amax(-1)
+    last_action = torch.where(active, positions, -1).amax(-1).clamp_min(0)
     return terminated, lengths, last_action
 
 
