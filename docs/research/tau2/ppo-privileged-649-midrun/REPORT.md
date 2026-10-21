@@ -1,0 +1,62 @@
+# 649（PPO + 带剧本 critic，β=1）中途诊断：为什么只有 Retail 涨
+
+2026-10-20。649 训练到第 100 步时，Retail 的 eval 涨了约 17pp，Airline 和 Telecom 没涨。需要判断原因，并回答用户的疑问：之前标准 critic
+的 PPO 基线 Telecom 涨过，这次为什么不涨。离线分析由 Codex（pueue 650）完成，只读日志和轨迹，不调用 API、不用 GPU；Claude 复核。
+
+- Codex 报告：`phai:_artifacts/AReaL/codex-sao-math/tau2-midrun-domain-case-study-20261020/REPORT.md`，逐条案例在同目录
+  `cases.md`。所有数字都由同目录下的脚本生成（`analyze.py`、`reconcile_training.py`、`gap.py`、`diagnostics.py`、`annotate.py`）。
+- 分析快照：2026-10-20 18:55 PDT，649 训练到第 116 步。主案例取第 100 步的 eval，第 110 步只有 Airline 和 Retail 跑完。
+
+## 1 结论
+
+1. **Retail 的提升是真的。** 第 100 步对第 0 步，按 task 配对：+17.5pp，task bootstrap 95% CI [6.3, 28.8]，21 个 task
+   变好、6 个变差。能看到的进步有三类：从多个订单里找到正确的对象，跨订单对齐商品属性，以及把已确认的多个子目标真的写进数据库。也有一部分成功靠的是用户纠正。
+1. **Airline 不是没学，但学到的东西集中在合成 pack 上，没有迁移到原始风格的题。** 不能用"数据少"来解释：训练里 Airline 的 task 和
+   episode 都比 Retail 多（410 个 task、约 8000 条，Retail 是 337 个 task、约 6600 条）。
+
+   | Airline 训练来源 | task 数 | 早期 reward | 后期 reward | 差值 [95% CI] |
+   | --- | --- | --- | --- | --- |
+   | pack | 380 | 57.6% | 69.9% | +12.3pp [9.1, 15.5] |
+   | 原始 train | 30 | 23.1% | 14.2% | −8.9pp [−17.5, −0.8] |
+
+   Pack 和 test 题的差别很大：
+
+   - Pack 题全部要写数据库，`COMMUNICATE` 检查为空，剧本平均 2083 个字符，gold 写参数里有 74% 直接出现在剧本中。
+   - Test 题和原始 train 题相近：剧本约 600 个字符，gold 参数只有 23% 出现在剧本中；20 题里 7 题不需要写数据库（应该拒绝），还有 2 题要求转人工。
+
+   20 条 Airline 失败全部是 T2（违反政策或推理出错）：把改目的地当成普通改签，直接改 Basic Economy，退票资格和时间比较算错，金额算错。也就是说，策略学会了"更积极地执行"，但没学会"什么时候不该执行"。
+
+1. **Telecom 的净变化≈0，是两类题方向相反、互相抵消。** 按 gold 里有没有转人工把题分成两类（Claude 独立复算过，结果一致）：
+
+   | Telecom 题型 | 第 0 步 | 第 90 步 | 第 100 步 |
+   | --- | --- | --- | --- |
+   | 要求转人工（12 题 × 4） | 33/48 | 41/48 | 44/48 |
+   | 要求排查故障（28 题 × 4） | 38/112 | 27/112 | 28/112 |
+
+   - 转人工题变好，是转人工这个行为从 Airline/Retail 迁移过来了。这类题的环境目标允许保持 no_service，所以通过率上升并不代表故障被修好。
+   - 排障题变差，主要原因是账户侧操作做错了线路：把开漫游、充值做到 L1001 而不是 L1002；漏掉 SMS 权限、Wi-Fi Calling 或补交账单。
+   - 设备侧 gold 动作的覆盖率没有提升（432/484 → 421/484），assistant 工具报错从 48 次增加到 196 次。
+   - 后期 agent 经常把工具 JSON 写在正文里，再由用户代为执行。这是输出风格变了，本身不算错误。
+
+1. **还不能把这些现象归因到带剧本 critic。** 649 只有一个 run，没有同一用户后端下的标准 critic 对照（run 3）。
+
+## 2 和之前 PPO 的对比：Telecom 只在官方 DeepSeek 用户下涨过
+
+数据取自各 run 的 `evidence/async-eval/*.json`。三个 run 的训练集都是 Airline + Retail，都用 `benchmark_variant=fixed`。
+
+| run | critic / β | 用户和 judge | Retail | Telecom | Airline |
+| --- | --- | --- | --- | --- | --- |
+| 基线 v3（+ext） | 标准，β=1 | DeepSeek 官方 `deepseek-flash` | 47.5 → 62–66 | 45.6 → 55.6（50）、58.1（100）、58.8（110）、48.1（120） | 23.8 → 18–24 |
+| 631 | 标准，全局 β=0.5 | 火山 260910 | 43.1 → 52–56 | 49.4 → 50–52 | 22.5 → 14–27 |
+| 649 | 带剧本，β=1 | 火山 261017 | 42.5 → 59–61 | 44.4 → 45.0（100） | 18.75 → 18–20 |
+
+- Retail 在三个 run 里都涨了，Airline 在三个 run 里都没涨，所以这两个 domain 的表现不是 649 特有的。
+- Telecom 只在基线里涨过，并且基线第 120 步又落回 48.1。两个火山用户的 run（标准 critic 的 631 和带剧本的 649）都没涨。所以目前更可疑的是用户后端：Telecom 的设备操作由用户来执行，用户模型对 Telecom 的影响比另外两个 domain 大。这一点还没验证。
+- 这个问题交给 pueue 651（`tau2-telecom-crossrun-20261020/`）：比较三个 run 第 0 步的 Telecom 轨迹（此时 policy 相同，区分用户后端的影响），精读基线中从失败变通过的 Telecom 题，并检验基线的涨幅本身是否显著。
+
+## 3 Claude 复核
+
+- 独立复算了第 0、100 步三个 domain 的通过数，以及 Telecom 按转人工划分的两组（33/48 → 44/48，38/112 → 28/112），与报告一致。
+- 各步 eval 分数与 `async-eval/*.json` 一致；第 110 步 Telecom 不完整（59/160），报告没有用它下结论。
+- 日志里没有 API 调用、GPU、pueue 或 git 写操作。报告里出现的火山地址来自读取 `config.yaml`。
+- 局限：649 只有一个 run；Airline test 只有 20 题；案例由同一个 Codex 精读，不是盲标；训练 reward 是 temperature 1.0 下采样的，不能直接和 eval（temperature 0）的绝对值比较。
