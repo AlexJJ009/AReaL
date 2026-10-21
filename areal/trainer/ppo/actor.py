@@ -432,6 +432,20 @@ class PPOActor:
             # ignored when adv_norm is batch-level.
             advantages = self.adv_norm(advantages, loss_mask, group_sizes=group_sizes)
 
+        # Reliability is an actor-only multiplier, after advantage whitening.
+        # Returns and critic eligibility above must never depend on it.
+        if "user_reliability_weight" in data:
+            weight = data["user_reliability_weight"]
+            if weight.shape != advantages.shape or not torch.is_floating_point(weight):
+                raise ValueError(
+                    "user_reliability_weight must be token-aligned floating"
+                )
+            torch._assert_async(
+                torch.all(torch.isfinite(weight) & (weight >= 0)),
+                "user_reliability_weight must be finite and non-negative",
+            )
+            advantages = advantages * weight
+
         # Store data in the dict.
         data["advantages"] = advantages.detach()
         data["kl_rewards"] = kl_rewards

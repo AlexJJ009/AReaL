@@ -88,6 +88,7 @@ def pad_groups_for_dispatch(groups: list[dict], dp_size: int) -> tuple[list[dict
             "user_boundary_flags",
             "user_boundary_detector_ids",
             "user_boundary_gate_suppressed",
+            "user_reliability_weight",
         ):
             if key in dummy:
                 dummy[key].zero_()

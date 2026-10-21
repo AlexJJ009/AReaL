@@ -44,6 +44,8 @@ NON_MODEL_FORWARD_METADATA_KEYS = frozenset(
         "user_boundary_detector_ids",
         "user_boundary_gate_suppressed",
         "user_td_beta_flagged",
+        "user_reliability_id",
+        "user_reliability_weight",
         *CRITIC_PREFIX_KEYS,
     }
 )

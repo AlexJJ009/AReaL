@@ -654,6 +654,7 @@ class Tau2AgentWorkflow:
         user_td_beta_flagged: float = 0.0,
         critic_user_scenario: bool = False,
         critic_tokenizer_path: str | None = None,
+        user_reliability_weight: bool = False,
     ):
         if econfig is None:
             econfig = Tau2EnvConfig()
@@ -671,6 +672,7 @@ class Tau2AgentWorkflow:
         self.evaluation = evaluation
         self.trajectory_dir = trajectory_dir
         self.train_user_boundary_values = train_user_boundary_values
+        self.user_reliability_weight = user_reliability_weight
         self.critic_user_scenario = critic_user_scenario
         self.critic_tokenizer_path = critic_tokenizer_path
         if critic_user_scenario:
@@ -962,6 +964,13 @@ class Tau2AgentWorkflow:
             if run_info.reward_info is not None
             else None
         )
+        reliability_metadata = {}
+        if self.user_reliability_weight:
+            from examples.tau2.user_reliability import scenario_id
+
+            reliability_metadata["user_reliability_id"] = scenario_id(
+                {**data, "domain": domain, "task_id": task_id}
+            )
         return AgentWorkflowResult(
             reward=float(run_info.reward),
             terminated=run_info.terminated,
@@ -977,5 +986,6 @@ class Tau2AgentWorkflow:
                 **runner.llm_route_evidence(),
                 **boundary_metadata,
                 **scenario_metadata,
+                **reliability_metadata,
             },
         )

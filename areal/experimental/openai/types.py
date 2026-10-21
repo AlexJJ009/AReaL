@@ -314,6 +314,15 @@ class InteractionWithTokenLogpReward:
             [self.episode_metadata.get("failure_class") == "task_budget"],
             dtype=torch.bool,
         )
+        if "user_reliability_id" in self.episode_metadata:
+            ident = self.episode_metadata["user_reliability_id"]
+            if (
+                isinstance(ident, bool)
+                or not isinstance(ident, int)
+                or not 0 <= ident < 2**63
+            ):
+                raise ValueError("Invalid user_reliability_id")
+            result["user_reliability_id"] = torch.tensor([ident], dtype=torch.int64)
         if "critic_prefix_input_ids" in self.episode_metadata:
             prefix = self.episode_metadata["critic_prefix_input_ids"]
             if (

@@ -300,6 +300,10 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
     user_td_beta_flagged: float = 0.0
     # PPO only: prepend the simulator scenario to critic inputs, never actor inputs.
     critic_user_scenario: bool = False
+    # Past-epoch terminal R-U variance weights PPO policy advantages only.
+    user_reliability_weight: bool = False
+    user_reliability_shrink_k: float = 2.0
+    user_reliability_warmup_epochs: int = 2
     critic_head_lr: float | None = None
     # Episode attempts after the first, as `tau2 run --max-retries` (default 3).
     infra_retries: int = 3
@@ -340,6 +344,32 @@ class Tau2PPOConfig(AsyncEvalPPOConfig):
 
     def validate_user_td_split(self) -> None:
         """Validate opt-in user-boundary settings, including structured loading."""
+        if not isinstance(self.user_reliability_weight, bool):
+            raise ValueError("user_reliability_weight must be a bool")
+        if self.user_reliability_weight:
+            if (
+                self.algorithm != "ppo"
+                or self.critic is None
+                or not self.train_user_boundary_values
+            ):
+                raise ValueError(
+                    "user_reliability_weight requires PPO, a critic and train_user_boundary_values"
+                )
+            if (
+                not math.isfinite(self.user_reliability_shrink_k)
+                or self.user_reliability_shrink_k < 0
+            ):
+                raise ValueError(
+                    "user_reliability_shrink_k must be finite and non-negative"
+                )
+            if (
+                isinstance(self.user_reliability_warmup_epochs, bool)
+                or not isinstance(self.user_reliability_warmup_epochs, int)
+                or self.user_reliability_warmup_epochs < 0
+            ):
+                raise ValueError(
+                    "user_reliability_warmup_epochs must be a non-negative integer"
+                )
         if not isinstance(self.critic_user_scenario, bool):
             raise ValueError("critic_user_scenario must be a bool")
         if self.critic_user_scenario:

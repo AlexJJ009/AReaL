@@ -848,6 +848,8 @@ class PPOTrainer:
                     self._release_unused_cuda_cache(self.critic, role="critic")
                 # The actor handoff below evicts an offloaded critic before logp.
 
+            self._process_rollout_batch(rollout_batch)
+
             if self.ref is not None:
                 if self._should_offload_ref:
                     self._onload_model(self.ref, role="ref")
@@ -1600,6 +1602,7 @@ class PPOTrainer:
         should_recover_rollout_inputs = self._should_recover_rollout_inputs(self.config)
         if self.config.critic_updates_before_actor or self._recover_rollout_inputs:
             trainer_state["rollout_recovery_policy"] = self._rollout_recovery_policy
+        trainer_state.update(self._extra_recovery_trainer_state())
         self.recover_handler.dump(
             to_save,
             step_info,
@@ -1624,6 +1627,13 @@ class PPOTrainer:
         if not is_single_controller():
             dist.barrier(group=self.actor.cpu_group)
             current_platform.synchronize()
+
+    def _process_rollout_batch(self, rollout_batch: list[dict[str, Any]]) -> None:
+        """Recipe hook after fresh critic values, before advantage computation."""
+
+    def _extra_recovery_trainer_state(self) -> dict[str, Any]:
+        """Recipe-owned state stored in the same atomic recover checkpoint."""
+        return {}
 
     def _evaluate_fn(
         self,

@@ -209,6 +209,8 @@ class Tau2AsyncEvalTrainer(Tau2ApiStatsMixin, AsyncEvalPPOTrainer):
             max_skipped_inputs=self.config.max_skipped_tasks_per_epoch,
         )
         groups = prepare(*args, **kwargs)
+        if getattr(self.config, "user_reliability_weight", False):
+            self._prepare_reliability(groups, prepare.epoch + 1)
         physical, padding = pad_groups_for_dispatch(
             groups, self.actor.parallel_strategy.dp_size
         )
@@ -228,6 +230,8 @@ class Tau2AsyncEvalTrainer(Tau2ApiStatsMixin, AsyncEvalPPOTrainer):
         # Real coverage is distinct from physical DP tail padding.
         stats = super()._additional_stats()
         stats.update(self._batch_counts)
+        if getattr(self.config, "user_reliability_weight", False):
+            stats.update(self._reliability_stats)
         return stats
 
     def _dedicated_eval_sglang_config(self) -> SGLangConfig:
@@ -284,6 +288,58 @@ class Tau2AsyncEvalTrainer(Tau2ApiStatsMixin, AsyncEvalPPOTrainer):
 
 class Tau2PPOTrainer(Tau2AsyncEvalTrainer):
     """Initialise only backbone critics; checkpoint overrides use the plain loader."""
+
+    def _expected_recovery_trainer_state(self, config):
+        expected = super()._expected_recovery_trainer_state(config)
+        if getattr(config, "user_reliability_weight", False):
+            expected["user_reliability_settings"] = [
+                config.user_reliability_shrink_k,
+                config.user_reliability_warmup_epochs,
+            ]
+        return expected
+
+    def _init_impl(self, config, *args, **kwargs):
+        super()._init_impl(config, *args, **kwargs)
+        if getattr(config, "user_reliability_weight", False):
+            from examples.tau2.user_reliability import UserReliability
+
+            self._user_reliability = UserReliability(
+                self.train_dataloader.dataset,
+                config.user_reliability_shrink_k,
+                config.user_reliability_warmup_epochs,
+            )
+            if self.recover_info is not None:
+                state = self.recover_info.trainer_state.get("user_reliability")
+                if state is None:
+                    raise ValueError("Missing reliability recover state")
+                self._user_reliability.load_state_dict(state)
+
+    def _prepare_reliability(self, groups, epoch):
+        log_dir = StatsLogger.get_log_path(
+            experiment_name=self.config.experiment_name,
+            trial_name=self.config.trial_name,
+            fileroot=self.config.cluster.fileroot,
+        )
+        self._user_reliability.begin_epoch(epoch, log_dir)
+        self._reliability_stats = self._user_reliability.apply(groups)
+
+    def _process_rollout_batch(self, rollout_batch):
+        super()._process_rollout_batch(rollout_batch)
+        if getattr(self.config, "user_reliability_weight", False):
+            self._user_reliability.observe(rollout_batch)
+
+    def _extra_recovery_trainer_state(self):
+        state = super()._extra_recovery_trainer_state()
+        if getattr(self.config, "user_reliability_weight", False):
+            reliability = self._user_reliability
+            state.update(
+                user_reliability=reliability.state_dict(),
+                user_reliability_settings=[
+                    reliability.shrink_k,
+                    reliability.warmup_epochs,
+                ],
+            )
+        return state
 
     def _create_critic(self, critic_config, alloc):
         if critic_config.path == self.config.actor.path:
