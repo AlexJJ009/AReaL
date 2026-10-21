@@ -18,7 +18,10 @@ from areal.trainer.async_eval import AsyncEvalPPOTrainer
 from areal.trainer.rollout_batch import (
     FiniteEpochBatcher,
     group_episode_count,
-    repeat_groups_for_dispatch,
+    pad_groups_for_dispatch,
+)
+from areal.trainer.rollout_batch import (
+    repeat_groups_for_dispatch as repeat_groups_for_dispatch,
 )
 from areal.utils.stats_logger import StatsLogger
 
@@ -101,7 +104,7 @@ class Tau2AsyncEvalTrainer(Tau2ApiStatsMixin, AsyncEvalPPOTrainer):
             max_skipped_inputs=self.config.max_skipped_tasks_per_epoch,
         )
         groups = prepare(*args, **kwargs)
-        physical, replicas = repeat_groups_for_dispatch(
+        physical, padding = pad_groups_for_dispatch(
             groups, self.actor.parallel_strategy.dp_size
         )
         generator = getattr(self.rollout, "data_generator", None)
@@ -110,14 +113,14 @@ class Tau2AsyncEvalTrainer(Tau2ApiStatsMixin, AsyncEvalPPOTrainer):
             # Groups may have lost members after retries (ADR 0011).
             "tau2_batch/real_episodes": sum(map(group_episode_count, groups)),
             "tau2_batch/physical_prompt_groups": len(physical),
-            "tau2_batch/dispatch_replication_factor": replicas,
+            "tau2_batch/padding_groups": padding,
             "tau2_batch/epoch_deferred_tasks": getattr(generator, "deferred_count", 0),
             "tau2_batch/epoch_skipped_tasks": len(getattr(generator, "skipped", ())),
         }
         return physical
 
     def _additional_stats(self) -> dict[str, float]:
-        # Real coverage is distinct from physical DP tail replication.
+        # Real coverage is distinct from physical DP tail padding.
         stats = super()._additional_stats()
         stats.update(self._batch_counts)
         return stats

@@ -124,9 +124,17 @@ class DistributedStatsTracker:
     def scalar(self, *, reduce_group=None, **kwargs):
         with self.lock:
             for key, value in kwargs.items():
+                if isinstance(value, torch.Tensor):
+                    if value.numel() != 1:
+                        raise ValueError(f"`{key}` must be a scalar tensor")
+                    # Keep device counts asynchronous until export. Detach and
+                    # clone so subsequent updates cannot change the snapshot.
+                    value = value.detach().clone()
+                else:
+                    value = float(value)
                 full_key = self._get_full_key(key)
                 self._set_reduce_type(full_key, ReduceType.SCALAR)
-                self.stats[full_key].append(float(value))
+                self.stats[full_key].append(value)
                 if reduce_group is not None:
                     self.reduce_groups[full_key] = reduce_group
 

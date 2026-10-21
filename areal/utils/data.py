@@ -37,6 +37,7 @@ NON_MODEL_FORWARD_METADATA_KEYS = frozenset(
         "truncated",
         "turn_ids",
         "critic_loss_mask",
+        "is_padding",
         "user_boundary_types",
         "user_td_beta",
         "user_boundary_flags",
@@ -1514,8 +1515,16 @@ class Normalization:
         bs = x.size(0)
         eps = self.eps
 
-        # Early return if no elements are active (all masked out)
-        if loss_mask is not None and loss_mask.sum().item() == 0:
+        # Even an all-padding DP rank must join batch normalization collectives.
+        batch_collectives = dist.is_initialized() and "batch" in (
+            self.mean_level,
+            self.std_level,
+        )
+        if (
+            not batch_collectives
+            and loss_mask is not None
+            and loss_mask.sum().item() == 0
+        ):
             return x.float()
 
         # Pre-compute group slices once (variable-size groups via group_sizes).

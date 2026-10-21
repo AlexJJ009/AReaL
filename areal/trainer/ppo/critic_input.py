@@ -67,6 +67,12 @@ def prepare_critic_input(data: dict[str, Any]) -> dict[str, Any]:
     result["position_ids"] = torch.arange(
         new_width, device=ids.device, dtype=torch.long
     ).expand(batch, -1)
+    if "is_padding" in data:
+        # Prefix/context padding also belongs to the dummy trajectory. Keep the
+        # entire row marked, including columns added by batch concatenation.
+        result["is_padding"] = (
+            data["is_padding"].any(-1, keepdim=True).expand(batch, new_width)
+        )
     return result
 
 

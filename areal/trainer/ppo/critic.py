@@ -11,7 +11,7 @@ from areal.api.cli_args import MicroBatchSpec, PPOCriticConfig
 from areal.infra import TrainController
 from areal.infra.rpc.serialization import serialize_value
 from areal.trainer.ppo.critic_input import align_critic_values, prepare_critic_input
-from areal.trainer.ppo.stats import infer_token_denominator
+from areal.trainer.ppo.stats import infer_token_denominator, training_sequence_mask
 from areal.trainer.ppo.update import summarize_updates
 from areal.trainer.ppo.user_boundary import critic_loss_mask, log_user_boundary_stats
 from areal.utils import stats_tracker
@@ -107,9 +107,7 @@ class PPOCritic:
         if "critic_prefix_lengths" in data and log_boundaries:
             with stats_tracker.scope("critic_scenario"):
                 lengths = data["critic_prefix_lengths"].float()
-                stats_tracker.denominator(
-                    trajectories=torch.ones_like(lengths, dtype=torch.bool)
-                )
+                stats_tracker.denominator(trajectories=training_sequence_mask(data))
                 stats_tracker.stat(prefix_len=lengths, denominator="trajectories")
                 stats_tracker.denominator(
                     missing_scenario=torch.zeros_like(lengths, dtype=torch.bool)

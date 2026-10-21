@@ -18,7 +18,7 @@ from areal.trainer.ppo.gae import (
     _compute_turn_level_gae,
 )
 from areal.trainer.ppo.lambda_fn import resolve_gae_lambda_fn
-from areal.trainer.ppo.stats import infer_token_denominator
+from areal.trainer.ppo.stats import infer_token_denominator, training_sequence_mask
 from areal.trainer.ppo.trajectory import (
     action_token_rewards,
     action_trajectory_metadata,
@@ -222,8 +222,14 @@ class PPOActor:
         # across prompts. Direct calls without batched metadata keep the legacy
         # fixed-group-size behavior.
         group_sizes = meta.traj_group_sizes if meta is not None else None
+        real = training_sequence_mask(data)
         if self.reward_norm:
-            reward_score = self.reward_norm(reward_score, group_sizes=group_sizes)
+            reward_score = self.reward_norm(
+                reward_score,
+                real if "is_padding" in data else None,
+                group_sizes=group_sizes,
+            )
+        reward_score = torch.where(real, reward_score, 0.0)
 
         loss_mask = data["loss_mask"].float()
         loss_mask = torch.roll(loss_mask, shifts=-1, dims=-1)
@@ -323,7 +329,9 @@ class PPOActor:
             )
             bootstrap_values = torch.where(bootstrap_mask, final_values, 0.0).detach()
         if self._gae_lambda_is_custom:
-            gae_lambda = self._compute_gae_lambda(loss_mask, turn_ids)
+            gae_lambda = self._compute_gae_lambda(
+                loss_mask, turn_ids, real if "is_padding" in data else None
+            )
         else:
             gae_lambda = float(self.gae_lambda)
             if not math.isfinite(gae_lambda):
@@ -438,6 +446,7 @@ class PPOActor:
         self,
         loss_mask: torch.Tensor,
         turn_ids: torch.Tensor | None,
+        real: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Resolve one lambda value per local trajectory without changing masks."""
         context = _build_gae_lambda_context(
@@ -445,13 +454,17 @@ class PPOActor:
             turn_ids,
             gae_timestep_unit=self.gae_timestep_unit,
         )
+        if real is not None:
+            # Custom lambda functions see only real trajectories, retaining
+            # their nonempty-action validation (notably SAO's 1/L rule).
+            context = {key: value[real] for key, value in context.items()}
         gae_lambda = self.gae_lambda_fn(context, **self.gae_lambda_kwargs)
         if not isinstance(gae_lambda, torch.Tensor):
             raise TypeError(
                 "gae_lambda function must return a torch.Tensor with shape "
                 f"[{loss_mask.shape[0]}], got {type(gae_lambda).__name__}"
             )
-        expected_shape = torch.Size([loss_mask.shape[0]])
+        expected_shape = context["timestep_lengths"].shape
         if gae_lambda.shape != expected_shape:
             raise ValueError(
                 "gae_lambda function must return one value per local trajectory: "
@@ -471,7 +484,12 @@ class PPOActor:
             torch.all(torch.isfinite(gae_lambda)),
             "gae_lambda function returned a non-finite value",
         )
-        return gae_lambda.detach().float()
+        gae_lambda = gae_lambda.detach().float()
+        if real is not None:
+            full_lambda = loss_mask.new_zeros(loss_mask.shape[0])
+            full_lambda[real] = gae_lambda
+            return full_lambda
+        return gae_lambda
 
     @trace_perf("ppo_actor.ppo_update", category="compute")
     @stats_tracker.scope_func_wrapper("ppo_actor")
@@ -484,6 +502,7 @@ class PPOActor:
         loss_mask = data["loss_mask"]
         reward_score = data["rewards"]
         seqlens = attn_mask.sum(-1)
+        real = training_sequence_mask(data)
 
         ########## Logging code starts ##########
         task_reward = (
@@ -492,8 +511,8 @@ class PPOActor:
             else reward_score.float()
         )
         result_denominators = {
-            "correct_n_seqs": (task_reward > 0).bool(),
-            "incorrect_n_seqs": (task_reward <= 0).bool(),
+            "correct_n_seqs": (task_reward > 0) & real,
+            "incorrect_n_seqs": (task_reward <= 0) & real,
         }
         if self.config.log_agent_stats:
             if "begin_of_trajectory" not in data:
@@ -504,10 +523,10 @@ class PPOActor:
                 raise RuntimeError(
                     "`log_agent_stats_keys` should not be empty when log_agent_stats=True"
                 )
-            agent_denominator = (data["begin_of_trajectory"] > 0).bool()
+            agent_denominator = (data["begin_of_trajectory"] > 0).bool() & real
             result_denominators["agent"] = agent_denominator
         global_denominators = dict(
-            n_seqs=torch.ones_like(reward_score, dtype=torch.bool),
+            n_seqs=real,
             n_tokens=infer_token_denominator(data, loss_mask),
             n_valid_tokens=loss_mask.bool(),
             **result_denominators,
@@ -860,6 +879,11 @@ def grpo_loss_fn(
         )
 
     if "n_valid_tokens" in stat:
+        if "is_padding" in input_data:
+            total = infer_token_denominator(input_data, loss_mask).count_nonzero()
+            stat["n_total_tokens"] = total
+            stat["n_masked_tokens"] = total - stat["n_valid_tokens"]
+            stat["masked_token_ratio"] = 1 - stat["n_valid_tokens"] / total.clamp_min(1)
         stats_tracker.scalar(
             n_total_tokens=stat["n_total_tokens"],
             n_valid_tokens_in_loss=stat["n_valid_tokens"],
