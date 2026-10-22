@@ -218,6 +218,8 @@ def write_summary(tm, evs, out, steps=(0, 120), ev_window=(101, 120)):
         ("retail", ("retail",)),
         ("same-domain", ("airline", "retail")),
         ("telecom", ("telecom",)),
+        # All 100 test tasks, each weighted equally.
+        ("overall", ("airline", "retail", "telecom")),
     ]
     lo, hi = ev_window
     with open(path, "w", newline="") as f:
