@@ -2,9 +2,23 @@
 """Finite online epochs and equal-weight data-parallel tail dispatch."""
 
 import copy
-from math import gcd
+from math import gcd, prod
 
 import torch
+
+from areal.infra.rpc.rtensor import RTensor
+
+
+def _filled_like(
+    value: torch.Tensor | RTensor, fill: int, *, dtype: torch.dtype | None = None
+) -> torch.Tensor:
+    """Build a local dispatch overlay from metadata, without fetching a shard."""
+    return torch.full(
+        value.shape,
+        fill,
+        dtype=dtype or value.dtype,
+        device="cpu" if isinstance(value, RTensor) else value.device,
+    )
 
 
 class FiniteEpochBatcher:
@@ -67,16 +81,18 @@ def pad_groups_for_dispatch(groups: list[dict], dp_size: int) -> tuple[list[dict
     physical = [
         {
             **group,
-            "is_padding": torch.zeros_like(group["attention_mask"], dtype=torch.bool),
+            "is_padding": _filled_like(group["attention_mask"], 0, dtype=torch.bool),
         }
         for group in groups
     ]
     # A short existing group minimizes the extra forward cost without changing
     # any real sequence or requiring synthetic tokenizer-specific inputs.
-    template = min(groups, key=lambda group: group["attention_mask"].numel())
+    template = min(groups, key=lambda group: prod(group["attention_mask"].shape))
     for _ in range(padding):
         dummy = copy.deepcopy(template)
-        dummy["is_padding"] = torch.ones_like(dummy["attention_mask"], dtype=torch.bool)
+        # RPC serialization accepts local tensors alongside remote handles;
+        # worker ingress localizes the context before packing/microbatching.
+        dummy["is_padding"] = _filled_like(dummy["attention_mask"], 1, dtype=torch.bool)
         for key in (
             "loss_mask",
             "critic_loss_mask",
@@ -91,6 +107,6 @@ def pad_groups_for_dispatch(groups: list[dict], dp_size: int) -> tuple[list[dict
             "user_reliability_weight",
         ):
             if key in dummy:
-                dummy[key].zero_()
+                dummy[key] = _filled_like(dummy[key], 0)
         physical.append(dummy)
     return physical, padding

@@ -63,8 +63,12 @@ starts on that GPU. Default ports are:
 `--port-base`, `--user-port`, and `--user-nccl-port` can move these allocations. RPC
 workers inherit `AREAL_PORT_RANGE=min:max`; normal AReaL runs without this variable
 retain the original port selection behavior. The runner checks all planned TCP/UDP ports
-before startup. Another application can still claim a port after that check; startup
-failure is reported, with no fallback to a shared policy port.
+before startup, waiting up to 180 seconds for a previous run to release them.
+`--port-wait-timeout SECONDS` changes this bound. Each policy attempt also waits for its
+entire slot before starting, including retries. Waiting responds to cancellation; a
+timeout names the occupied ports and protocols. Another application can still claim a
+port after that check; startup failure is reported, with no fallback to a shared policy
+port.
 
 Every evaluation uses `--task-set ppo --repeats 4 --temperature 0`, the fixed 100-task
 set, `qwen25` policy tool parsing, and a 900-second episode timeout. Policy radix cache

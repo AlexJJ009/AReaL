@@ -9,9 +9,11 @@ See README_checkpoint_eval.md for runtime JSON and the resume protocol.
 from __future__ import annotations
 
 import argparse
+import errno
 import fcntl
 import hashlib
 import json
+import math
 import os
 import shlex
 import signal
@@ -88,6 +90,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--poll-interval", type=float, default=5)
     parser.add_argument("--startup-timeout", type=float, default=900)
     parser.add_argument(
+        "--port-wait-timeout",
+        type=float,
+        default=180,
+        help="Seconds to wait for prior servers to release TCP/UDP ports before launch.",
+    )
+    parser.add_argument(
         "--checkpoint-timeout",
         type=float,
         default=172800,
@@ -162,15 +170,13 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("workers must be 1..7 and judge-concurrency positive")
     if args.steps_per_epoch < 1 or args.final_step < 1:
         raise ValueError("steps-per-epoch and final-step must be positive")
-    if (
-        min(
-            args.wait_timeout,
-            args.poll_interval,
-            args.startup_timeout,
-            args.checkpoint_timeout,
-        )
-        <= 0
-    ):
+    if min(
+        args.wait_timeout,
+        args.poll_interval,
+        args.startup_timeout,
+        args.checkpoint_timeout,
+        args.port_wait_timeout,
+    ) <= 0 or not math.isfinite(args.port_wait_timeout):
         raise ValueError("timeouts and poll-interval must be positive")
     steps = list(dict.fromkeys(int(s) for s in args.steps.split(",")))
     if not steps or any(s < 0 or s > args.final_step for s in steps):
@@ -602,6 +608,9 @@ def execute_checkpoint(
     plan: dict[str, Any],
     args: argparse.Namespace,
 ) -> int:
+    wait_ports_free(
+        slot_ports(job), timeout=args.port_wait_timeout, stopped=manager.stopped
+    )
     env = process_env(plan, job["gpu"])
     low, end = job["port_range"]
     env["AREAL_PORT_RANGE"] = f"{low}:{end - 1}"
@@ -751,16 +760,42 @@ def write_summaries(plan: dict[str, Any]) -> None:
     (root / "summary.md").write_text("\n".join(markdown) + "\n")
 
 
-def assert_ports_free(plan: dict[str, Any]) -> None:
-    ports = [plan["user_port"], plan["user_nccl_port"]]
-    for slot in plan["slots"]:
-        ports.extend(
-            [slot["policy_port"], slot["nccl_port"], *range(*slot["port_range"])]
-        )
-    for port in ports:
-        for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
-            with socket.socket(socket.AF_INET, kind) as sock:
-                sock.bind(("0.0.0.0", port))
+def slot_ports(slot: dict[str, Any]) -> list[int]:
+    return [slot["policy_port"], slot["nccl_port"], *range(*slot["port_range"])]
+
+
+def wait_ports_free(
+    ports: list[int],
+    *,
+    timeout: float,
+    stopped: threading.Event,
+    poll_interval: float = 1.0,
+) -> None:
+    """Wait for previous servers, including retry slots, without killing owners."""
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("port wait timeout must be finite and positive")
+    deadline = time.monotonic() + timeout
+    while True:
+        if stopped.is_set():
+            raise InterruptedError("Runner canceled while waiting for ports")
+        occupied = []
+        for port in ports:
+            for kind, name in ((socket.SOCK_STREAM, "TCP"), (socket.SOCK_DGRAM, "UDP")):
+                with socket.socket(socket.AF_INET, kind) as sock:
+                    try:
+                        sock.bind(("0.0.0.0", port))
+                    except OSError as exc:
+                        if exc.errno != errno.EADDRINUSE:
+                            raise
+                        occupied.append(f"{port}/{name}")
+        if not occupied:
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(
+                f"Ports still occupied after {timeout:g}s: {', '.join(occupied)}"
+            )
+        stopped.wait(min(poll_interval, remaining))
 
 
 def run(args: argparse.Namespace) -> int:
@@ -806,7 +841,12 @@ def run(args: argparse.Namespace) -> int:
                 )
             ]
             if todo:
-                assert_ports_free(plan)
+                wait_ports_free(
+                    [plan["user_port"], plan["user_nccl_port"]]
+                    + [port for slot in plan["slots"] for port in slot_ports(slot)],
+                    timeout=args.port_wait_timeout,
+                    stopped=manager.stopped,
+                )
                 env = process_env(plan, 7)
                 env.pop("AREAL_PORT_RANGE", None)
                 pgid = root / "user-server.pgid"

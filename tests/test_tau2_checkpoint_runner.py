@@ -4,8 +4,11 @@
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -13,6 +16,125 @@ import pytest
 import yaml
 
 from scripts.tau2 import checkpoint_eval as runner
+
+
+def test_port_wait_retries_tcp_and_udp_until_released():
+    """The previous run's real listening sockets close before any launch."""
+    for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+        with socket.socket(socket.AF_INET, kind) as held:
+            held.bind(("0.0.0.0", 0))
+            if kind == socket.SOCK_STREAM:
+                held.listen()
+            port = held.getsockname()[1]
+            release = threading.Timer(0.08, held.close)
+            release.start()
+            start = time.monotonic()
+            try:
+                runner.wait_ports_free(
+                    [port], timeout=1, stopped=threading.Event(), poll_interval=0.01
+                )
+            finally:
+                release.join()
+            assert time.monotonic() - start >= 0.06
+
+
+def test_port_wait_timeout_names_occupied_port_and_starts_no_process():
+    """A port that remains occupied produces a bounded, actionable error."""
+    with socket.socket() as held:
+        held.bind(("0.0.0.0", 0))
+        held.listen()
+        port = held.getsockname()[1]
+        start = time.monotonic()
+        with pytest.raises(TimeoutError, match=str(port)):
+            runner.wait_ports_free(
+                [port], timeout=0.05, stopped=threading.Event(), poll_interval=0.01
+            )
+        assert time.monotonic() - start < 0.5
+
+
+def test_port_wait_cancellation_interrupts_wait():
+    """Cancellation wakes port waiting without waiting for the deadline."""
+    stopped = threading.Event()
+    stopped.set()
+    with pytest.raises(InterruptedError, match="canceled"):
+        runner.wait_ports_free([], timeout=180, stopped=stopped)
+
+
+def test_port_wait_cancellation_wakes_occupied_port_wait():
+    """Cancellation during a long poll releases the caller promptly."""
+    stopped = threading.Event()
+    with socket.socket() as held:
+        held.bind(("0.0.0.0", 0))
+        held.listen()
+        timer = threading.Timer(0.05, stopped.set)
+        timer.start()
+        start = time.monotonic()
+        try:
+            with pytest.raises(InterruptedError, match="canceled"):
+                runner.wait_ports_free(
+                    [held.getsockname()[1]], timeout=180, stopped=stopped
+                )
+        finally:
+            timer.join()
+        assert time.monotonic() - start < 1
+
+
+def test_port_wait_cli_defaults_and_override(recipe):
+    assert recipe.port_wait_timeout == 180
+    args = runner.parse_args(
+        [recipe.run, "--runtime", recipe.runtime, "--port-wait-timeout", "0.1"]
+    )
+    assert args.port_wait_timeout == 0.1
+    args.port_wait_timeout = 0
+    with pytest.raises(ValueError, match="positive"):
+        runner.build_plan(args)
+
+
+def test_policy_attempt_waits_for_entire_slot_before_spawn(
+    recipe, monkeypatch, tmp_path
+):
+    """Retry slots can still be occupied after the initial runner preflight."""
+    plan = runner.build_plan(recipe)
+    job = plan["jobs"][0]
+    events = []
+
+    def wait(ports, **kwargs):
+        assert set(ports) == {
+            job["policy_port"],
+            job["nccl_port"],
+            *range(*job["port_range"]),
+        }
+        assert kwargs["timeout"] == recipe.port_wait_timeout
+        events.append("ports-free")
+
+    manager = Mock(stopped=threading.Event())
+    manager.start.side_effect = lambda *a: events.append("start") or SimpleProcess()
+    monkeypatch.setattr(runner, "wait_ports_free", wait, raising=False)
+    monkeypatch.setattr(runner, "process_env", lambda *a: {})
+    runner.execute_checkpoint(job, tmp_path, manager, plan, recipe)
+    assert events == ["ports-free", "start"]
+
+
+class SimpleProcess:
+    returncode = 0
+
+    def poll(self):
+        return 0
+
+
+def test_shared_user_port_collision_times_out_before_any_spawn(recipe, monkeypatch):
+    """Reproduce the real startup EADDRINUSE with an occupied local socket."""
+    with socket.socket() as held:
+        held.bind(("0.0.0.0", 0))
+        held.listen()
+        recipe.user_port = held.getsockname()[1]
+        recipe.port_wait_timeout = 0.05
+        manager = Mock(stopped=threading.Event())
+        monkeypatch.setattr(runner, "ProcessGroups", lambda: manager)
+        monkeypatch.setattr(runner, "checkpoint_ready", lambda path: True)
+        with pytest.raises(TimeoutError, match=str(recipe.user_port)):
+            runner.run(recipe)
+        manager.start.assert_not_called()
 
 
 @pytest.fixture
@@ -330,7 +452,7 @@ def test_retry_rebinds_all_preload_write_paths(recipe):
     process = Mock()
     process.poll.return_value = 0
     process.returncode = 0
-    manager = Mock()
+    manager = Mock(stopped=threading.Event())
     manager.start.return_value = process
     assert (
         runner.execute_checkpoint(
@@ -433,7 +555,7 @@ r.build_plan = lambda args: plan
 r.parse_args = lambda: args
 r.checkpoint_ready = lambda path: True
 r.process_env = lambda plan, gpu: {**os.environ, "CUDA_VISIBLE_DEVICES": ""}
-r.assert_ports_free = lambda plan: None
+r.wait_ports_free = lambda *a, **kw: None
 def ready(*a, **kw):
     Path(sys.argv[4]).write_text("ready")
 r.wait_http = ready

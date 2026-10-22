@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Past-only per-task reliability for the opt-in Tau2 PPO recipe.
 
-All state lives on the trainer/controller, using CPU rollout tensors. Epochs
-here are one-based; finite rollout epochs are converted at the recipe boundary.
+All state lives on the trainer/controller, fetching only reliability fields from
+remote rollout tensors. Epochs here are one-based; finite rollout epochs are
+converted at the recipe boundary.
 """
 
 import hashlib
@@ -16,6 +17,8 @@ from pathlib import Path
 from typing import Any
 
 import torch
+
+from areal.infra.rpc.rtensor import RTensor
 
 
 def scenario_key(row: Mapping[str, Any]) -> tuple[str, str, str | None]:
@@ -132,17 +135,19 @@ class UserReliability:
             if not path.exists() or path.read_text(encoding="utf-8") != payload:
                 path.write_text(payload, encoding="utf-8")
 
-    def apply(self, groups: list[dict[str, torch.Tensor]]) -> dict[str, float]:
+    def apply(
+        self, groups: list[dict[str, torch.Tensor | RTensor]]
+    ) -> dict[str, float]:
         """Attach token-aligned weights before DP padding; report real batch stats."""
         weights = {row["id"]: row["weight"] for row in self.table}
         applied = defaultdict(list)
         for group in groups:
-            ids = group["user_reliability_id"].tolist()
+            ids = RTensor.localize(group["user_reliability_id"]).tolist()
             ws = [weights[i] for i in ids]
             group["user_reliability_weight"] = (
                 torch.tensor(ws, dtype=torch.float32)
                 .unsqueeze(1)
-                .expand_as(group["input_ids"])
+                .expand(group["input_ids"].shape)
                 .clone()
             )
             for i, w in zip(ids, ws, strict=True):
@@ -165,22 +170,45 @@ class UserReliability:
                 stats[f"{prefix}/weight_{name}"] = value
         return stats
 
-    def observe(self, groups: list[dict[str, torch.Tensor]]) -> None:
+    def observe(self, groups: list[dict[str, torch.Tensor | RTensor]]) -> None:
         """Reuse type=3 at b, reading fresh U before GAE/critic fitting alters data."""
         for group in groups:
-            terminal = group["user_boundary_types"] == 3
-            padding = group.get("is_padding", torch.zeros_like(terminal)).bool().any(-1)
+            # Fetch only reliability inputs, never input_ids/logprobs or the
+            # privileged critic prefix. Entire dummy groups need no observations.
+            padding = RTensor.localize(group.get("is_padding"))
+            if padding is not None:
+                padding = padding.bool().any(-1)
+                if padding.all():
+                    continue
+            local = RTensor.localize(
+                {
+                    key: group[key]
+                    for key in (
+                        "user_boundary_types",
+                        "terminated",
+                        "truncated",
+                        "rewards",
+                        "values",
+                        "user_reliability_id",
+                    )
+                }
+            )
+            terminal = local["user_boundary_types"] == 3
+            if padding is None:
+                padding = torch.zeros(
+                    terminal.shape[0], dtype=torch.bool, device=terminal.device
+                )
             eligible = (
-                group["terminated"] & ~group["truncated"] & ~padding & terminal.any(-1)
+                local["terminated"] & ~local["truncated"] & ~padding & terminal.any(-1)
             )
             if torch.any(terminal.sum(-1) > 1):
                 raise ValueError("Multiple terminal user boundaries")
             positions = terminal.to(torch.int64).argmax(-1)
-            surprise = group["rewards"] - group["values"].gather(
+            surprise = local["rewards"] - local["values"].gather(
                 1, positions.unsqueeze(1)
             ).squeeze(1)
             for ident, x in zip(
-                group["user_reliability_id"][eligible].tolist(),
+                local["user_reliability_id"][eligible].tolist(),
                 surprise[eligible].tolist(),
                 strict=True,
             ):
