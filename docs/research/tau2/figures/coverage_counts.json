@@ -1,0 +1,1408 @@
+{
+  "sets": {
+    "current_train": {
+      "label": "Current train (run 3)",
+      "kind": "current"
+    },
+    "test": {
+      "label": "Official fixed test",
+      "kind": "test"
+    },
+    "pool_areal_v1": {
+      "label": "tau2-areal-pack-20261011-v1",
+      "kind": "pool"
+    },
+    "pool_critic_mix_v1": {
+      "label": "tau2-areal-pack-20261013-critic-mix-v1",
+      "kind": "pool"
+    },
+    "pool_areal_telecom_v0": {
+      "label": "tau2-areal-telecom-pack-20261011-v0",
+      "kind": "pool"
+    },
+    "pool_areal_telecom_v1": {
+      "label": "tau2-areal-telecom-pack-20261011-v1",
+      "kind": "pool"
+    },
+    "pool_official_telecom_v1": {
+      "label": "tau2-official-telecom-pack-20261018-v1",
+      "kind": "pool"
+    },
+    "pool_telecom_full": {
+      "label": "Official telecom full residual",
+      "kind": "pool"
+    }
+  },
+  "domains": {
+    "airline": {
+      "tags": [
+        {
+          "tag": "multiple_reservations",
+          "label": "Several reservations",
+          "group": "Complexity",
+          "definition": "gold 或 scenario 涉及两个以上既有或新建预订。"
+        },
+        {
+          "tag": "writes_1",
+          "label": "One write",
+          "group": "Complexity",
+          "definition": "gold 的 DB 写操作次数为 1。"
+        },
+        {
+          "tag": "writes_3plus",
+          "label": "Three or more writes",
+          "group": "Complexity",
+          "definition": "gold 的 DB 写操作次数为 至少 3。"
+        },
+        {
+          "tag": "writes_2",
+          "label": "Two writes",
+          "group": "Complexity",
+          "definition": "gold 的 DB 写操作次数为 2。"
+        },
+        {
+          "tag": "report_information",
+          "label": "Report specific facts",
+          "group": "Information",
+          "definition": "评价标准明确要求报告具体事实或数值。"
+        },
+        {
+          "tag": "refusal",
+          "label": "Required refusal",
+          "group": "Outcome",
+          "definition": "任务中至少一个实际请求必须被拒绝，包括先拒绝再执行合法替代的任务。"
+        },
+        {
+          "tag": "no_db_write",
+          "label": "No DB write",
+          "group": "Outcome",
+          "definition": "gold 不包含该领域的 DB 写操作。"
+        },
+        {
+          "tag": "transfer",
+          "label": "Transfer to human",
+          "group": "Outcome",
+          "definition": "gold 要求转人工。"
+        },
+        {
+          "tag": "gift_card_payment",
+          "label": "Gift-card payment/refund",
+          "group": "Payment",
+          "definition": "gold 实际支付或退款涉及 gift card。"
+        },
+        {
+          "tag": "multiple_payment_methods",
+          "label": "Several payment methods",
+          "group": "Payment",
+          "definition": "同任务实际 gold 写入或取消退款涉及至少两种不同 payment_id。"
+        },
+        {
+          "tag": "certificate_payment",
+          "label": "Certificate payment",
+          "group": "Payment",
+          "definition": "gold 实际支付或退款涉及 travel certificate。"
+        },
+        {
+          "tag": "refuse_cancellation_ineligible",
+          "label": "Cancellation ineligible",
+          "group": "Refusal",
+          "definition": "请求取消，但不满足 24h、商务舱、航司取消或保险承保理由之一。"
+        },
+        {
+          "tag": "refuse_basic_economy_change",
+          "label": "Basic economy restriction",
+          "group": "Refusal",
+          "definition": "请求直接修改 basic economy 航班，须先拒绝该修改路径。"
+        },
+        {
+          "tag": "refuse_already_flown",
+          "label": "Already flown restriction",
+          "group": "Refusal",
+          "definition": "请求取消已有已飞航段的预订或修改其 cabin，须说明限制或转人工。"
+        },
+        {
+          "tag": "refuse_insurance_after_booking",
+          "label": "Cannot add insurance",
+          "group": "Refusal",
+          "definition": "请求给已存在的预订追加保险，policy 禁止。"
+        },
+        {
+          "tag": "refuse_route_change",
+          "label": "Route change forbidden",
+          "group": "Refusal",
+          "definition": "请求直接改变 origin、destination 或 trip type，须拒绝直接修改。"
+        },
+        {
+          "tag": "refuse_baggage_removal",
+          "label": "Cannot remove baggage",
+          "group": "Refusal",
+          "definition": "请求减少已订托运行李，policy 只允许增加。"
+        },
+        {
+          "tag": "refuse_compensation_ineligible",
+          "label": "Compensation ineligible",
+          "group": "Refusal",
+          "definition": "请求或试探补偿，但不符合 policy 的补偿场景或资格。"
+        },
+        {
+          "tag": "refuse_passenger_count",
+          "label": "Passenger count fixed",
+          "group": "Refusal",
+          "definition": "请求增删已有预订乘客人数，policy 禁止。"
+        },
+        {
+          "tag": "refuse_cabin_consistency",
+          "label": "Uniform cabin required",
+          "group": "Refusal",
+          "definition": "请求只给部分航段或乘客改变 cabin，但同预订 cabin 必须一致。"
+        },
+        {
+          "tag": "refuse_payment_restriction",
+          "label": "Payment restriction",
+          "group": "Refusal",
+          "definition": "实际要求的支付方法或组合违反预订或修改支付规则。"
+        },
+        {
+          "tag": "refuse_unsupported_fee_waiver",
+          "label": "Unsupported fee waiver",
+          "group": "Refusal",
+          "definition": "实际要求减免、免差价或豁免收费，但 policy 没有授权。"
+        },
+        {
+          "tag": "update_reservation_flights",
+          "label": "Update flights / cabin",
+          "group": "Write",
+          "definition": "gold 包含 update_reservation_flights 写操作。"
+        },
+        {
+          "tag": "book_reservation",
+          "label": "Book reservation",
+          "group": "Write",
+          "definition": "gold 包含 book_reservation 写操作。"
+        },
+        {
+          "tag": "cancel_reservation",
+          "label": "Cancel reservation",
+          "group": "Write",
+          "definition": "gold 包含 cancel_reservation 写操作。"
+        },
+        {
+          "tag": "update_reservation_baggages",
+          "label": "Add baggage",
+          "group": "Write",
+          "definition": "gold 包含 update_reservation_baggages 写操作。"
+        },
+        {
+          "tag": "update_reservation_passengers",
+          "label": "Edit passenger details",
+          "group": "Write",
+          "definition": "gold 包含 update_reservation_passengers 写操作。"
+        },
+        {
+          "tag": "send_certificate",
+          "label": "Compensation certificate",
+          "group": "Write",
+          "definition": "gold 包含 send_certificate 写操作。"
+        },
+        {
+          "tag": "cabin_change",
+          "label": "Change cabin class",
+          "group": "Write subtype",
+          "definition": "至少一次 update_reservation_flights 改变 cabin。"
+        },
+        {
+          "tag": "flight_change",
+          "label": "Change flight itinerary",
+          "group": "Write subtype",
+          "definition": "至少一次 update_reservation_flights 改变航班号/日期序列。"
+        }
+      ],
+      "sets": {
+        "current_train": {
+          "n": 417,
+          "counts": {
+            "multiple_reservations": 89,
+            "writes_1": 299,
+            "writes_3plus": 43,
+            "writes_2": 58,
+            "report_information": 10,
+            "refusal": 66,
+            "no_db_write": 17,
+            "transfer": 0,
+            "gift_card_payment": 104,
+            "multiple_payment_methods": 74,
+            "certificate_payment": 42,
+            "refuse_cancellation_ineligible": 16,
+            "refuse_basic_economy_change": 12,
+            "refuse_already_flown": 1,
+            "refuse_insurance_after_booking": 1,
+            "refuse_route_change": 0,
+            "refuse_baggage_removal": 6,
+            "refuse_compensation_ineligible": 4,
+            "refuse_passenger_count": 13,
+            "refuse_cabin_consistency": 6,
+            "refuse_payment_restriction": 17,
+            "refuse_unsupported_fee_waiver": 2,
+            "update_reservation_flights": 283,
+            "book_reservation": 79,
+            "cancel_reservation": 51,
+            "update_reservation_baggages": 65,
+            "update_reservation_passengers": 37,
+            "send_certificate": 5,
+            "cabin_change": 234,
+            "flight_change": 63
+          }
+        },
+        "test": {
+          "n": 20,
+          "counts": {
+            "multiple_reservations": 9,
+            "writes_1": 8,
+            "writes_3plus": 3,
+            "writes_2": 2,
+            "report_information": 5,
+            "refusal": 14,
+            "no_db_write": 7,
+            "transfer": 2,
+            "gift_card_payment": 7,
+            "multiple_payment_methods": 3,
+            "certificate_payment": 1,
+            "refuse_cancellation_ineligible": 7,
+            "refuse_basic_economy_change": 4,
+            "refuse_already_flown": 2,
+            "refuse_insurance_after_booking": 2,
+            "refuse_route_change": 2,
+            "refuse_baggage_removal": 1,
+            "refuse_compensation_ineligible": 1,
+            "refuse_passenger_count": 1,
+            "refuse_cabin_consistency": 0,
+            "refuse_payment_restriction": 0,
+            "refuse_unsupported_fee_waiver": 0,
+            "update_reservation_flights": 7,
+            "book_reservation": 5,
+            "cancel_reservation": 2,
+            "update_reservation_baggages": 1,
+            "update_reservation_passengers": 1,
+            "send_certificate": 0,
+            "cabin_change": 6,
+            "flight_change": 3
+          }
+        },
+        "pool_areal_v1": {
+          "n": 84,
+          "counts": {
+            "multiple_reservations": 24,
+            "writes_1": 44,
+            "writes_3plus": 10,
+            "writes_2": 30,
+            "report_information": 0,
+            "refusal": 11,
+            "no_db_write": 0,
+            "transfer": 1,
+            "gift_card_payment": 8,
+            "multiple_payment_methods": 15,
+            "certificate_payment": 6,
+            "refuse_cancellation_ineligible": 2,
+            "refuse_basic_economy_change": 3,
+            "refuse_already_flown": 0,
+            "refuse_insurance_after_booking": 0,
+            "refuse_route_change": 0,
+            "refuse_baggage_removal": 1,
+            "refuse_compensation_ineligible": 0,
+            "refuse_passenger_count": 5,
+            "refuse_cabin_consistency": 0,
+            "refuse_payment_restriction": 3,
+            "refuse_unsupported_fee_waiver": 0,
+            "update_reservation_flights": 52,
+            "book_reservation": 20,
+            "cancel_reservation": 10,
+            "update_reservation_baggages": 35,
+            "update_reservation_passengers": 10,
+            "send_certificate": 4,
+            "cabin_change": 24,
+            "flight_change": 39
+          }
+        },
+        "pool_critic_mix_v1": {
+          "n": 0,
+          "counts": {
+            "multiple_reservations": 0,
+            "writes_1": 0,
+            "writes_3plus": 0,
+            "writes_2": 0,
+            "report_information": 0,
+            "refusal": 0,
+            "no_db_write": 0,
+            "transfer": 0,
+            "gift_card_payment": 0,
+            "multiple_payment_methods": 0,
+            "certificate_payment": 0,
+            "refuse_cancellation_ineligible": 0,
+            "refuse_basic_economy_change": 0,
+            "refuse_already_flown": 0,
+            "refuse_insurance_after_booking": 0,
+            "refuse_route_change": 0,
+            "refuse_baggage_removal": 0,
+            "refuse_compensation_ineligible": 0,
+            "refuse_passenger_count": 0,
+            "refuse_cabin_consistency": 0,
+            "refuse_payment_restriction": 0,
+            "refuse_unsupported_fee_waiver": 0,
+            "update_reservation_flights": 0,
+            "book_reservation": 0,
+            "cancel_reservation": 0,
+            "update_reservation_baggages": 0,
+            "update_reservation_passengers": 0,
+            "send_certificate": 0,
+            "cabin_change": 0,
+            "flight_change": 0
+          }
+        },
+        "pool_areal_telecom_v0": {
+          "n": 0,
+          "counts": {
+            "multiple_reservations": 0,
+            "writes_1": 0,
+            "writes_3plus": 0,
+            "writes_2": 0,
+            "report_information": 0,
+            "refusal": 0,
+            "no_db_write": 0,
+            "transfer": 0,
+            "gift_card_payment": 0,
+            "multiple_payment_methods": 0,
+            "certificate_payment": 0,
+            "refuse_cancellation_ineligible": 0,
+            "refuse_basic_economy_change": 0,
+            "refuse_already_flown": 0,
+            "refuse_insurance_after_booking": 0,
+            "refuse_route_change": 0,
+            "refuse_baggage_removal": 0,
+            "refuse_compensation_ineligible": 0,
+            "refuse_passenger_count": 0,
+            "refuse_cabin_consistency": 0,
+            "refuse_payment_restriction": 0,
+            "refuse_unsupported_fee_waiver": 0,
+            "update_reservation_flights": 0,
+            "book_reservation": 0,
+            "cancel_reservation": 0,
+            "update_reservation_baggages": 0,
+            "update_reservation_passengers": 0,
+            "send_certificate": 0,
+            "cabin_change": 0,
+            "flight_change": 0
+          }
+        },
+        "pool_areal_telecom_v1": {
+          "n": 0,
+          "counts": {
+            "multiple_reservations": 0,
+            "writes_1": 0,
+            "writes_3plus": 0,
+            "writes_2": 0,
+            "report_information": 0,
+            "refusal": 0,
+            "no_db_write": 0,
+            "transfer": 0,
+            "gift_card_payment": 0,
+            "multiple_payment_methods": 0,
+            "certificate_payment": 0,
+            "refuse_cancellation_ineligible": 0,
+            "refuse_basic_economy_change": 0,
+            "refuse_already_flown": 0,
+            "refuse_insurance_after_booking": 0,
+            "refuse_route_change": 0,
+            "refuse_baggage_removal": 0,
+            "refuse_compensation_ineligible": 0,
+            "refuse_passenger_count": 0,
+            "refuse_cabin_consistency": 0,
+            "refuse_payment_restriction": 0,
+            "refuse_unsupported_fee_waiver": 0,
+            "update_reservation_flights": 0,
+            "book_reservation": 0,
+            "cancel_reservation": 0,
+            "update_reservation_baggages": 0,
+            "update_reservation_passengers": 0,
+            "send_certificate": 0,
+            "cabin_change": 0,
+            "flight_change": 0
+          }
+        },
+        "pool_official_telecom_v1": {
+          "n": 0,
+          "counts": {
+            "multiple_reservations": 0,
+            "writes_1": 0,
+            "writes_3plus": 0,
+            "writes_2": 0,
+            "report_information": 0,
+            "refusal": 0,
+            "no_db_write": 0,
+            "transfer": 0,
+            "gift_card_payment": 0,
+            "multiple_payment_methods": 0,
+            "certificate_payment": 0,
+            "refuse_cancellation_ineligible": 0,
+            "refuse_basic_economy_change": 0,
+            "refuse_already_flown": 0,
+            "refuse_insurance_after_booking": 0,
+            "refuse_route_change": 0,
+            "refuse_baggage_removal": 0,
+            "refuse_compensation_ineligible": 0,
+            "refuse_passenger_count": 0,
+            "refuse_cabin_consistency": 0,
+            "refuse_payment_restriction": 0,
+            "refuse_unsupported_fee_waiver": 0,
+            "update_reservation_flights": 0,
+            "book_reservation": 0,
+            "cancel_reservation": 0,
+            "update_reservation_baggages": 0,
+            "update_reservation_passengers": 0,
+            "send_certificate": 0,
+            "cabin_change": 0,
+            "flight_change": 0
+          }
+        },
+        "pool_telecom_full": {
+          "n": 0,
+          "counts": {
+            "multiple_reservations": 0,
+            "writes_1": 0,
+            "writes_3plus": 0,
+            "writes_2": 0,
+            "report_information": 0,
+            "refusal": 0,
+            "no_db_write": 0,
+            "transfer": 0,
+            "gift_card_payment": 0,
+            "multiple_payment_methods": 0,
+            "certificate_payment": 0,
+            "refuse_cancellation_ineligible": 0,
+            "refuse_basic_economy_change": 0,
+            "refuse_already_flown": 0,
+            "refuse_insurance_after_booking": 0,
+            "refuse_route_change": 0,
+            "refuse_baggage_removal": 0,
+            "refuse_compensation_ineligible": 0,
+            "refuse_passenger_count": 0,
+            "refuse_cabin_consistency": 0,
+            "refuse_payment_restriction": 0,
+            "refuse_unsupported_fee_waiver": 0,
+            "update_reservation_flights": 0,
+            "book_reservation": 0,
+            "cancel_reservation": 0,
+            "update_reservation_baggages": 0,
+            "update_reservation_passengers": 0,
+            "send_certificate": 0,
+            "cabin_change": 0,
+            "flight_change": 0
+          }
+        }
+      }
+    },
+    "retail": {
+      "tags": [
+        {
+          "tag": "writes_1",
+          "label": "One write",
+          "group": "Complexity",
+          "definition": "gold 的 DB 写操作次数为 1。"
+        },
+        {
+          "tag": "multiple_orders",
+          "label": "Several requested orders",
+          "group": "Complexity",
+          "definition": "用户实际请求或比较涉及多个订单。"
+        },
+        {
+          "tag": "writes_3plus",
+          "label": "Three or more writes",
+          "group": "Complexity",
+          "definition": "gold 的 DB 写操作次数为 至少 3。"
+        },
+        {
+          "tag": "writes_2",
+          "label": "Two writes",
+          "group": "Complexity",
+          "definition": "gold 的 DB 写操作次数为 2。"
+        },
+        {
+          "tag": "report_information",
+          "label": "Report specific facts",
+          "group": "Information",
+          "definition": "评价标准明确要求报告具体事实或数值。"
+        },
+        {
+          "tag": "refusal",
+          "label": "Required refusal",
+          "group": "Outcome",
+          "definition": "任务中至少一个实际请求必须被拒绝，包括先拒绝再执行合法替代的任务。"
+        },
+        {
+          "tag": "no_db_write",
+          "label": "No DB write",
+          "group": "Outcome",
+          "definition": "gold 不包含该领域的 DB 写操作。"
+        },
+        {
+          "tag": "transfer",
+          "label": "Transfer to human",
+          "group": "Outcome",
+          "definition": "gold 要求转人工。"
+        },
+        {
+          "tag": "payment_method_choice",
+          "label": "Payment-method choice",
+          "group": "Payment",
+          "definition": "任务要求选择支付/退款方式，或拒绝不合法的支付选择。"
+        },
+        {
+          "tag": "refuse_out_of_scope",
+          "label": "Unsupported request",
+          "group": "Refusal",
+          "definition": "实际请求新增订单、投诉、丢件退款、闲聊等，超出 policy 和工具范围。"
+        },
+        {
+          "tag": "refuse_partial_cancellation",
+          "label": "No partial cancellation",
+          "group": "Refusal",
+          "definition": "请求从 pending 订单移除部分商品，但工具只支持整单取消。"
+        },
+        {
+          "tag": "refuse_split_payment",
+          "label": "No split payment",
+          "group": "Refusal",
+          "definition": "请求将一个订单总额拆给多个支付方法，policy 只允许单一支付方法。"
+        },
+        {
+          "tag": "refuse_cross_product",
+          "label": "Cross-product restriction",
+          "group": "Refusal",
+          "definition": "实际请求的换货或改商品跨越 product type，而非同一 product 的不同 options。"
+        },
+        {
+          "tag": "refuse_gift_card_balance",
+          "label": "Insufficient gift balance",
+          "group": "Refusal",
+          "definition": "实际拟用 gift card 余额不足所需订单总额或差价。"
+        },
+        {
+          "tag": "refuse_operation_conflict",
+          "label": "One-operation restriction",
+          "group": "Refusal",
+          "definition": "请求同一订单上互斥的操作或再次修改/换货，违反一次性操作规则。"
+        },
+        {
+          "tag": "refuse_order_status",
+          "label": "Order status restriction",
+          "group": "Refusal",
+          "definition": "实际请求的订单操作不适用于 DB 中该订单的状态。"
+        },
+        {
+          "tag": "refuse_refund_destination",
+          "label": "Refund destination",
+          "group": "Refusal",
+          "definition": "实际要求退款至非原支付方法、非已有 gift card 的目的地。"
+        },
+        {
+          "tag": "refuse_same_variant_exchange",
+          "label": "Same-variant restriction",
+          "group": "Refusal",
+          "definition": "请求换为相同 options，而 policy 只允许不同 options 的同 product 变体。"
+        },
+        {
+          "tag": "refuse_invalid_cancel_reason",
+          "label": "Cancellation reason",
+          "group": "Refusal",
+          "definition": "实际给出的取消理由不属于 no longer needed 或 ordered by mistake。"
+        },
+        {
+          "tag": "modify_pending_order_items",
+          "label": "Modify pending items",
+          "group": "Write",
+          "definition": "gold 包含 modify_pending_order_items 写操作。"
+        },
+        {
+          "tag": "exchange_delivered_order_items",
+          "label": "Exchange delivered items",
+          "group": "Write",
+          "definition": "gold 包含 exchange_delivered_order_items 写操作。"
+        },
+        {
+          "tag": "return_delivered_order_items",
+          "label": "Return delivered items",
+          "group": "Write",
+          "definition": "gold 包含 return_delivered_order_items 写操作。"
+        },
+        {
+          "tag": "modify_pending_order_address",
+          "label": "Edit order address",
+          "group": "Write",
+          "definition": "gold 包含 modify_pending_order_address 写操作。"
+        },
+        {
+          "tag": "cancel_pending_order",
+          "label": "Cancel pending order",
+          "group": "Write",
+          "definition": "gold 包含 cancel_pending_order 写操作。"
+        },
+        {
+          "tag": "modify_user_address",
+          "label": "Edit profile address",
+          "group": "Write",
+          "definition": "gold 包含 modify_user_address 写操作。"
+        },
+        {
+          "tag": "modify_pending_order_payment",
+          "label": "Change order payment",
+          "group": "Write",
+          "definition": "gold 包含 modify_pending_order_payment 写操作。"
+        }
+      ],
+      "sets": {
+        "current_train": {
+          "n": 337,
+          "counts": {
+            "writes_1": 130,
+            "multiple_orders": 223,
+            "writes_3plus": 122,
+            "writes_2": 80,
+            "report_information": 24,
+            "refusal": 86,
+            "no_db_write": 5,
+            "transfer": 12,
+            "payment_method_choice": 167,
+            "refuse_out_of_scope": 13,
+            "refuse_partial_cancellation": 9,
+            "refuse_split_payment": 0,
+            "refuse_cross_product": 19,
+            "refuse_gift_card_balance": 5,
+            "refuse_operation_conflict": 8,
+            "refuse_order_status": 22,
+            "refuse_refund_destination": 9,
+            "refuse_same_variant_exchange": 3,
+            "refuse_invalid_cancel_reason": 9,
+            "modify_pending_order_items": 73,
+            "exchange_delivered_order_items": 74,
+            "return_delivered_order_items": 82,
+            "modify_pending_order_address": 85,
+            "cancel_pending_order": 78,
+            "modify_user_address": 81,
+            "modify_pending_order_payment": 39
+          }
+        },
+        "test": {
+          "n": 40,
+          "counts": {
+            "writes_1": 25,
+            "multiple_orders": 12,
+            "writes_3plus": 6,
+            "writes_2": 5,
+            "report_information": 11,
+            "refusal": 14,
+            "no_db_write": 4,
+            "transfer": 1,
+            "payment_method_choice": 17,
+            "refuse_out_of_scope": 5,
+            "refuse_partial_cancellation": 5,
+            "refuse_split_payment": 2,
+            "refuse_cross_product": 1,
+            "refuse_gift_card_balance": 1,
+            "refuse_operation_conflict": 1,
+            "refuse_order_status": 1,
+            "refuse_refund_destination": 1,
+            "refuse_same_variant_exchange": 1,
+            "refuse_invalid_cancel_reason": 0,
+            "modify_pending_order_items": 15,
+            "exchange_delivered_order_items": 9,
+            "return_delivered_order_items": 8,
+            "modify_pending_order_address": 7,
+            "cancel_pending_order": 5,
+            "modify_user_address": 4,
+            "modify_pending_order_payment": 1
+          }
+        },
+        "pool_areal_v1": {
+          "n": 55,
+          "counts": {
+            "writes_1": 20,
+            "multiple_orders": 47,
+            "writes_3plus": 17,
+            "writes_2": 18,
+            "report_information": 0,
+            "refusal": 15,
+            "no_db_write": 0,
+            "transfer": 4,
+            "payment_method_choice": 43,
+            "refuse_out_of_scope": 4,
+            "refuse_partial_cancellation": 0,
+            "refuse_split_payment": 0,
+            "refuse_cross_product": 3,
+            "refuse_gift_card_balance": 0,
+            "refuse_operation_conflict": 0,
+            "refuse_order_status": 6,
+            "refuse_refund_destination": 0,
+            "refuse_same_variant_exchange": 0,
+            "refuse_invalid_cancel_reason": 2,
+            "modify_pending_order_items": 18,
+            "exchange_delivered_order_items": 10,
+            "return_delivered_order_items": 16,
+            "modify_pending_order_address": 18,
+            "cancel_pending_order": 15,
+            "modify_user_address": 3,
+            "modify_pending_order_payment": 12
+          }
+        },
+        "pool_critic_mix_v1": {
+          "n": 0,
+          "counts": {
+            "writes_1": 0,
+            "multiple_orders": 0,
+            "writes_3plus": 0,
+            "writes_2": 0,
+            "report_information": 0,
+            "refusal": 0,
+            "no_db_write": 0,
+            "transfer": 0,
+            "payment_method_choice": 0,
+            "refuse_out_of_scope": 0,
+            "refuse_partial_cancellation": 0,
+            "refuse_split_payment": 0,
+            "refuse_cross_product": 0,
+            "refuse_gift_card_balance": 0,
+            "refuse_operation_conflict": 0,
+            "refuse_order_status": 0,
+            "refuse_refund_destination": 0,
+            "refuse_same_variant_exchange": 0,
+            "refuse_invalid_cancel_reason": 0,
+            "modify_pending_order_items": 0,
+            "exchange_delivered_order_items": 0,
+            "return_delivered_order_items": 0,
+            "modify_pending_order_address": 0,
+            "cancel_pending_order": 0,
+            "modify_user_address": 0,
+            "modify_pending_order_payment": 0
+          }
+        },
+        "pool_areal_telecom_v0": {
+          "n": 0,
+          "counts": {
+            "writes_1": 0,
+            "multiple_orders": 0,
+            "writes_3plus": 0,
+            "writes_2": 0,
+            "report_information": 0,
+            "refusal": 0,
+            "no_db_write": 0,
+            "transfer": 0,
+            "payment_method_choice": 0,
+            "refuse_out_of_scope": 0,
+            "refuse_partial_cancellation": 0,
+            "refuse_split_payment": 0,
+            "refuse_cross_product": 0,
+            "refuse_gift_card_balance": 0,
+            "refuse_operation_conflict": 0,
+            "refuse_order_status": 0,
+            "refuse_refund_destination": 0,
+            "refuse_same_variant_exchange": 0,
+            "refuse_invalid_cancel_reason": 0,
+            "modify_pending_order_items": 0,
+            "exchange_delivered_order_items": 0,
+            "return_delivered_order_items": 0,
+            "modify_pending_order_address": 0,
+            "cancel_pending_order": 0,
+            "modify_user_address": 0,
+            "modify_pending_order_payment": 0
+          }
+        },
+        "pool_areal_telecom_v1": {
+          "n": 0,
+          "counts": {
+            "writes_1": 0,
+            "multiple_orders": 0,
+            "writes_3plus": 0,
+            "writes_2": 0,
+            "report_information": 0,
+            "refusal": 0,
+            "no_db_write": 0,
+            "transfer": 0,
+            "payment_method_choice": 0,
+            "refuse_out_of_scope": 0,
+            "refuse_partial_cancellation": 0,
+            "refuse_split_payment": 0,
+            "refuse_cross_product": 0,
+            "refuse_gift_card_balance": 0,
+            "refuse_operation_conflict": 0,
+            "refuse_order_status": 0,
+            "refuse_refund_destination": 0,
+            "refuse_same_variant_exchange": 0,
+            "refuse_invalid_cancel_reason": 0,
+            "modify_pending_order_items": 0,
+            "exchange_delivered_order_items": 0,
+            "return_delivered_order_items": 0,
+            "modify_pending_order_address": 0,
+            "cancel_pending_order": 0,
+            "modify_user_address": 0,
+            "modify_pending_order_payment": 0
+          }
+        },
+        "pool_official_telecom_v1": {
+          "n": 0,
+          "counts": {
+            "writes_1": 0,
+            "multiple_orders": 0,
+            "writes_3plus": 0,
+            "writes_2": 0,
+            "report_information": 0,
+            "refusal": 0,
+            "no_db_write": 0,
+            "transfer": 0,
+            "payment_method_choice": 0,
+            "refuse_out_of_scope": 0,
+            "refuse_partial_cancellation": 0,
+            "refuse_split_payment": 0,
+            "refuse_cross_product": 0,
+            "refuse_gift_card_balance": 0,
+            "refuse_operation_conflict": 0,
+            "refuse_order_status": 0,
+            "refuse_refund_destination": 0,
+            "refuse_same_variant_exchange": 0,
+            "refuse_invalid_cancel_reason": 0,
+            "modify_pending_order_items": 0,
+            "exchange_delivered_order_items": 0,
+            "return_delivered_order_items": 0,
+            "modify_pending_order_address": 0,
+            "cancel_pending_order": 0,
+            "modify_user_address": 0,
+            "modify_pending_order_payment": 0
+          }
+        },
+        "pool_telecom_full": {
+          "n": 0,
+          "counts": {
+            "writes_1": 0,
+            "multiple_orders": 0,
+            "writes_3plus": 0,
+            "writes_2": 0,
+            "report_information": 0,
+            "refusal": 0,
+            "no_db_write": 0,
+            "transfer": 0,
+            "payment_method_choice": 0,
+            "refuse_out_of_scope": 0,
+            "refuse_partial_cancellation": 0,
+            "refuse_split_payment": 0,
+            "refuse_cross_product": 0,
+            "refuse_gift_card_balance": 0,
+            "refuse_operation_conflict": 0,
+            "refuse_order_status": 0,
+            "refuse_refund_destination": 0,
+            "refuse_same_variant_exchange": 0,
+            "refuse_invalid_cancel_reason": 0,
+            "modify_pending_order_items": 0,
+            "exchange_delivered_order_items": 0,
+            "return_delivered_order_items": 0,
+            "modify_pending_order_address": 0,
+            "cancel_pending_order": 0,
+            "modify_user_address": 0,
+            "modify_pending_order_payment": 0
+          }
+        }
+      }
+    },
+    "telecom": {
+      "tags": [
+        {
+          "tag": "agent_refuel_data",
+          "label": "Refuel data",
+          "group": "Account action",
+          "definition": "gold 要求 agent 执行 refuel_data。"
+        },
+        {
+          "tag": "agent_transfer_to_human_agents",
+          "label": "Transfer to human",
+          "group": "Account action",
+          "definition": "gold 要求 agent 执行 transfer_to_human_agents。"
+        },
+        {
+          "tag": "agent_enable_roaming",
+          "label": "Enable account roaming",
+          "group": "Account action",
+          "definition": "gold 要求 agent 执行 enable_roaming。"
+        },
+        {
+          "tag": "agent_resume_line",
+          "label": "Resume line",
+          "group": "Account action",
+          "definition": "gold 要求 agent 执行 resume_line。"
+        },
+        {
+          "tag": "agent_send_payment_request",
+          "label": "Request bill payment",
+          "group": "Account action",
+          "definition": "gold 要求 agent 执行 send_payment_request。"
+        },
+        {
+          "tag": "faults_2_3",
+          "label": "2-3 faults",
+          "group": "Complexity",
+          "definition": "初始状态的原子故障数属于 2-3 faults 桶。"
+        },
+        {
+          "tag": "faults_4_6",
+          "label": "4-6 faults",
+          "group": "Complexity",
+          "definition": "初始状态的原子故障数属于 4-6 faults 桶。"
+        },
+        {
+          "tag": "faults_7plus",
+          "label": "7 or more faults",
+          "group": "Complexity",
+          "definition": "初始状态的原子故障数属于 7 or more faults 桶。"
+        },
+        {
+          "tag": "faults_1",
+          "label": "One fault",
+          "group": "Complexity",
+          "definition": "初始状态的原子故障数属于 One fault 桶。"
+        },
+        {
+          "tag": "fault_airplane_mode_on",
+          "label": "Airplane mode on",
+          "group": "Fault",
+          "definition": "初始状态注入了 Airplane mode on 故障。"
+        },
+        {
+          "tag": "fault_device_roaming_off",
+          "label": "Device roaming off",
+          "group": "Fault",
+          "definition": "初始状态注入了 Device roaming off 故障。"
+        },
+        {
+          "tag": "fault_network_2g_only",
+          "label": "2G-only network",
+          "group": "Fault",
+          "definition": "初始状态注入了 2G-only network 故障。"
+        },
+        {
+          "tag": "fault_mobile_data_off",
+          "label": "Mobile data off",
+          "group": "Fault",
+          "definition": "初始状态注入了 Mobile data off 故障。"
+        },
+        {
+          "tag": "fault_data_cap_exceeded",
+          "label": "Data cap exceeded",
+          "group": "Fault",
+          "definition": "初始状态注入了 Data cap exceeded 故障。"
+        },
+        {
+          "tag": "fault_sim_unseated",
+          "label": "SIM unseated",
+          "group": "Fault",
+          "definition": "初始状态注入了 SIM unseated 故障。"
+        },
+        {
+          "tag": "fault_carrier_roaming_disabled",
+          "label": "Account roaming disabled",
+          "group": "Fault",
+          "definition": "初始状态注入了 Account roaming disabled 故障。"
+        },
+        {
+          "tag": "fault_messaging_sms_denied",
+          "label": "SMS permission denied",
+          "group": "Fault",
+          "definition": "初始状态注入了 SMS permission denied 故障。"
+        },
+        {
+          "tag": "fault_sim_pin_locked",
+          "label": "SIM PIN locked",
+          "group": "Fault",
+          "definition": "初始状态注入了 SIM PIN locked 故障。"
+        },
+        {
+          "tag": "fault_apn_broken",
+          "label": "Main APN broken",
+          "group": "Fault",
+          "definition": "初始状态注入了 Main APN broken 故障。"
+        },
+        {
+          "tag": "fault_messaging_storage_denied",
+          "label": "Storage permission denied",
+          "group": "Fault",
+          "definition": "初始状态注入了 Storage permission denied 故障。"
+        },
+        {
+          "tag": "fault_data_saver_on",
+          "label": "Data saver on",
+          "group": "Fault",
+          "definition": "初始状态注入了 Data saver on 故障。"
+        },
+        {
+          "tag": "fault_wifi_calling_mms_on",
+          "label": "MMS over Wi-Fi fault",
+          "group": "Fault",
+          "definition": "初始状态注入了 MMS over Wi-Fi fault 故障。"
+        },
+        {
+          "tag": "fault_contract_ended",
+          "label": "Contract ended",
+          "group": "Fault",
+          "definition": "初始状态注入了 Contract ended 故障。"
+        },
+        {
+          "tag": "fault_overdue_bill_suspension",
+          "label": "Overdue bill suspension",
+          "group": "Fault",
+          "definition": "初始状态注入了 Overdue bill suspension 故障。"
+        },
+        {
+          "tag": "fault_mms_apn_broken",
+          "label": "MMS APN broken",
+          "group": "Fault",
+          "definition": "初始状态注入了 MMS APN broken 故障。"
+        },
+        {
+          "tag": "fault_vpn_broken",
+          "label": "VPN broken",
+          "group": "Fault",
+          "definition": "初始状态注入了 VPN broken 故障。"
+        },
+        {
+          "tag": "issue_mms",
+          "label": "MMS messaging",
+          "group": "Issue",
+          "definition": "任务的排障目标为 MMS messaging。"
+        },
+        {
+          "tag": "issue_service",
+          "label": "No service",
+          "group": "Issue",
+          "definition": "任务的排障目标为 No service。"
+        },
+        {
+          "tag": "issue_mobile_data",
+          "label": "Mobile data / speed",
+          "group": "Issue",
+          "definition": "任务的排障目标为 Mobile data / speed。"
+        },
+        {
+          "tag": "persona_easy",
+          "label": "Persona: easy",
+          "group": "Persona",
+          "definition": "任务采用官方 easy persona 模板。"
+        },
+        {
+          "tag": "persona_hard",
+          "label": "Persona: hard",
+          "group": "Persona",
+          "definition": "任务采用官方 hard persona 模板。"
+        },
+        {
+          "tag": "persona_none",
+          "label": "Persona: none",
+          "group": "Persona",
+          "definition": "任务采用官方 none persona 模板。"
+        }
+      ],
+      "sets": {
+        "current_train": {
+          "n": 329,
+          "counts": {
+            "agent_refuel_data": 80,
+            "agent_transfer_to_human_agents": 16,
+            "agent_enable_roaming": 105,
+            "agent_resume_line": 4,
+            "agent_send_payment_request": 4,
+            "faults_2_3": 69,
+            "faults_4_6": 206,
+            "faults_7plus": 49,
+            "faults_1": 5,
+            "fault_airplane_mode_on": 179,
+            "fault_device_roaming_off": 156,
+            "fault_network_2g_only": 162,
+            "fault_mobile_data_off": 158,
+            "fault_data_cap_exceeded": 80,
+            "fault_sim_unseated": 124,
+            "fault_carrier_roaming_disabled": 105,
+            "fault_messaging_sms_denied": 139,
+            "fault_sim_pin_locked": 10,
+            "fault_apn_broken": 11,
+            "fault_messaging_storage_denied": 139,
+            "fault_data_saver_on": 28,
+            "fault_wifi_calling_mms_on": 114,
+            "fault_contract_ended": 8,
+            "fault_overdue_bill_suspension": 8,
+            "fault_mms_apn_broken": 143,
+            "fault_vpn_broken": 24,
+            "issue_mms": 256,
+            "issue_service": 23,
+            "issue_mobile_data": 50,
+            "persona_easy": 114,
+            "persona_hard": 99,
+            "persona_none": 116
+          }
+        },
+        "test": {
+          "n": 40,
+          "counts": {
+            "agent_refuel_data": 12,
+            "agent_transfer_to_human_agents": 12,
+            "agent_enable_roaming": 11,
+            "agent_resume_line": 3,
+            "agent_send_payment_request": 3,
+            "faults_2_3": 18,
+            "faults_4_6": 14,
+            "faults_7plus": 8,
+            "faults_1": 0,
+            "fault_airplane_mode_on": 22,
+            "fault_device_roaming_off": 15,
+            "fault_network_2g_only": 14,
+            "fault_mobile_data_off": 13,
+            "fault_data_cap_exceeded": 12,
+            "fault_sim_unseated": 12,
+            "fault_carrier_roaming_disabled": 11,
+            "fault_messaging_sms_denied": 11,
+            "fault_sim_pin_locked": 11,
+            "fault_apn_broken": 9,
+            "fault_messaging_storage_denied": 9,
+            "fault_data_saver_on": 7,
+            "fault_wifi_calling_mms_on": 7,
+            "fault_contract_ended": 6,
+            "fault_overdue_bill_suspension": 6,
+            "fault_mms_apn_broken": 5,
+            "fault_vpn_broken": 5,
+            "issue_mms": 16,
+            "issue_service": 15,
+            "issue_mobile_data": 9,
+            "persona_easy": 14,
+            "persona_hard": 13,
+            "persona_none": 13
+          }
+        },
+        "pool_areal_v1": {
+          "n": 0,
+          "counts": {
+            "agent_refuel_data": 0,
+            "agent_transfer_to_human_agents": 0,
+            "agent_enable_roaming": 0,
+            "agent_resume_line": 0,
+            "agent_send_payment_request": 0,
+            "faults_2_3": 0,
+            "faults_4_6": 0,
+            "faults_7plus": 0,
+            "faults_1": 0,
+            "fault_airplane_mode_on": 0,
+            "fault_device_roaming_off": 0,
+            "fault_network_2g_only": 0,
+            "fault_mobile_data_off": 0,
+            "fault_data_cap_exceeded": 0,
+            "fault_sim_unseated": 0,
+            "fault_carrier_roaming_disabled": 0,
+            "fault_messaging_sms_denied": 0,
+            "fault_sim_pin_locked": 0,
+            "fault_apn_broken": 0,
+            "fault_messaging_storage_denied": 0,
+            "fault_data_saver_on": 0,
+            "fault_wifi_calling_mms_on": 0,
+            "fault_contract_ended": 0,
+            "fault_overdue_bill_suspension": 0,
+            "fault_mms_apn_broken": 0,
+            "fault_vpn_broken": 0,
+            "issue_mms": 0,
+            "issue_service": 0,
+            "issue_mobile_data": 0,
+            "persona_easy": 0,
+            "persona_hard": 0,
+            "persona_none": 0
+          }
+        },
+        "pool_critic_mix_v1": {
+          "n": 0,
+          "counts": {
+            "agent_refuel_data": 0,
+            "agent_transfer_to_human_agents": 0,
+            "agent_enable_roaming": 0,
+            "agent_resume_line": 0,
+            "agent_send_payment_request": 0,
+            "faults_2_3": 0,
+            "faults_4_6": 0,
+            "faults_7plus": 0,
+            "faults_1": 0,
+            "fault_airplane_mode_on": 0,
+            "fault_device_roaming_off": 0,
+            "fault_network_2g_only": 0,
+            "fault_mobile_data_off": 0,
+            "fault_data_cap_exceeded": 0,
+            "fault_sim_unseated": 0,
+            "fault_carrier_roaming_disabled": 0,
+            "fault_messaging_sms_denied": 0,
+            "fault_sim_pin_locked": 0,
+            "fault_apn_broken": 0,
+            "fault_messaging_storage_denied": 0,
+            "fault_data_saver_on": 0,
+            "fault_wifi_calling_mms_on": 0,
+            "fault_contract_ended": 0,
+            "fault_overdue_bill_suspension": 0,
+            "fault_mms_apn_broken": 0,
+            "fault_vpn_broken": 0,
+            "issue_mms": 0,
+            "issue_service": 0,
+            "issue_mobile_data": 0,
+            "persona_easy": 0,
+            "persona_hard": 0,
+            "persona_none": 0
+          }
+        },
+        "pool_areal_telecom_v0": {
+          "n": 207,
+          "counts": {
+            "agent_refuel_data": 81,
+            "agent_transfer_to_human_agents": 13,
+            "agent_enable_roaming": 81,
+            "agent_resume_line": 0,
+            "agent_send_payment_request": 0,
+            "faults_2_3": 85,
+            "faults_4_6": 71,
+            "faults_7plus": 38,
+            "faults_1": 13,
+            "fault_airplane_mode_on": 86,
+            "fault_device_roaming_off": 73,
+            "fault_network_2g_only": 82,
+            "fault_mobile_data_off": 87,
+            "fault_data_cap_exceeded": 94,
+            "fault_sim_unseated": 68,
+            "fault_carrier_roaming_disabled": 85,
+            "fault_messaging_sms_denied": 58,
+            "fault_sim_pin_locked": 0,
+            "fault_apn_broken": 1,
+            "fault_messaging_storage_denied": 69,
+            "fault_data_saver_on": 23,
+            "fault_wifi_calling_mms_on": 64,
+            "fault_contract_ended": 0,
+            "fault_overdue_bill_suspension": 0,
+            "fault_mms_apn_broken": 51,
+            "fault_vpn_broken": 32,
+            "issue_mms": 136,
+            "issue_service": 2,
+            "issue_mobile_data": 69,
+            "persona_easy": 70,
+            "persona_hard": 67,
+            "persona_none": 70
+          }
+        },
+        "pool_areal_telecom_v1": {
+          "n": 207,
+          "counts": {
+            "agent_refuel_data": 81,
+            "agent_transfer_to_human_agents": 13,
+            "agent_enable_roaming": 81,
+            "agent_resume_line": 0,
+            "agent_send_payment_request": 0,
+            "faults_2_3": 85,
+            "faults_4_6": 71,
+            "faults_7plus": 38,
+            "faults_1": 13,
+            "fault_airplane_mode_on": 86,
+            "fault_device_roaming_off": 73,
+            "fault_network_2g_only": 82,
+            "fault_mobile_data_off": 87,
+            "fault_data_cap_exceeded": 94,
+            "fault_sim_unseated": 68,
+            "fault_carrier_roaming_disabled": 85,
+            "fault_messaging_sms_denied": 58,
+            "fault_sim_pin_locked": 0,
+            "fault_apn_broken": 1,
+            "fault_messaging_storage_denied": 69,
+            "fault_data_saver_on": 23,
+            "fault_wifi_calling_mms_on": 64,
+            "fault_contract_ended": 0,
+            "fault_overdue_bill_suspension": 0,
+            "fault_mms_apn_broken": 51,
+            "fault_vpn_broken": 32,
+            "issue_mms": 136,
+            "issue_service": 2,
+            "issue_mobile_data": 69,
+            "persona_easy": 70,
+            "persona_hard": 67,
+            "persona_none": 70
+          }
+        },
+        "pool_official_telecom_v1": {
+          "n": 38,
+          "counts": {
+            "agent_refuel_data": 0,
+            "agent_transfer_to_human_agents": 2,
+            "agent_enable_roaming": 14,
+            "agent_resume_line": 0,
+            "agent_send_payment_request": 0,
+            "faults_2_3": 16,
+            "faults_4_6": 21,
+            "faults_7plus": 0,
+            "faults_1": 1,
+            "fault_airplane_mode_on": 9,
+            "fault_device_roaming_off": 20,
+            "fault_network_2g_only": 9,
+            "fault_mobile_data_off": 20,
+            "fault_data_cap_exceeded": 0,
+            "fault_sim_unseated": 10,
+            "fault_carrier_roaming_disabled": 14,
+            "fault_messaging_sms_denied": 10,
+            "fault_sim_pin_locked": 1,
+            "fault_apn_broken": 2,
+            "fault_messaging_storage_denied": 16,
+            "fault_data_saver_on": 6,
+            "fault_wifi_calling_mms_on": 2,
+            "fault_contract_ended": 2,
+            "fault_overdue_bill_suspension": 0,
+            "fault_mms_apn_broken": 11,
+            "fault_vpn_broken": 6,
+            "issue_mms": 21,
+            "issue_service": 3,
+            "issue_mobile_data": 14,
+            "persona_easy": 15,
+            "persona_hard": 16,
+            "persona_none": 7
+          }
+        },
+        "pool_telecom_full": {
+          "n": 1884,
+          "counts": {
+            "agent_refuel_data": 1012,
+            "agent_transfer_to_human_agents": 4,
+            "agent_enable_roaming": 988,
+            "agent_resume_line": 1,
+            "agent_send_payment_request": 1,
+            "faults_2_3": 197,
+            "faults_4_6": 1161,
+            "faults_7plus": 514,
+            "faults_1": 12,
+            "fault_airplane_mode_on": 926,
+            "fault_device_roaming_off": 933,
+            "fault_network_2g_only": 944,
+            "fault_mobile_data_off": 933,
+            "fault_data_cap_exceeded": 1012,
+            "fault_sim_unseated": 880,
+            "fault_carrier_roaming_disabled": 988,
+            "fault_messaging_sms_denied": 874,
+            "fault_sim_pin_locked": 3,
+            "fault_apn_broken": 4,
+            "fault_messaging_storage_denied": 876,
+            "fault_data_saver_on": 93,
+            "fault_wifi_calling_mms_on": 903,
+            "fault_contract_ended": 2,
+            "fault_overdue_bill_suspension": 2,
+            "fault_mms_apn_broken": 876,
+            "fault_vpn_broken": 99,
+            "issue_mms": 1685,
+            "issue_service": 9,
+            "issue_mobile_data": 190,
+            "persona_easy": 621,
+            "persona_hard": 642,
+            "persona_none": 621
+          }
+        }
+      }
+    }
+  }
+}
