@@ -2,11 +2,83 @@
 
 # AGENTS.md -- AReaL Agent Operations Guide
 
-> **Research fork `codex/sao-math`: read `docs/research/agent-rules.md` first.** It
-> decides who approves method changes and runs, which LLM APIs may be used, and it
-> replaces the PR workflow and `pre-commit run --all-files` below (never push to GitHub;
-> run pre-commit on changed files only). The rest of this file is upstream AReaL
-> guidance.
+## Research fork `codex/sao-math`
+
+This branch is a research fork, not an upstream contribution. The rules in this section
+apply to every agent (Codex on phai, Claude Code on the local clone) and take precedence
+over the upstream AReaL guidance that follows.
+
+Topic: interactive RL on τ²-bench
+with AReaL (PPO with a privileged, script-aware critic; user-simulator effects; offline
+checkpoint evaluation). Current state and conclusions: `docs/research/tau2/README.md`.
+
+### Who decides what (user rule, 2026-10-24)
+
+The bottleneck is the user's understanding, not execution speed: a run or a design the
+user did not understand has cost hours to half a day. The user designs the method; the
+agent explains, implements and runs what the user approved.
+
+- **Method choices are the user's.** Reward, advantage, loss, critic inputs, new
+  components, non-default hyperparameters, and any deviation from the paper or the
+  standard PPO/GAE implementation (clip, minibatches, value clip, head lr). Default to
+  the paper / standard configuration. Present options with trade-offs and a
+  recommendation; do not implement or launch until the user explicitly agrees.
+- **Run card before every GPU run, eval or paid API job**, then wait for the user's go:
+  the question it answers; the one variable that differs from the reference run; the
+  expected result and which result would be uninformative; time, GPU and API cost; the
+  stop condition. If no outcome would change a decision, do not propose the run.
+- **Explain before asking for agreement:** the goal in one plain sentence; every symbol
+  defined; one numeric example; how it differs from standard practice and why. Mark what
+  was read versus inferred. If the user does not understand, restart from the
+  prerequisite with an example; do not add new terms.
+- **Report results in layers:** observed / inferred / unverified, and state the metric
+  definition every time (EV definition, mean@k vs pass^k, temperature, which episodes
+  were excluded and why).
+- **Do not over-ask either.** Infra fixes, cleanup, smoke tests, monitoring and
+  documentation: act and record. At most two questions per message, each with a
+  recommended answer.
+
+### Branches, worktrees and runs
+
+- All work happens on phai. The main worktree is
+  `/data_storage/yl_test/lgx/data-1/code/_worktrees/AReaL/codex-sao-math` on
+  `codex/sao-math`; each task gets a branch `codex/<topic>` in its own worktree
+  `_worktrees/AReaL/<topic>`, which is merged back into `codex/sao-math`. After the merge,
+  remove the worktree and delete the branch.
+- Never push to GitHub and never open PRs. The branch's GitHub upstream is a public
+  fork; internal research content must not go there. The upstream PR workflow, the
+  `create-pr` / `review-pr` skills and "squash before PR" do not apply.
+- Run pre-commit on the changed files only (`pre-commit run --files <changed>`), not
+  `--all-files`, which would reformat unrelated upstream code.
+- Run and test only on phai. Every `pueue add` passes `-w <the task's own artifact dir>`
+  and launch scripts `cd` there before starting Python: pueue runs the task in that
+  directory and Python puts it on `sys.path`, so a stray `/tmp/grp.py` once shadowed the
+  stdlib (pueue 653).
+- Run outputs go to
+  `/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/<worktree>/`, one directory
+  per run; never into the repository or `/tmp`.
+- Status scripts read the tail of logs and only the newest trajectory steps; one that
+  re-parsed every trajectory JSON took 42 s per call.
+
+### LLM APIs for users and judges
+
+- Models: DeepSeek only, as `deepseek-flash` on the official API (preferred: cache hits
+  make it much cheaper) or `deepseek-v4-1-flash-261017` on the Volcano plan. Never
+  `deepseek-v4-pro`, and never switch models or endpoints without the user's approval.
+- Keys live under `/data_storage/yl_test/lgx/home/.config/tau2-doubao/` (mode 600; never
+  print values): `deepseek-official.env` (`DEEPSEEK_API_KEY`, shared balance with
+  phai-relay, so check `GET https://api.deepseek.com/user/balance` before and after
+  large jobs) and the Volcano plan files `ark-plan-20261023.env` (current) and
+  `ark-plan-20261020.env` (`ARK_PLAN_API_KEY`, endpoint
+  `https://ark.cn-beijing.volces.com/api/plan/v3`, weekly quota shared with training).
+  Never use `phai-relay-ark-colleague.env`; never use the Volcano pay-as-you-go
+  endpoint.
+- Quota errors (`AccountQuotaExceeded`, balance exhausted) stop the job; no unbounded
+  retries.
+- Providers can change the model behind a name. Record the returned model name
+  (`raw_data.model`) and stop if it changes.
+
+______________________________________________________________________
 
 ## Quick reference
 
@@ -18,7 +90,7 @@ uv sync --extra cuda            # CUDA + SGLang inference (default); for vLLM: c
 uv sync --extra sandbox         # Daytona cloud sandbox backend (optional)
 source .venv/bin/activate        # activate venv BEFORE pre-commit or git commit if venv exists
 pre-commit install --install-hooks  # hooks: Ruff, clang-format, mdformat, nbstripout, conventional-commits
-pre-commit run --all-files       # lint + format everything
+pre-commit run --files <changed files>  # this fork: changed files only, never --all-files
 
 # Tests
 uv run pytest tests/test_<topic>.py
@@ -43,7 +115,7 @@ uv run python docs/generate_cli_docs.py
 **Always do**:
 
 - Read relevant files before modifying code.
-- Run `pre-commit run --all-files` before committing.
+- Run pre-commit on the changed files before committing.
 - Follow existing code patterns in the same module.
 - Add tests for new functionality.
 - Ask for decisions and clarifications with short, structured options instead of broad
@@ -146,8 +218,8 @@ step-by-step implementation guides.
 | Agent configs     | `.opencode/agents/*.md` (frontmatter)   | `.codex/config.toml` + `.codex/agents/*.toml` + `*.md` |
 | Skills            | `.opencode/skills/` + `.agents/skills/` | `.agents/skills/<name>/SKILL.md`                       |
 
-Directly executable workflows (both platforms): `add-workflow`, `review-pr`,
-`create-pr`, `translate-doc-zh`.
+Directly executable workflows (both platforms): `add-workflow`, `translate-doc-zh`.
+The `create-pr` and `review-pr` skills are upstream PR tooling and are not used on this fork.
 
 ______________________________________________________________________
 
@@ -238,19 +310,11 @@ ______________________________________________________________________
 
 ## Collaboration & review
 
-- **Branches**: kebab-case (`feature/multi-turn-metrics`, `bugfix/fsdp-weight-sync`).
-- **Commits**: Conventional Commits (e.g., `feat:`, `fix:`, `docs:`, `gov:`), ~72 char
-  subject, imperative voice. Squash WIP before PR.
-- **Pre-merge**: full pre-commit stack; doc-only edits need at least `mdformat --check`.
-- **PRs**: tie to issue, highlight risk areas, list test commands executed, note skipped
-  suites with reasons.
-
-| Skill                | Purpose                                                |
-| -------------------- | ------------------------------------------------------ |
-| `create-pr`          | Rebase, squash, and create or update a PR              |
-| `commit-conventions` | Commit message conventions to load before `git commit` |
-| `review-pr`          | Dynamic PR review with targeted expert consultation    |
-| `translate-doc-zh`   | Translate English docs to Chinese                      |
+- **Branches**: `codex/<topic>` in their own worktree, merged into `codex/sao-math` (see
+  the research section). No PRs and no GitHub pushes.
+- **Commits**: Conventional Commits (e.g., `feat:`, `fix:`, `docs:`, `style:`), ~72 char
+  subject, imperative voice; load the `commit-conventions` skill before `git commit`.
+- **Pre-merge**: pre-commit on the changed files; doc-only edits need at least mdformat.
 
 ______________________________________________________________________
 

@@ -1,6 +1,5 @@
 # 研究文档索引
 
-- [agent-rules.md](agent-rules.md)：本分支给 Codex 和 Claude 的研究规则（谁决定什么、运行约定、LLM API）。
 - [tau2/](tau2/README.md)：τ² 基线审计、训练数据、critic、SAO 运行、研究方向和决策记录。
   - [tau2/README.md](tau2/README.md)：问题、状态、结论和目录。
   - [tau2/decisions/](tau2/decisions/README.md)：τ² 决策记录（ADR）。
