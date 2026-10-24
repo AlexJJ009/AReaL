@@ -1,9 +1,10 @@
 # CLAUDE.md - AReaL
 
-> **Research fork `codex/sao-math`: `docs/research/agent-rules.md` takes precedence.** It
-> decides who approves method changes and runs, which LLM APIs may be used, and it
+> **Research fork `codex/sao-math`: `docs/research/agent-rules.md` takes precedence.**
+> It decides who approves method changes and runs, which LLM APIs may be used, and it
 > replaces the PR workflow and `pre-commit run --all-files` below (never push to GitHub;
-> run pre-commit on changed files only). The rest of this file is upstream AReaL guidance.
+> run pre-commit on changed files only). The rest of this file is upstream AReaL
+> guidance.
 
 ## WHAT: Project Overview
 

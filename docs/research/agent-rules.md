@@ -1,8 +1,8 @@
 # Research fork rules (`codex/sao-math`)
 
-Rules for every agent on this branch: Codex on phai and Claude Code on the local
-clone. They override the upstream AReaL guidance in `AGENTS.md` / `CLAUDE.md` where the
-two disagree.
+Rules for every agent on this branch: Codex on phai and Claude Code on the local clone.
+They override the upstream AReaL guidance in `AGENTS.md` / `CLAUDE.md` where the two
+disagree.
 
 The branch is a research fork, not an upstream contribution: interactive RL on τ²-bench
 with AReaL (PPO with a privileged, script-aware critic; user-simulator effects; offline
@@ -45,8 +45,9 @@ agent explains, implements and runs what the user approved.
   and launch scripts `cd` there before starting Python: pueue runs the task in that
   directory and Python puts it on `sys.path`, so a stray `/tmp/grp.py` once shadowed the
   stdlib (pueue 653).
-- Run outputs go to `/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/<worktree>/`,
-  one directory per run; never into the repository or `/tmp`.
+- Run outputs go to
+  `/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/<worktree>/`, one directory
+  per run; never into the repository or `/tmp`.
 - Status scripts read the tail of logs and only the newest trajectory steps; one that
   re-parsed every trajectory JSON took 42 s per call.
 
@@ -55,13 +56,14 @@ agent explains, implements and runs what the user approved.
 - Models: DeepSeek only, as `deepseek-flash` on the official API (preferred: cache hits
   make it much cheaper) or `deepseek-v4-1-flash-261017` on the Volcano plan. Never
   `deepseek-v4-pro`, and never switch models or endpoints without the user's approval.
-- Keys live under `/data_storage/yl_test/lgx/home/.config/tau2-doubao/` (mode 600;
-  never print values): `deepseek-official.env` (`DEEPSEEK_API_KEY`, shared balance with
-  phai-relay, so check `GET https://api.deepseek.com/user/balance` before and after large
-  jobs) and the Volcano plan files `ark-plan-20261023.env` (current) and
+- Keys live under `/data_storage/yl_test/lgx/home/.config/tau2-doubao/` (mode 600; never
+  print values): `deepseek-official.env` (`DEEPSEEK_API_KEY`, shared balance with
+  phai-relay, so check `GET https://api.deepseek.com/user/balance` before and after
+  large jobs) and the Volcano plan files `ark-plan-20261023.env` (current) and
   `ark-plan-20261020.env` (`ARK_PLAN_API_KEY`, endpoint
   `https://ark.cn-beijing.volces.com/api/plan/v3`, weekly quota shared with training).
-  Never use `phai-relay-ark-colleague.env`; never use the Volcano pay-as-you-go endpoint.
+  Never use `phai-relay-ark-colleague.env`; never use the Volcano pay-as-you-go
+  endpoint.
 - Quota errors (`AccountQuotaExceeded`, balance exhausted) stop the job; no unbounded
   retries.
 - Providers can change the model behind a name. Record the returned model name
