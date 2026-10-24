@@ -32,9 +32,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-OPEN_HEADER = (
-    "# AReaL research backlog\n\nOpen work. Manage items with scripts/research/backlog.\n\n"
-)
+OPEN_HEADER = "# AReaL research backlog\n\nOpen work. Manage items with scripts/research/backlog.\n\n"
 DONE_HEADER = (
     "# AReaL research backlog — done\n\nCompleted work, archived in closure order.\n\n"
 )
@@ -86,17 +84,23 @@ def parse(text: str, name: str, closed: bool) -> list[Item]:
     if preamble.strip():
         raise ValueError(f"{name}: unexpected content before first item")
     for index, start in enumerate(starts):
-        block = text[start : starts[index + 1] if index + 1 < len(starts) else len(text)]
+        block = text[
+            start : starts[index + 1] if index + 1 < len(starts) else len(text)
+        ]
         match = HEADING.match(block)
         if not match:
             raise ValueError(f"{name}: invalid heading: {block.splitlines()[0]}")
         number, title = match.groups()
         metadata = block[match.end() :].split("\n\n", 1)[0].splitlines()
         statuses = [
-            line.removeprefix("Status: ") for line in metadata if line.startswith("Status: ")
+            line.removeprefix("Status: ")
+            for line in metadata
+            if line.startswith("Status: ")
         ]
         if not closed and (len(statuses) != 1 or statuses[0] not in STATUSES):
-            raise ValueError(f"{name}: item {number} needs one Status: {' | '.join(STATUSES)}")
+            raise ValueError(
+                f"{name}: item {number} needs one Status: {' | '.join(STATUSES)}"
+            )
         if closed and not re.fullmatch(
             r"Closed: \d{4}-\d{2}-\d{2} - \S.*", metadata[0] if metadata else ""
         ):
@@ -104,14 +108,20 @@ def parse(text: str, name: str, closed: bool) -> list[Item]:
                 f"{name}: item {number} needs Closed: YYYY-MM-DD - resolution after heading"
             )
         found = [line for line in metadata if line.startswith("Found: ")]
-        if len(found) != 1 or not re.fullmatch(r"Found: \d{4}-\d{2}-\d{2}, \S.*", found[0]):
+        if len(found) != 1 or not re.fullmatch(
+            r"Found: \d{4}-\d{2}-\d{2}, \S.*", found[0]
+        ):
             raise ValueError(f"{name}: item {number} needs Found: YYYY-MM-DD, source")
         for line in [found[0], *([metadata[0]] if closed else [])]:
             try:
                 date.fromisoformat(line.split(": ", 1)[1][:10])
             except ValueError as error:
-                raise ValueError(f"{name}: item {number} has invalid date: {line}") from error
-        items.append(Item(int(number), title, block, "CLOSED" if closed else statuses[0]))
+                raise ValueError(
+                    f"{name}: item {number} has invalid date: {line}"
+                ) from error
+        items.append(
+            Item(int(number), title, block, "CLOSED" if closed else statuses[0])
+        )
     return items
 
 
@@ -138,7 +148,11 @@ def replace_documents(directory: Path, before: list[str], after: list[str]) -> N
             if old == new and (directory / name).exists():
                 continue
             with tempfile.NamedTemporaryFile(
-                mode="w", encoding="utf-8", dir=directory, prefix=f".{name}.", delete=False
+                mode="w",
+                encoding="utf-8",
+                dir=directory,
+                prefix=f".{name}.",
+                delete=False,
             ) as stream:
                 staged.append((Path(stream.name), directory / name))
                 stream.write(new)
@@ -176,7 +190,9 @@ def parser() -> argparse.ArgumentParser:
     edit = commands.add_parser("edit", help="replace an open item's title and/or body")
     edit.add_argument("number", type=int, metavar="N")
     edit.add_argument("--title", type=single_line)
-    edit.add_argument("--body-file", type=Path, help="replacement body file, or - for stdin")
+    edit.add_argument(
+        "--body-file", type=Path, help="replacement body file, or - for stdin"
+    )
     close = commands.add_parser("close", help="move an item to the end of the archive")
     close.add_argument("number", type=int, metavar="N")
     close.add_argument("--resolution", type=single_line, required=True)
@@ -188,7 +204,9 @@ def parser() -> argparse.ArgumentParser:
 
 def append_item(document: str, item: str) -> str:
     """Append with a blank separator, preserving all existing Markdown bytes."""
-    separator = "" if document.endswith("\n\n") else "\n" if document.endswith("\n") else "\n\n"
+    separator = (
+        "" if document.endswith("\n\n") else "\n" if document.endswith("\n") else "\n\n"
+    )
     return document + separator + item + ("" if item.endswith("\n\n") else "\n\n")
 
 
@@ -231,16 +249,24 @@ def update(args, documents: list[str], groups: list[list[Item]]) -> int | None:
             _, rest = changed.split("\n", 1)
             changed = f"## {item.number}. {args.title}\n{rest}"
         start = item_starts(documents[0])[groups[0].index(item)]
-        documents[0] = documents[0][:start] + changed + documents[0][start + len(item.text) :]
+        documents[0] = (
+            documents[0][:start] + changed + documents[0][start + len(item.text) :]
+        )
     elif args.command == "set-status":
         changed = re.sub(
-            r"^Status: .*?$", f"Status: {args.status}", item.text, count=1, flags=re.MULTILINE
+            r"^Status: .*?$",
+            f"Status: {args.status}",
+            item.text,
+            count=1,
+            flags=re.MULTILINE,
         )
         documents[0] = documents[0].replace(item.text, changed, 1)
     else:
         heading, rest = item.text.split("\n", 1)
         rest = re.sub(r"^Status: .*?\n", "", rest, count=1, flags=re.MULTILINE)
-        archived = f"{heading}\nClosed: {date.today().isoformat()} - {args.resolution}\n{rest}"
+        archived = (
+            f"{heading}\nClosed: {date.today().isoformat()} - {args.resolution}\n{rest}"
+        )
         documents[0] = documents[0].replace(item.text, "", 1)
         documents[1] = append_item(documents[1], archived)
     return None
@@ -254,7 +280,9 @@ def run(args) -> None:
     with (args.dir / ".backlog.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX if writing else fcntl.LOCK_SH)
         documents = [
-            (args.dir / name).read_text(encoding="utf-8") if (args.dir / name).exists() else header
+            (args.dir / name).read_text(encoding="utf-8")
+            if (args.dir / name).exists()
+            else header
             for name, header in zip(NAMES, HEADERS, strict=True)
         ]
         groups = validate(documents)
@@ -265,7 +293,9 @@ def run(args) -> None:
             if number is not None:
                 print(number)
         elif args.command == "next":
-            print(max((item.number for group in groups for item in group), default=0) + 1)
+            print(
+                max((item.number for group in groups for item in group), default=0) + 1
+            )
         elif args.command == "list":
             print("| Number | Status | Title |\n| --- | --- | --- |")
             for group in groups if args.all else groups[:1]:
