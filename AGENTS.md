@@ -42,9 +42,18 @@ agent explains, implements and runs what the user approved.
 
 - All work happens on phai. The main worktree is
   `/data_storage/yl_test/lgx/data-1/code/_worktrees/AReaL/codex-sao-math` on
-  `codex/sao-math`; each task gets a branch `codex/<topic>` in its own worktree
-  `_worktrees/AReaL/<topic>`, which is merged back into `codex/sao-math`. After the
-  merge, remove the worktree and delete the branch.
+  `codex/sao-math`; each task gets a branch `codex/<topic>` in its own worktree,
+  created only by `scripts/research/new-worktree.sh codex/<topic>` (worktree
+  `_worktrees/AReaL/codex-<topic>`, artifacts `_artifacts/AReaL/codex-<topic>`), and is
+  merged back into `codex/sao-math`. After the merge, remove the worktree and delete the
+  branch.
+- Codex runs only through `scripts/research/dispatch.sh <branch> <task> <brief>`: it
+  queues `gpt-6.1-sol` in pueue group `codex-review`, inside the branch's worktree, with
+  the task directory `<artifacts>/<task>/` holding the brief, logs and outputs.
+- Open work lives in `/data_storage/yl_test/lgx/data-1/code/_notes/AReaL/BACKLOG.md`,
+  edited only with `scripts/research/backlog` (`add --title T --found "<date>, <source>"`,
+  `list`, `next`, `set-status N S`, `edit N`, `close N --resolution TEXT`). Item bodies
+  must be actionable without the chat: paths, commits, pueue ids.
 - Never push to GitHub and never open PRs. The branch's GitHub upstream is a public
   fork; internal research content must not go there. The upstream PR workflow, the
   `create-pr` / `review-pr` skills and "squash before PR" do not apply.

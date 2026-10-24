@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Usage: backlog <next|add|set-status|edit|close|list|check> ...  (see backlog.py)
+. "$(dirname "$0")/lib.sh"
+mkdir -p "$NOTES"
+exec python3 "$(dirname "$0")/backlog.py" --dir "$NOTES" "$@"
