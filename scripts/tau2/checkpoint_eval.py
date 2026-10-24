@@ -43,8 +43,14 @@ DEFAULT_STEPS = "0," + ",".join(map(str, range(10, 121, 10))) + ",126"
 DEEPSEEK_MODEL = "deepseek-flash"
 DEEPSEEK_URL = "https://api.deepseek.com"
 RUNTIME_FIELDS = ("python", "hf_hub_cache", "sao_artifact_root", "tau2_data_dir")
-KEY_FIELD = {"qwen-local": "ark_plan_env_file", "deepseek-official": "deepseek_env_file"}
-KEY_VARIABLE = {"qwen-local": "ARK_PLAN_API_KEY", "deepseek-official": "DEEPSEEK_API_KEY"}
+KEY_FIELD = {
+    "qwen-local": "ark_plan_env_file",
+    "deepseek-official": "deepseek_env_file",
+}
+KEY_VARIABLE = {
+    "qwen-local": "ARK_PLAN_API_KEY",
+    "deepseek-official": "DEEPSEEK_API_KEY",
+}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -241,9 +247,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("Resolved cluster.fileroot must be absolute")
     slots = []
     used = {args.user_port, args.user_nccl_port} if local_user else set()
-    if local_user and (
-        len(used) != 2 or not all(1024 <= p <= 65535 for p in used)
-    ):
+    if local_user and (len(used) != 2 or not all(1024 <= p <= 65535 for p in used)):
         raise ValueError("User ports must be distinct and in 1024..65535")
     for gpu in range(args.workers):
         base = args.port_base + gpu * 100
