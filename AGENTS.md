@@ -8,9 +8,9 @@ This branch is a research fork, not an upstream contribution. The rules in this 
 apply to every agent (Codex on phai, Claude Code on the local clone) and take precedence
 over the upstream AReaL guidance that follows.
 
-Topic: interactive RL on τ²-bench
-with AReaL (PPO with a privileged, script-aware critic; user-simulator effects; offline
-checkpoint evaluation). Current state and conclusions: `docs/research/tau2/README.md`.
+Topic: interactive RL on τ²-bench with AReaL (PPO with a privileged, script-aware
+critic; user-simulator effects; offline checkpoint evaluation). Current state and
+conclusions: `docs/research/tau2/README.md`.
 
 ### Who decides what (user rule, 2026-10-24)
 
@@ -43,8 +43,8 @@ agent explains, implements and runs what the user approved.
 - All work happens on phai. The main worktree is
   `/data_storage/yl_test/lgx/data-1/code/_worktrees/AReaL/codex-sao-math` on
   `codex/sao-math`; each task gets a branch `codex/<topic>` in its own worktree
-  `_worktrees/AReaL/<topic>`, which is merged back into `codex/sao-math`. After the merge,
-  remove the worktree and delete the branch.
+  `_worktrees/AReaL/<topic>`, which is merged back into `codex/sao-math`. After the
+  merge, remove the worktree and delete the branch.
 - Never push to GitHub and never open PRs. The branch's GitHub upstream is a public
   fork; internal research content must not go there. The upstream PR workflow, the
   `create-pr` / `review-pr` skills and "squash before PR" do not apply.
@@ -218,8 +218,9 @@ step-by-step implementation guides.
 | Agent configs     | `.opencode/agents/*.md` (frontmatter)   | `.codex/config.toml` + `.codex/agents/*.toml` + `*.md` |
 | Skills            | `.opencode/skills/` + `.agents/skills/` | `.agents/skills/<name>/SKILL.md`                       |
 
-Directly executable workflows (both platforms): `add-workflow`, `translate-doc-zh`.
-The `create-pr` and `review-pr` skills are upstream PR tooling and are not used on this fork.
+Directly executable workflows (both platforms): `add-workflow`, `translate-doc-zh`. The
+`create-pr` and `review-pr` skills are upstream PR tooling and are not used on this
+fork.
 
 ______________________________________________________________________
 
