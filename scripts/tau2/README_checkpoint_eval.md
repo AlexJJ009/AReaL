@@ -121,6 +121,24 @@ TERM from `pueue kill` follows this path. SIGKILL and host failure cannot run cl
 handlers. Reusing an output directory does not kill a stale process based solely on an
 old PGID file.
 
+## DeepSeek official backend
+
+`--user-backend deepseek-official` replaces the local user and the Volcano judge with
+the DeepSeek official API: user and judge are both `deepseek-flash` at
+`https://api.deepseek.com`, temperature 0, in the model's default (thinking) mode, as in
+the PPO runs before 2026-10-17. No user server starts, so `--workers` accepts 1..8 and
+GPU 7 runs a policy. The runtime JSON replaces `ark_plan_env_file` with
+`deepseek_env_file`, a mode-`0600` file that exports `DEEPSEEK_API_KEY`. The
+`deepseek-flash` alias can change model versions; record the returned model name.
+
+`--checkpoint LABEL=/absolute/hf/path` (repeatable) adds checkpoints from other runs,
+evaluated with this run's config and protocol and written to `ckpt-LABEL/`. Use it to
+compare runs under one user and judge backend instead of mixing their old configs.
+
+A provider outage or exhausted balance turns episodes into infra exclusions, and a
+checkpoint still counts as finished when scored plus excluded episodes reach 400. Check
+`infra_excluded` in `summary.md` before using a score.
+
 CPU verification uses mocks for policy/user startup plus real sleeping CPU process trees
 for signal cleanup; it never loads weights or calls a judge:
 

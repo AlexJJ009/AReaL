@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Queue offline PPO checkpoints on GPUs 0..6, with one user server on GPU 7.
 
+With --user-backend deepseek-official, the user simulator and NL judge are the
+DeepSeek official API, no user server starts and GPUs 0..7 all run policies.
+
 Planning reads YAML as data, never through load_expr_config. --dry-run does not
 source runtime/key files, create directories, probe ports or import model code.
 See README_checkpoint_eval.md for runtime JSON and the resume protocol.
@@ -37,6 +40,11 @@ JUDGE_MODEL = "deepseek-v4-1-flash-261017"
 JUDGE_URL = "https://ark.cn-beijing.volces.com/api/plan/v3"
 USER_ARGS = "{temperature:0,top_p:1.0,max_tokens:4096,extra_body:{chat_template_kwargs:{enable_thinking:false}}}"
 DEFAULT_STEPS = "0," + ",".join(map(str, range(10, 121, 10))) + ",126"
+DEEPSEEK_MODEL = "deepseek-flash"
+DEEPSEEK_URL = "https://api.deepseek.com"
+RUNTIME_FIELDS = ("python", "hf_hub_cache", "sao_artifact_root", "tau2_data_dir")
+KEY_FIELD = {"qwen-local": "ark_plan_env_file", "deepseek-official": "deepseek_env_file"}
+KEY_VARIABLE = {"qwen-local": "ARK_PLAN_API_KEY", "deepseek-official": "DEEPSEEK_API_KEY"}
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -63,13 +71,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=DEFAULT_STEPS,
         help="Completed update counts, comma separated; 0 is base actor.",
     )
+    parser.add_argument(
+        "--checkpoint",
+        action="append",
+        default=[],
+        metavar="LABEL=PATH",
+        help="Extra absolute HF checkpoint evaluated with the same config; repeatable.",
+    )
+    parser.add_argument(
+        "--user-backend",
+        choices=sorted(KEY_FIELD),
+        default="qwen-local",
+        help="qwen-local: Qwen user on GPU 7, Volcano judge. "
+        "deepseek-official: DeepSeek official user and judge, no user server.",
+    )
     parser.add_argument("--steps-per-epoch", type=int, default=9)
     parser.add_argument("--final-step", type=int, default=126)
     parser.add_argument(
         "--workers",
         type=int,
         default=7,
-        help="1..7; GPUs 0..workers-1, user always on 7.",
+        help="GPUs 0..workers-1: 1..7 with the local user on GPU 7, 1..8 otherwise.",
     )
     parser.add_argument(
         "--judge-concurrency",
@@ -133,7 +155,11 @@ def snapshot_path(value: str, cache: Path) -> Path:
 
 
 def runtime_command(
-    command: list[str], runtime: dict[str, str], *, judge: bool
+    command: list[str],
+    runtime: dict[str, str],
+    *,
+    judge: bool,
+    backend: str = "qwen-local",
 ) -> list[str]:
     """Source the existing CUDA environment; never echo/capture credential bytes."""
     setup = [
@@ -158,16 +184,20 @@ def runtime_command(
             'source "$1"',
             "set +a",
             "shift",
-            ': "${ARK_PLAN_API_KEY:?missing plan key}"',
+            f': "${{{KEY_VARIABLE[backend]}:?missing API key}}"',
         ]
-        args.append(runtime["ark_plan_env_file"])
+        args.append(runtime[KEY_FIELD[backend]])
     setup.append('exec "$@"')
     return ["bash", "-c", "; ".join(setup), "tau2-runtime", *args, *command]
 
 
 def build_plan(args: argparse.Namespace) -> dict[str, Any]:
-    if not 1 <= args.workers <= 7 or args.judge_concurrency < 1:
-        raise ValueError("workers must be 1..7 and judge-concurrency positive")
+    local_user = args.user_backend == "qwen-local"
+    max_workers = 7 if local_user else 8
+    if not 1 <= args.workers <= max_workers or args.judge_concurrency < 1:
+        raise ValueError(
+            f"workers must be 1..{max_workers} and judge-concurrency positive"
+        )
     if args.steps_per_epoch < 1 or args.final_step < 1:
         raise ValueError("steps-per-epoch and final-step must be positive")
     if min(
@@ -196,13 +226,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     if config["econfig"]["benchmark_variant"] != "fixed":
         raise ValueError("PPO checkpoint evaluation requires fixed data")
     runtime = read_json(Path(args.runtime))
-    required = (
-        "python",
-        "hf_hub_cache",
-        "sao_artifact_root",
-        "tau2_data_dir",
-        "ark_plan_env_file",
-    )
+    required = (*RUNTIME_FIELDS, KEY_FIELD[args.user_backend])
     if runtime is None or any(
         not runtime.get(k) or not Path(runtime[k]).is_absolute() for k in required
     ):
@@ -216,8 +240,10 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     if not fileroot.is_absolute():
         raise ValueError("Resolved cluster.fileroot must be absolute")
     slots = []
-    used = {args.user_port, args.user_nccl_port}
-    if len(used) != 2 or not all(1024 <= p <= 65535 for p in used):
+    used = {args.user_port, args.user_nccl_port} if local_user else set()
+    if local_user and (
+        len(used) != 2 or not all(1024 <= p <= 65535 for p in used)
+    ):
         raise ValueError("User ports must be distinct and in 1024..65535")
     for gpu in range(args.workers):
         base = args.port_base + gpu * 100
@@ -235,9 +261,8 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
                 "port_range": [base + 2, base + 100],
             }
         )  # half-open controller/worker pool
-    jobs = []
-    for index, step in enumerate(steps):
-        slot = slots[index % len(slots)]
+    targets = []
+    for step in steps:
         g = step - 1
         model = (
             snapshot_path(config["actor"]["path"], Path(runtime["hf_hub_cache"]))
@@ -250,7 +275,49 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
                 / f"epoch{g // args.steps_per_epoch}epochstep{g % args.steps_per_epoch}globalstep{g}"
             )
         )
-        directory = output / f"step-{step:03d}"
+        targets.append((step, f"step-{step:03d}", model))
+    labels = set()
+    for item in args.checkpoint:
+        label, sep, value = item.partition("=")
+        path = Path(value)
+        if (
+            not sep
+            or not label.replace("-", "").replace("_", "").isalnum()
+            or label in labels
+            or not path.is_absolute()
+        ):
+            raise ValueError(
+                "--checkpoint must be a unique LABEL=/absolute/path ([A-Za-z0-9_-])"
+            )
+        labels.add(label)
+        targets.append((label, f"ckpt-{label}", path))
+    if local_user:
+        user_overrides = [
+            f"econfig.user_llm={USER_MODEL}",
+            f"econfig.user_llm_base_url=http://127.0.0.1:{args.user_port}/v1",
+            "econfig.user_llm_api_key_env=TAU2_LOCAL_USER_API_KEY",
+            "++econfig.user_llm_args=" + USER_ARGS,
+            f"econfig.nl_judge_llm={JUDGE_MODEL}",
+            f"econfig.nl_judge_llm_base_url={JUDGE_URL}",
+            "econfig.nl_judge_llm_api_key_env=ARK_PLAN_API_KEY",
+            "++econfig.nl_judge_llm_args={temperature:0.0}",
+        ]
+    else:
+        # Same model, endpoint and default (thinking) mode as the pre-10-17 PPO runs.
+        user_overrides = [
+            f"econfig.user_llm={DEEPSEEK_MODEL}",
+            f"econfig.user_llm_base_url={DEEPSEEK_URL}",
+            "econfig.user_llm_api_key_env=DEEPSEEK_API_KEY",
+            "++econfig.user_llm_args={temperature:0.0}",
+            f"econfig.nl_judge_llm={DEEPSEEK_MODEL}",
+            f"econfig.nl_judge_llm_base_url={DEEPSEEK_URL}",
+            "econfig.nl_judge_llm_api_key_env=DEEPSEEK_API_KEY",
+            "++econfig.nl_judge_llm_args={temperature:0.0}",
+        ]
+    jobs = []
+    for index, (step, name, model) in enumerate(targets):
+        slot = slots[index % len(slots)]
+        directory = output / name
         first_attempt = directory / "attempt-001"
         overrides = [
             f"cluster.fileroot={first_attempt}",
@@ -258,7 +325,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             f"cluster.name_resolve.nfs_record_root={first_attempt / 'name-resolve'}",
             f"stats_logger.fileroot={first_attempt}",
             "stats_logger.experiment_name=tau2-ppo-offline-eval",
-            f"stats_logger.trial_name={trial}-step{step}",
+            f"stats_logger.trial_name={trial}-{name}",
             "cluster.n_gpus_per_node=1",
             "enable_offload=false",
             "evaluation_rollout.backend=sglang:d1p1t1",
@@ -272,14 +339,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             "eval_gconfig.top_p=1.0",
             "eval_gconfig.greedy=false",
             "sglang.disable_radix_cache=false",
-            f"econfig.user_llm={USER_MODEL}",
-            f"econfig.user_llm_base_url=http://127.0.0.1:{args.user_port}/v1",
-            "econfig.user_llm_api_key_env=TAU2_LOCAL_USER_API_KEY",
-            "++econfig.user_llm_args=" + USER_ARGS,
-            f"econfig.nl_judge_llm={JUDGE_MODEL}",
-            f"econfig.nl_judge_llm_base_url={JUDGE_URL}",
-            "econfig.nl_judge_llm_api_key_env=ARK_PLAN_API_KEY",
-            "++econfig.nl_judge_llm_args={temperature:0.0}",
+            *user_overrides,
         ]
         command = [
             runtime["python"],
@@ -320,7 +380,9 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
                 **slot,
                 "model_path": str(model),
                 "output_dir": str(directory),
-                "command": runtime_command(command, runtime, judge=True),
+                "command": runtime_command(
+                    command, runtime, judge=True, backend=args.user_backend
+                ),
                 "fingerprint": hashlib.sha256(
                     json.dumps(identity, sort_keys=True).encode()
                 ).hexdigest(),
@@ -363,24 +425,33 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
         "64",
     ]
     restart = 'echo $$ > "$USER_PGID_FILE"; trap "exit 143" TERM INT HUP; while true; do "$@"; rc=$?; echo "user server exited rc=$rc; restarting in 5 s"; sleep 5; done'
-    return {
+    plan = {
         "schema_version": 1,
         "run_dir": str(run),
         "config": str(config_path),
         "output_root": str(output),
         "runtime": runtime,
+        "user_backend": args.user_backend,
         "slots": slots,
         "jobs": jobs,
-        "user_gpu": 7,
-        "user_port": args.user_port,
-        "user_nccl_port": args.user_nccl_port,
-        "user_command": runtime_command(
-            ["bash", "-c", restart, "user-restart", *user_server], runtime, judge=False
-        ),
         "retry_limit": 1,
         "wait_for_checkpoints": args.wait_for_checkpoints,
         "max_judge_streams": args.workers * args.judge_concurrency,
     }
+    if local_user:
+        plan.update(
+            {
+                "user_gpu": 7,
+                "user_port": args.user_port,
+                "user_nccl_port": args.user_nccl_port,
+                "user_command": runtime_command(
+                    ["bash", "-c", restart, "user-restart", *user_server],
+                    runtime,
+                    judge=False,
+                ),
+            }
+        )
+    return plan
 
 
 def code_digest() -> str:
@@ -840,7 +911,7 @@ def run(args: argparse.Namespace) -> int:
                     args.wait_for_checkpoints or checkpoint_ready(Path(j["model_path"]))
                 )
             ]
-            if todo:
+            if todo and "user_command" in plan:
                 wait_ports_free(
                     [plan["user_port"], plan["user_nccl_port"]]
                     + [port for slot in plan["slots"] for port in slot_ports(slot)],

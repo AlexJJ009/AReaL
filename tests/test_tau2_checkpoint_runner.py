@@ -598,3 +598,102 @@ r.main()
         if process.poll() is None:
             process.kill()
             process.wait()
+
+
+@pytest.fixture
+def deepseek_recipe(tmp_path, recipe):
+    """Same run, DeepSeek official backend runtime (no Volcano key field)."""
+    runtime = json.loads(Path(recipe.runtime).read_text())
+    runtime.pop("ark_plan_env_file")
+    runtime["deepseek_env_file"] = str(tmp_path / "DO-NOT-READ-deepseek.env")
+    path = tmp_path / "runtime-deepseek.json"
+    path.write_text(json.dumps(runtime))
+    return runner.parse_args(
+        [
+            recipe.run,
+            "--runtime",
+            str(path),
+            "--user-backend",
+            "deepseek-official",
+            "--workers",
+            "8",
+            "--steps",
+            "0,126",
+            "--checkpoint",
+            "v3-120=/abs/v3/globalstep119",
+        ]
+    )
+
+
+def test_deepseek_backend_plans_eight_policy_gpus_without_user_server(
+    deepseek_recipe,
+):
+    """DeepSeek official user and judge; no local user server or Volcano key."""
+    plan = runner.build_plan(deepseek_recipe)
+    assert plan["user_backend"] == "deepseek-official"
+    assert not {"user_command", "user_gpu", "user_port"} & set(plan)
+    assert [s["gpu"] for s in plan["slots"]] == list(range(8))
+    assert [j["gpu"] for j in plan["jobs"]] == [0, 1, 2]
+    command = " ".join(plan["jobs"][0]["command"])
+    for arg in (
+        "econfig.user_llm=deepseek-flash",
+        "econfig.user_llm_base_url=https://api.deepseek.com",
+        "econfig.user_llm_api_key_env=DEEPSEEK_API_KEY",
+        "econfig.nl_judge_llm=deepseek-flash",
+        "econfig.nl_judge_llm_base_url=https://api.deepseek.com",
+        "econfig.nl_judge_llm_api_key_env=DEEPSEEK_API_KEY",
+        "DO-NOT-READ-deepseek.env",
+        "${DEEPSEEK_API_KEY:?missing API key}",
+    ):
+        assert arg in command
+    for forbidden in ("ARK_PLAN_API_KEY", "volces.com", "qwen35-4b-user", "40080"):
+        assert forbidden not in command
+
+
+def test_labeled_checkpoint_uses_given_path_and_own_directory(deepseek_recipe):
+    """An external checkpoint is evaluated with the same config and protocol."""
+    jobs = runner.build_plan(deepseek_recipe)["jobs"]
+    extra = jobs[-1]
+    assert extra["step"] == "v3-120"
+    assert extra["model_path"] == "/abs/v3/globalstep119"
+    assert extra["output_dir"].endswith("offline-checkpoint-eval/ckpt-v3-120")
+    assert "--model-path /abs/v3/globalstep119" in " ".join(extra["command"])
+    protocol = [
+        a for a in jobs[0]["command"] if a.startswith(("econfig.", "++econfig."))
+    ]
+    assert protocol == [
+        a for a in extra["command"] if a.startswith(("econfig.", "++econfig."))
+    ]
+
+
+@pytest.mark.parametrize(
+    "value", ["v3-120", "v3=relative/path", "bad label=/abs", "a=/abs,a=/abs"]
+)
+def test_labeled_checkpoint_rejects_malformed_values(deepseek_recipe, value):
+    deepseek_recipe.checkpoint = value.split(",")
+    with pytest.raises(ValueError, match="LABEL"):
+        runner.build_plan(deepseek_recipe)
+
+
+def test_backend_runtime_key_field_must_match(recipe, deepseek_recipe):
+    """Each backend requires exactly its own key-file field."""
+    deepseek_recipe.runtime = recipe.runtime  # has ark_plan_env_file only
+    with pytest.raises(ValueError, match="deepseek_env_file"):
+        runner.build_plan(deepseek_recipe)
+    recipe.workers = 8
+    with pytest.raises(ValueError, match="1..7"):
+        runner.build_plan(recipe)
+
+
+def test_deepseek_run_never_starts_user_server(deepseek_recipe, monkeypatch):
+    """run() goes straight to the policy queue."""
+    monkeypatch.setattr(runner, "checkpoint_ready", lambda path: True)
+    started = []
+    monkeypatch.setattr(
+        runner.ProcessGroups,
+        "start",
+        lambda self, *a: started.append(a) or pytest.fail("no process expected"),
+    )
+    monkeypatch.setattr(runner, "run_queue", lambda plan, args, manager: 0)
+    assert runner.run(deepseek_recipe) == 0
+    assert started == []
