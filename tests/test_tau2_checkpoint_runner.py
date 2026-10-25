@@ -708,4 +708,6 @@ def test_task_set_test_passes_through_and_changes_fingerprint(recipe):
     assert "--task-set test" in " ".join(subset["command"])
     assert default["fingerprint"] != subset["fingerprint"]
     with pytest.raises(SystemExit):
-        runner.parse_args([recipe.run, "--runtime", recipe.runtime, "--task-set", "base"])
+        runner.parse_args(
+            [recipe.run, "--runtime", recipe.runtime, "--task-set", "base"]
+        )

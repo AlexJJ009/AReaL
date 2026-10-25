@@ -74,10 +74,10 @@ Every evaluation uses `--repeats 4 --temperature 0`, `qwen25` policy tool parsin
 900-second episode timeout. `--task-set ppo` (default) is the fixed 100-task set over
 airline, retail and telecom; `--task-set test` is the fixed test split of the run
 config's `domains`. For a run trained on airline and retail it is the same 60 tasks as
-the ppo set without telecom (checked 2026-10-25 on `run3p-std-beta1-notel-c128`). Policy radix cache
-is enabled. `--judge-concurrency` caps concurrent episodes per process (default 1),
-hence at most seven sequential NL judge streams by default. Increasing it also increases
-user-simulator and judge traffic.
+the ppo set without telecom (checked 2026-10-25 on `run3p-std-beta1-notel-c128`). Policy
+radix cache is enabled. `--judge-concurrency` caps concurrent episodes per process
+(default 1), hence at most seven sequential NL judge streams by default. Increasing it
+also increases user-simulator and judge traffic.
 
 The shared user simulator uses the pinned Qwen3.5-4B snapshot, served name
 `qwen35-4b-user`, memory fraction 0.75, `qwen3` reasoning parsing and `qwen3_coder` tool
