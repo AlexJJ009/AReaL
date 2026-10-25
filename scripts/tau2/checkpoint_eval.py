@@ -91,6 +91,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="qwen-local: Qwen user on GPU 7, Volcano judge. "
         "deepseek-official: DeepSeek official user and judge, no user server.",
     )
+    parser.add_argument(
+        "--task-set",
+        choices=("ppo", "test"),
+        default="ppo",
+        help="ppo: the fixed 100-task set over all three domains. "
+        "test: the fixed test split of the run's own config domains.",
+    )
     parser.add_argument("--steps-per-epoch", type=int, default=9)
     parser.add_argument("--final-step", type=int, default=126)
     parser.add_argument(
@@ -355,7 +362,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             "--output-root",
             str(directory / "attempt-001"),
             "--task-set",
-            "ppo",
+            args.task_set,
             "--repeats",
             "4",
             "--temperature",
@@ -378,6 +385,8 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             "runtime": runtime,
             "code_sha256": code_digest(),
         }
+        if args.task_set != "ppo":  # keep fingerprints of earlier ppo runs unchanged
+            identity["task_set"] = args.task_set
         jobs.append(
             {
                 "step": step,

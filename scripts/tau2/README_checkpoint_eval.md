@@ -70,8 +70,11 @@ timeout names the occupied ports and protocols. Another application can still cl
 port after that check; startup failure is reported, with no fallback to a shared policy
 port.
 
-Every evaluation uses `--task-set ppo --repeats 4 --temperature 0`, the fixed 100-task
-set, `qwen25` policy tool parsing, and a 900-second episode timeout. Policy radix cache
+Every evaluation uses `--repeats 4 --temperature 0`, `qwen25` policy tool parsing, and a
+900-second episode timeout. `--task-set ppo` (default) is the fixed 100-task set over
+airline, retail and telecom; `--task-set test` is the fixed test split of the run
+config's `domains`. For a run trained on airline and retail it is the same 60 tasks as
+the ppo set without telecom (checked 2026-10-25 on `run3p-std-beta1-notel-c128`). Policy radix cache
 is enabled. `--judge-concurrency` caps concurrent episodes per process (default 1),
 hence at most seven sequential NL judge streams by default. Increasing it also increases
 user-simulator and judge traffic.

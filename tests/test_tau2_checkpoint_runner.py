@@ -697,3 +697,15 @@ def test_deepseek_run_never_starts_user_server(deepseek_recipe, monkeypatch):
     monkeypatch.setattr(runner, "run_queue", lambda plan, args, manager: 0)
     assert runner.run(deepseek_recipe) == 0
     assert started == []
+
+
+def test_task_set_test_passes_through_and_changes_fingerprint(recipe):
+    """--task-set test evaluates the run's own domains; default stays ppo."""
+    default = runner.build_plan(recipe)["jobs"][0]
+    recipe.task_set = "test"
+    subset = runner.build_plan(recipe)["jobs"][0]
+    assert "--task-set ppo" in " ".join(default["command"])
+    assert "--task-set test" in " ".join(subset["command"])
+    assert default["fingerprint"] != subset["fingerprint"]
+    with pytest.raises(SystemExit):
+        runner.parse_args([recipe.run, "--runtime", recipe.runtime, "--task-set", "base"])
