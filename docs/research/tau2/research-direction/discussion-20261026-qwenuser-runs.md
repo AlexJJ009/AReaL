@@ -180,37 +180,43 @@ AReaL 代码默认不白化（`areal/api/cli_args.py` 里 `adv_norm` 默认 `Non
 
 **例子 2：SAO $\lambda$（run 4 / 5）。** $\lambda=1-1/(1.5\times3000)=1-1/4500\approx0.99978$。
 
-**先说"目标"。** advantage 永远是"目标 $-V_t$"。目标是对"这条 episode 最后能拿多少 reward"的估计，$V_t$ 是 critic 在 token $t$
-之前的估计，两者之差就是这一步比预期好多少。$\lambda=1$ 时目标就是真实结局 $R$（例子 1）。$\lambda<1$ 时目标换成 $\lambda$-return
-$G^\lambda_t$，它除了 $R$，还用 critic 对后面各个 token 的估计：
+**先说"目标"。** advantage 永远是"目标 $-V_t$"。目标是对"这条 episode 最后能拿多少 reward"的估计，$V_t$ 是 critic 在
+token $t$ 之前的估计，两者之差就是这一步比预期好多少。$\lambda=1$ 时目标就是真实结局 $R$（例子 1）。$\lambda<1$ 时目标换成
+$\lambda$-return $G^\lambda_t$，它除了 $R$，还用 critic 对后面各个 token 的估计：
 
 $$
 G^\lambda_t=\lambda^{n}R+(1-\lambda)\sum_{j=1}^{n}\lambda^{j-1}V_{t+j},\qquad \hat A_t=G^\lambda_t-V_t ,
 $$
 
 其中 $n=L-1-t$ 是 token $t$ 之后还有几个 agent token。所有权重加起来正好是 1，所以目标是 $R$ 和后面 $n$ 个 value
-的加权平均。两种成分的取舍：$R$ 是真实结局，不会错但噪声大（一次采样的 0 或 1）；$V_{t+j}$ 是 critic 的估计，噪声小，但 critic 错了目标就跟着错。
+的加权平均。两种成分的取舍：$R$ 是真实结局，不会错但噪声大（一次采样的 0 或 1）；$V_{t+j}$ 是 critic 的估计，噪声小，但 critic
+错了目标就跟着错。
 
 **权重为什么是这样。** 有两种等价的看法：
 
-1. **把意外加起来。** $\hat A_t=\sum_{k\ge0}\lambda^k\delta_{t+k}$，中间的 $\delta_{t+k}=V_{t+k+1}-V_{t+k}$，最后一个是
-   $R-V_{L-1}$。每个 $V_{t+j}$ 在 $\delta_{t+j-1}$ 里带正号、在 $\delta_{t+j}$ 里带负号，合并后系数是
-   $\lambda^{j-1}-\lambda^{j}=(1-\lambda)\lambda^{j-1}$；$R$ 只出现在最后一个 $\delta$ 里，系数 $\lambda^n$；$V_t$ 系数 $-1$。
-1. **把"往后看 $k$ 步"平均起来。** 往后走 $k$ 步，就拿那时 critic 的估计 $V_{t+k}$ 当结局（中间 reward 都是 0，$\gamma=1$）；走到底就是
-   $R$。$\lambda$-return 把所有 $k$ 混在一起，看 $k$ 步的权重是 $(1-\lambda)\lambda^{k-1}$，越远越小，剩下的 $\lambda^n$ 给真实结局。
+1. **把意外加起来。** $\hat A_t=\sum_{k\ge0}\lambda^k\delta_{t+k}$，中间的
+   $\delta_{t+k}=V_{t+k+1}-V_{t+k}$，最后一个是 $R-V_{L-1}$。每个 $V_{t+j}$ 在 $\delta_{t+j-1}$
+   里带正号、在 $\delta_{t+j}$ 里带负号，合并后系数是
+   $\lambda^{j-1}-\lambda^{j}=(1-\lambda)\lambda^{j-1}$；$R$ 只出现在最后一个 $\delta$ 里，系数
+   $\lambda^n$；$V_t$ 系数 $-1$。
+1. **把"往后看 $k$ 步"平均起来。** 往后走 $k$ 步，就拿那时 critic 的估计 $V_{t+k}$ 当结局（中间 reward 都是
+   0，$\gamma=1$）；走到底就是 $R$。$\lambda$-return 把所有 $k$ 混在一起，看 $k$ 步的权重是
+   $(1-\lambda)\lambda^{k-1}$，越远越小，剩下的 $\lambda^n$ 给真实结局。
 
-**小例子。** $\lambda=0.5$，token $t$ 之后还有 3 个 token：$V_{t+1}$ 的权重 0.5，$V_{t+2}$ 0.25，$V_{t+3}$ 0.125，$R$
-0.125，合计 1。$\lambda$ 越接近 1，每个 value 分到的越少，留给 $R$ 的越多。
+**小例子。** $\lambda=0.5$，token $t$ 之后还有 3 个 token：$V_{t+1}$ 的权重 0.5，$V_{t+2}$
+0.25，$V_{t+3}$ 0.125，$R$ 0.125，合计 1。$\lambda$ 越接近 1，每个 value 分到的越少，留给 $R$ 的越多。
 
-**回到 $L=3000$。** $\lambda=0.99978$ 时每个 value 只分到约 $1-\lambda\approx0.0002$，但 token 多，一段加起来不小。按段求和用
-$\sum_{j=a}^{b}(1-\lambda)\lambda^{j-1}=\lambda^{a-1}-\lambda^{b}$，并且 $\lambda^m\approx e^{-m/4500}$：
+**回到 $L=3000$。** $\lambda=0.99978$ 时每个 value 只分到约 $1-\lambda\approx0.0002$，但 token
+多，一段加起来不小。按段求和用 $\sum_{j=a}^{b}(1-\lambda)\lambda^{j-1}=\lambda^{a-1}-\lambda^{b}$，并且
+$\lambda^m\approx e^{-m/4500}$：
 
-- **token 0**（$n=2999$）：$R$ 的权重 $\lambda^{2999}\approx e^{-0.667}=0.51$；token 1–1000 的 value 合计
-  $1-\lambda^{1000}\approx1-e^{-0.222}=0.20$；token 1001–2999 合计 $\lambda^{1000}-\lambda^{2999}=0.80-0.51=0.29$。
+- **token 0**（$n=2999$）：$R$ 的权重 $\lambda^{2999}\approx e^{-0.667}=0.51$；token 1–1000 的
+  value 合计 $1-\lambda^{1000}\approx1-e^{-0.222}=0.20$；token 1001–2999 合计
+  $\lambda^{1000}-\lambda^{2999}=0.80-0.51=0.29$。
   - 看出错误：目标 $=0.51\times0+0.20\times0.6+0.29\times0.1=0.15$，$\hat A_0=0.15-0.6=-0.45$。
   - 看不出错误：目标 $=0.51\times0+0.49\times0.6=0.29$，$\hat A_0=0.29-0.6=-0.31$。
-- **token 1000，写错的那一步**（$n=1999$）：$R$ 的权重 $\lambda^{1999}\approx e^{-0.444}=0.64$，其余 0.36 全在 token 1001
-  以后。
+- **token 1000，写错的那一步**（$n=1999$）：$R$ 的权重 $\lambda^{1999}\approx e^{-0.444}=0.64$，其余
+  0.36 全在 token 1001 以后。
   - 看出错误：目标 $=0.64\times0+0.36\times0.1=0.04$，$\hat A=0.04-0.6=-0.56$。
   - 看不出错误：目标 $=0.64\times0+0.36\times0.6=0.22$，$\hat A=0.22-0.6=-0.38$。
 - token 1001 和最后一个 token 2999 按同样的算法得到下表。
