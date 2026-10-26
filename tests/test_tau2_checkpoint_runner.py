@@ -176,7 +176,9 @@ def make_hf(path):
     (path / "model.safetensors").write_bytes(b"weights")
 
 
-def fake_result(job, attempt):
+def fake_result(job, attempt, planned=None):
+    """Write an evaluator result for the job's own task set (or a forced size)."""
+    planned = job.get("planned_episodes", 400) if planned is None else planned
     attempt.mkdir(parents=True, exist_ok=True)
     domain = {
         "episodes": 80,
@@ -191,10 +193,10 @@ def fake_result(job, attempt):
         json.dumps(
             {
                 "model_path": job["model_path"],
-                "task_set": "ppo",
+                "task_set": job.get("task_set", "ppo"),
                 "repeats": 4,
                 "temperature": 0.0,
-                "planned_episodes": 400,
+                "planned_episodes": planned,
             }
         )
     )
@@ -202,8 +204,8 @@ def fake_result(job, attempt):
         json.dumps(
             {
                 "status": "complete",
-                "planned_episodes": 400,
-                "completed_episodes": 398,
+                "planned_episodes": planned,
+                "completed_episodes": planned - 2,
                 "infra_excluded_episodes": 2,
                 "repeats": 4,
                 "official": {"by_domain": {"airline": domain}},
@@ -702,12 +704,34 @@ def test_deepseek_run_never_starts_user_server(deepseek_recipe, monkeypatch):
 def test_task_set_test_passes_through_and_changes_fingerprint(recipe):
     """--task-set test evaluates the run's own domains; default stays ppo."""
     default = runner.build_plan(recipe)["jobs"][0]
+    set_domains(recipe, ["airline", "retail"])
     recipe.task_set = "test"
     subset = runner.build_plan(recipe)["jobs"][0]
     assert "--task-set ppo" in " ".join(default["command"])
     assert "--task-set test" in " ".join(subset["command"])
     assert default["fingerprint"] != subset["fingerprint"]
     with pytest.raises(SystemExit):
-        runner.parse_args(
-            [recipe.run, "--runtime", recipe.runtime, "--task-set", "base"]
-        )
+        runner.parse_args([recipe.run, "--runtime", recipe.runtime, "--task-set", "base"])
+
+
+def set_domains(recipe, domains):
+    config = Path(recipe.run) / "logs/root/tau2-ppo/trial/config.yaml"
+    data = yaml.safe_load(config.read_text())
+    data["domains"] = domains
+    config.write_text(yaml.safe_dump(data))
+
+
+def test_test_task_set_accepts_its_own_episode_count(recipe, tmp_path):
+    """airline+retail plans 240 episodes; a 240-episode result is a success."""
+    set_domains(recipe, ["airline", "retail"])
+    recipe.task_set = "test"
+    job = runner.build_plan(recipe)["jobs"][0]
+    assert (job["task_set"], job["planned_episodes"]) == ("test", 240)
+    ok, wrong = tmp_path / "ok", tmp_path / "wrong"
+    fake_result(job, ok)
+    fake_result(job, wrong, planned=400)
+    runner.record_success(job, ok)
+    with pytest.raises(ValueError, match="240-episode"):
+        runner.record_success(job, wrong)
+    ppo_job = dict(job, task_set="ppo", planned_episodes=400)
+    assert not runner.valid_result(ppo_job, ok)

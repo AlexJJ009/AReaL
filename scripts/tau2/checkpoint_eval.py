@@ -43,6 +43,9 @@ DEFAULT_STEPS = "0," + ",".join(map(str, range(10, 121, 10))) + ",126"
 DEEPSEEK_MODEL = "deepseek-flash"
 DEEPSEEK_URL = "https://api.deepseek.com"
 RUNTIME_FIELDS = ("python", "hf_hub_cache", "sao_artifact_root", "tau2_data_dir")
+# Fixed-v3 test tasks per domain; every task runs 4 trials.
+TEST_TASKS = {"airline": 20, "retail": 40, "telecom": 40}
+PPO_EPISODES = 4 * sum(TEST_TASKS.values())
 KEY_FIELD = {
     "qwen-local": "ark_plan_env_file",
     "deepseek-official": "deepseek_env_file",
@@ -238,6 +241,15 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("Run directory must match the tau2-ppo config trial_name")
     if config["econfig"]["benchmark_variant"] != "fixed":
         raise ValueError("PPO checkpoint evaluation requires fixed data")
+    if args.task_set == "ppo":
+        planned_episodes = PPO_EPISODES
+    else:
+        domains = config["domains"]
+        if isinstance(domains, str):
+            domains = [domains]
+        if not domains or set(domains) - set(TEST_TASKS):
+            raise ValueError(f"--task-set test supports {sorted(TEST_TASKS)} domains")
+        planned_episodes = 4 * sum(TEST_TASKS[d] for d in dict.fromkeys(domains))
     runtime = read_json(Path(args.runtime))
     required = (*RUNTIME_FIELDS, KEY_FIELD[args.user_backend])
     if runtime is None or any(
@@ -390,6 +402,8 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
         jobs.append(
             {
                 "step": step,
+                "task_set": args.task_set,
+                "planned_episodes": planned_episodes,
                 **slot,
                 "model_path": str(model),
                 "output_dir": str(directory),
@@ -503,27 +517,32 @@ def valid_result(job: dict[str, Any], attempt: Path) -> bool:
         read_json(attempt / "summary.json"),
         read_json(attempt / "manifest.json"),
     )
+    task_set = job.get("task_set", "ppo")  # plans written before --task-set
+    planned = job.get("planned_episodes", PPO_EPISODES)
     return bool(
         summary
         and manifest
         and summary.get("status") == "complete"
         and summary.get("repeats") == 4
-        and summary.get("planned_episodes") == 400
+        and summary.get("planned_episodes") == planned
         and summary.get("completed_episodes", -1000)
         + summary.get("infra_excluded_episodes", -1000)
-        == 400
+        == planned
         and summary.get("official", {}).get("by_domain")
         and manifest.get("model_path") == job["model_path"]
-        and manifest.get("task_set") == "ppo"
+        and manifest.get("task_set") == task_set
         and manifest.get("repeats") == 4
         and manifest.get("temperature") == 0
-        and manifest.get("planned_episodes") == 400
+        and manifest.get("planned_episodes") == planned
     )
 
 
 def record_success(job: dict[str, Any], attempt: Path) -> None:
     if not valid_result(job, attempt):
-        raise ValueError("Evaluator did not produce a complete 400-episode PPO summary")
+        raise ValueError(
+            f"Evaluator did not produce a complete {job.get('planned_episodes', PPO_EPISODES)}"
+            "-episode summary"
+        )
     write_json(
         attempt / "runner-success.json",
         {"fingerprint": job["fingerprint"], "returncode": 0},
