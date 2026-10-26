@@ -123,6 +123,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--user-port", type=int, default=40080)
     parser.add_argument("--user-nccl-port", type=int, default=40081)
+    parser.add_argument(
+        "--user-seed",
+        type=int,
+        default=42,
+        help="SGLang --random-seed of the local Qwen user server.",
+    )
     parser.add_argument("--wait-for-checkpoints", action="store_true")
     parser.add_argument("--wait-timeout", type=float, default=86400)
     parser.add_argument("--poll-interval", type=float, default=5)
@@ -399,6 +405,8 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
         }
         if args.task_set != "ppo":  # keep fingerprints of earlier ppo runs unchanged
             identity["task_set"] = args.task_set
+        if local_user:
+            identity["user_seed"] = args.user_seed
         jobs.append(
             {
                 "step": step,
@@ -450,6 +458,8 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
         "qwen3_coder",
         "--max-running-requests",
         "64",
+        "--random-seed",
+        str(args.user_seed),
     ]
     restart = 'echo $$ > "$USER_PGID_FILE"; trap "exit 143" TERM INT HUP; while true; do "$@"; rc=$?; echo "user server exited rc=$rc; restarting in 5 s"; sleep 5; done'
     plan = {

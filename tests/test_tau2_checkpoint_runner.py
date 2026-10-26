@@ -737,3 +737,15 @@ def test_test_task_set_accepts_its_own_episode_count(recipe, tmp_path):
         runner.record_success(job, wrong)
     ppo_job = dict(job, task_set="ppo", planned_episodes=400)
     assert not runner.valid_result(ppo_job, ok)
+
+
+def test_local_user_server_seed_is_fixed_and_fingerprinted(recipe):
+    """The Qwen user server gets --random-seed (default 42); the seed is part of the identity."""
+    plan = runner.build_plan(recipe)
+    command = plan["user_command"]
+    assert command[command.index("--random-seed") + 1] == "42"
+    recipe.user_seed = 43
+    other = runner.build_plan(recipe)
+    command = other["user_command"]
+    assert command[command.index("--random-seed") + 1] == "43"
+    assert plan["jobs"][0]["fingerprint"] != other["jobs"][0]["fingerprint"]
