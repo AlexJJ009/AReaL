@@ -270,22 +270,27 @@ checkpoint 只完成了 330–378/400 条（评测被中止），图中只用完
 
 口径：
 
-- **共同设置**：同一份 test 集（`benchmark_variant=fixed`；Airline 20 题、Retail 40 题、Telecom 40 题），每题 4 次，agent T=0，用户和 judge T=0。mean@4 =
-  每题 4 次成功率的平均，再对题平均。三套评测只差用户和 judge。A+R / A+R+T 指训练集包含的 domain。
+- **共同设置**：同一份 test 集（`benchmark_variant=fixed`；Airline 20 题、Retail 40 题、Telecom 40
+  题），每题 4 次，agent T=0，用户和 judge T=0。mean@4 = 每题 4 次成功率的平均，再对题平均。三套评测只差用户和 judge。A+R /
+  A+R+T 指训练集包含的 domain。
 - **火山**：用户和 judge 都是火山 plan 的 `deepseek-v4-1-flash-261017`。这是 649 训练时每 10 步做的
   validation（`evidence/async-eval/{0,120}.json`），训练前一行是 649 的第 0 步。其他 run 没有在火山下评过。
-- **DeepSeek 官方**：用户和 judge 都是官方 `deepseek-flash`，10-24 / 10-25 的离线评测。训练前一行用 run 3′ 的评测；同一模型在
-  run 3 的评测里是 11.2 / 46.2 / 46.2，差 2–3pp，是同一 checkpoint 重测的噪声量级。v3ext 训练时也用 `deepseek-flash`
-  做过 validation：第 0 步 23.8 / 47.5 / 45.6，第 120 步 23.8 / 66.2 / 48.1，Retail 和 Telecom 与离线评测接近，Airline
-  高 10pp（20 题上相当于 8 条 episode），原因没有查。
-- **Qwen**：用户 Qwen3.5-4B（自部署，non-thinking），judge 火山 `deepseek-v4-1-flash-261017`，不评 Telecom（Qwen 用户下
-  step 0 只有 5.6%）。训练前、run 3′、run 2′ 是两次评测合并（每题 8 次）；run 3 只有一次，且被中止，Telecom 没评完。
-- **训练用户**：DeepSeek 官方是 `deepseek-flash`；DeepSeek 火山是 `deepseek-v4-1-flash-261017`；Qwen3.5-4B 自部署。v3ext
-  和 649 不只差剧本，训练用户的后端也不同，所以这两行不是严格的 w/ vs w/o 对照。Qwen 用户的 run 训练时只做离线评测（`offline_eval_only=true`），没有训练中 validation。
-- **EV**：$1-\operatorname{Var}(R-V)/\operatorname{Var}(R)$，在各 run 自己的训练 batch 上算、critic 更新前，取第 101–120
-  步均值。v3ext 和 649 取自 10-19 图的 `baseline_summary.csv`（日志键 `critic_explained_variance`；run 3′ / 2′
-  上这个键与更新前 EV 相同，v3ext / 649 没有单独核对）。训练用户不同的 run，batch 分布不同，EV 只宜同一训练用户内比较。
-- **空格**：649 没做两套离线评测，v3ext 没做 Qwen 评测，Qwen 用户训练的 run 没在火山下评过。补齐后，同一列里 649 对 v3ext、run 2′ 对 649 才能直接比。
+- **DeepSeek 官方**：用户和 judge 都是官方 `deepseek-flash`，10-24 / 10-25 的离线评测。训练前一行用 run 3′
+  的评测；同一模型在 run 3 的评测里是 11.2 / 46.2 / 46.2，差 2–3pp，是同一 checkpoint 重测的噪声量级。v3ext 训练时也用
+  `deepseek-flash` 做过 validation：第 0 步 23.8 / 47.5 / 45.6，第 120 步 23.8 / 66.2 /
+  48.1，Retail 和 Telecom 与离线评测接近，Airline 高 10pp（20 题上相当于 8 条 episode），原因没有查。
+- **Qwen**：用户 Qwen3.5-4B（自部署，non-thinking），judge 火山 `deepseek-v4-1-flash-261017`，不评
+  Telecom（Qwen 用户下 step 0 只有 5.6%）。训练前、run 3′、run 2′ 是两次评测合并（每题 8 次）；run 3
+  只有一次，且被中止，Telecom 没评完。
+- **训练用户**：DeepSeek 官方是 `deepseek-flash`；DeepSeek 火山是
+  `deepseek-v4-1-flash-261017`；Qwen3.5-4B 自部署。v3ext 和 649 不只差剧本，训练用户的后端也不同，所以这两行不是严格的 w/
+  vs w/o 对照。Qwen 用户的 run 训练时只做离线评测（`offline_eval_only=true`），没有训练中 validation。
+- **EV**：$1-\operatorname{Var}(R-V)/\operatorname{Var}(R)$，在各 run 自己的训练 batch 上算、critic
+  更新前，取第 101–120 步均值。v3ext 和 649 取自 10-19 图的 `baseline_summary.csv`（日志键
+  `critic_explained_variance`；run 3′ / 2′ 上这个键与更新前 EV 相同，v3ext / 649 没有单独核对）。训练用户不同的
+  run，batch 分布不同，EV 只宜同一训练用户内比较。
+- **空格**：649 没做两套离线评测，v3ext 没做 Qwen 评测，Qwen 用户训练的 run 没在火山下评过。补齐后，同一列里 649 对 v3ext、run
+  2′ 对 649 才能直接比。
 
 主要差值（第 120 步，按题配对 bootstrap 的 95% CI）：
 
