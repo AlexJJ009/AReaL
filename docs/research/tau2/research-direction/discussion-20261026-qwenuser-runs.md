@@ -56,29 +56,48 @@ $$\hat A_t=\sum_{k\ge0}\lambda^k\,\delta_{t+k},\qquad \delta_j=r_j+V_{j+1}-V_j .
 每个 $\delta_j$ 是对话里某一处的"一步意外"：value 在这一步涨了还是跌了。对话是 agent 回合和用户回复交替进行的，所以这些意外分两类：
 
 - 落在 agent 回合里的 $\delta$：agent 这一步让成功的可能变大还是变小，对应 10-22 的 $a$；
-- 跨过一次用户回复的 $\delta$（用户说完之后的 value 减去说之前的 value）：用户这句话带来的变化，对应 10-22 的 $\epsilon$，而且它有确定的位置。
+- 跨过一次用户回复的 $\delta$（用户说完之后的 value 减去说之前的 value）：用户这句话带来的变化，对应 10-22 的
+  $\epsilon$，而且它有确定的位置。
 
 所以 $A=a+\epsilon$ 不是新的分解，GAE 已经把 advantage 写成"各处意外之和"。问题在于 $\lambda$：
 
-- **$\lambda=1$ 时，这些意外加起来正好消掉，只剩 $\hat A_t=R-V_t$。** 不管 critic 把意外放在哪一步，梯度只看起点和终点，"$a$ 和 $\epsilon$ 各是多少"对 agent 没有任何影响。这就是 run 2′ 的带剧本 critic 只能降方差的原因。
+- **$\lambda=1$ 时，这些意外加起来正好消掉，只剩 $\hat A_t=R-V_t$。** 不管 critic 把意外放在哪一步，梯度只看起点和终点，"$a$ 和
+  $\epsilon$ 各是多少"对 agent 没有任何影响。这就是 run 2′ 的带剧本 critic 只能降方差的原因。
 - **以前的 β 方法**是把跨用户回复的 $\delta$ 乘上 β。它要知道哪一次用户回复是用户的错，所以离不开检测器或 judge。
-- **$\lambda<1$（bootstrap）**不判断谁的错，只让每个 agent token 主要对它之后不远处的意外负责：$k$ 步之外的意外权重是 $\lambda^k$。离它很远的用户回复（包括最后的 STOP）带来的意外，对它的影响自动变小。
+- \*\*$\lambda<1$（bootstrap）\*\*不判断谁的错，只让每个 agent token 主要对它之后不远处的意外负责：$k$ 步之外的意外权重是
+  $\lambda^k$。离它很远的用户回复（包括最后的 STOP）带来的意外，对它的影响自动变小。
 
-也就是说，bootstrap 是一个不估计 $\epsilon$、也不需要 judge，却能让 $\epsilon$ 少算到 agent 头上的办法。代价是 advantage 里出现了 critic 的估计值：critic 错了，错误就进了梯度（§3.2 数值例子第 3 条）。
+也就是说，bootstrap 是一个不估计 $\epsilon$、也不需要 judge，却能让 $\epsilon$ 少算到 agent 头上的办法。代价是 advantage
+里出现了 critic 的估计值：critic 错了，错误就进了梯度（§3.2 数值例子第 3 条）。
 
 ### 1.2 为什么认为"动态 $\lambda$ + 带剧本 critic"可能解决问题
 
 bootstrap 能不能把 credit 放对，取决于 critic 把意外放在了哪里。两个组件各管一半：
 
-1. **带剧本 critic 负责把意外放在对的位置。** 标准 critic $V(h)$ 不知道用户真正要什么，agent 写错了它常常看不出来，意外一直拖到结算时的最后一次用户回复才出现；这时 bootstrap 会把罚算到结尾附近的 token 上，而不是写错的那一步。$V(h,z)$ 读了剧本，能在 agent 写错时就降下来，用户偏离剧本时在那次回复上降下来。649（DeepSeek 用户）的数据支持前半句：对 agent 自己造成的失败，结算时剩下的意外带剧本 −0.262、标准 −0.455；同一道题内，最后一次 agent→用户边界上区分成败的 AUC 是 0.938 对 0.758。Baisero & Amato（AAMAS 2022）还给了理论保证：$V(h,z)$ 这种 history-state critic 用来 bootstrap 不引入额外偏差，偏差只来自 critic 自身的误差。
-2. **动态 $\lambda$ 负责让位置真的影响梯度，同时不丢掉结局信号。** 按 token 计时，一条 episode 有几千个 agent token。固定 $\lambda=0.95$ 的有效视野只有 20 个 token，1000 个 token 外 $R$ 的权重约 $5\times10^{-23}$，advantage 几乎全由 critic 决定。SAO 的 $\lambda=1-1/(1.5L)$ 随轨迹长度变化，保证第一个 token 上 $R$ 的权重仍有约 0.51。critic 的回归目标仍用 $\lambda=1$（$G_t=R$），这样 critic 本身不被自己的估计带偏（VC-PPO 的做法，SAO 论文 §4.1 同样设 $\lambda_{\text{critic}}=1$）。
+1. **带剧本 critic 负责把意外放在对的位置。** 标准 critic $V(h)$ 不知道用户真正要什么，agent
+   写错了它常常看不出来，意外一直拖到结算时的最后一次用户回复才出现；这时 bootstrap 会把罚算到结尾附近的 token 上，而不是写错的那一步。$V(h,z)$
+   读了剧本，能在 agent 写错时就降下来，用户偏离剧本时在那次回复上降下来。649（DeepSeek 用户）的数据支持前半句：对 agent
+   自己造成的失败，结算时剩下的意外带剧本 −0.262、标准 −0.455；同一道题内，最后一次 agent→用户边界上区分成败的 AUC 是 0.938 对
+   0.758。Baisero & Amato（AAMAS 2022）还给了理论保证：$V(h,z)$ 这种 history-state critic 用来
+   bootstrap 不引入额外偏差，偏差只来自 critic 自身的误差。
+1. **动态 $\lambda$ 负责让位置真的影响梯度，同时不丢掉结局信号。** 按 token 计时，一条 episode 有几千个 agent token。固定
+   $\lambda=0.95$ 的有效视野只有 20 个 token，1000 个 token 外 $R$ 的权重约 $5\times10^{-23}$，advantage
+   几乎全由 critic 决定。SAO 的 $\lambda=1-1/(1.5L)$ 随轨迹长度变化，保证第一个 token 上 $R$ 的权重仍有约
+   0.51。critic 的回归目标仍用 $\lambda=1$（$G_t=R$），这样 critic 本身不被自己的估计带偏（VC-PPO 的做法，SAO 论文 §4.1
+   同样设 $\lambda_{\text{critic}}=1$）。
 
-合起来的预期：agent 写错导致的失败，罚集中在写错之前和写错那一步，之后的 token 少罚；用户在结尾偏离导致的失败，前面做对的 agent token 只承担一部分。这正是 10-22 想要的"agent 本应得到的 advantage"，只是不靠估计 $\epsilon$，而靠 critic 的信息加上 $\lambda$ 的衰减。
+合起来的预期：agent 写错导致的失败，罚集中在写错之前和写错那一步，之后的 token 少罚；用户在结尾偏离导致的失败，前面做对的 agent token
+只承担一部分。这正是 10-22 想要的"agent 本应得到的 advantage"，只是不靠估计 $\epsilon$，而靠 critic 的信息加上 $\lambda$
+的衰减。
 
 这里用"可能"，是因为有两个前提都还没验证：
 
-- **前提 1：Qwen 用户下，带剧本 critic 仍然能把意外放对位置。** 649 是 DeepSeek 用户的数据。弱用户自己会乱说，critic 可能把用户的乱说也学成了"agent 不行"。§5 的 B 部分直接测这一点。
-- **前提 2：部分挪动就够了。** SAO 的 $\lambda$ 接近 1，写错之前本来正确的 token 仍要背约 3/4 的罚（§3.2 数值例子第 4 条）。挪动这一部分能不能改变训练结果，要看 run 4 和 run 5 的 2×2 比较（[run card §13](../experiments/2026-10-24-qwenuser-no-telecom.md)）。如果 run 4 不比 run 5 好，或两者都不比 $\lambda=1$ 好，这条线就该停。
+- **前提 1：Qwen 用户下，带剧本 critic 仍然能把意外放对位置。** 649 是 DeepSeek 用户的数据。弱用户自己会乱说，critic
+  可能把用户的乱说也学成了"agent 不行"。§5 的 B 部分直接测这一点。
+- **前提 2：部分挪动就够了。** SAO 的 $\lambda$ 接近 1，写错之前本来正确的 token 仍要背约 3/4 的罚（§3.2 数值例子第 4
+  条）。挪动这一部分能不能改变训练结果，要看 run 4 和 run 5 的 2×2
+  比较（[run card §13](../experiments/2026-10-24-qwenuser-no-telecom.md)）。如果 run 4 不比 run 5
+  好，或两者都不比 $\lambda=1$ 好，这条线就该停。
 
 ## 2 现在发现的问题
 
@@ -277,17 +296,27 @@ python /data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/codex-sao-math/cas
 
 run card：
 
-- **问题**：Qwen 用户下，带剧本 critic 的 value 是否比标准 critic 更早在 agent 出错处下降（§1.2 前提 1）？换成 DeepSeek 用户产生的轨迹，结论是否一样？
+- **问题**：Qwen 用户下，带剧本 critic 的 value 是否比标准 critic 更早在 agent 出错处下降（§1.2 前提 1）？换成 DeepSeek
+  用户产生的轨迹，结论是否一样？
 - **数据**：
   1. 训练轨迹：run 2′ 和 run 3′ 最后四个 epoch（第 97–120 步）的训练 rollout，每个 run 约 3,000 条，用户是 Qwen。
-  2. 评测轨迹：两个 run 第 120 步和 step 0 在两次评测里产生的轨迹（DeepSeek 用户 airline + retail + telecom 各 400 条，Qwen 用户 airline + retail 各 480 条），包括 A 找出的交互题。
-- **做法**：沿用 649 case study 的前向流程（`tau2-privileged-critic-case-study-20261021/forward.py`、`analyze_forward.py`）。同一批轨迹分别给 run 2′ 和 run 3′ 第 119 步的 critic（checkpoint 已在）前向，只换 critic。评测轨迹没有保存训练时的 token，要按训练时的模板重新 tokenize，先在 CPU 上核对与训练格式一致。
+  1. 评测轨迹：两个 run 第 120 步和 step 0 在两次评测里产生的轨迹（DeepSeek 用户 airline + retail + telecom 各
+     400 条，Qwen 用户 airline + retail 各 480 条），包括 A 找出的交互题。
+- **做法**：沿用 649 case study
+  的前向流程（`tau2-privileged-critic-case-study-20261021/forward.py`、`analyze_forward.py`）。同一批轨迹分别给
+  run 2′ 和 run 3′ 第 119 步的 critic（checkpoint 已在）前向，只换 critic。评测轨迹没有保存训练时的
+  token，要按训练时的模板重新 tokenize，先在 CPU 上核对与训练格式一致。
 - **唯一的变量**：critic 是否读剧本。
-- **看什么**：EV；同一道题内成功和失败的可分性（第一个 agent token 前 / 对话中间 / 最后一次 agent→用户边界的 pair AUC）；按 A 的失败分类（错写、用户在写完前 STOP、上下文超限），失败 episode 的 value 从哪一轮开始下降、结算时剩下的意外 $R-V$；把每条 episode 的 value 序列代入 §3.2 的式子，算 SAO $\lambda$ 下写错前后 token 的 advantage。评测轨迹上额外看：两个 critic 在 DeepSeek 用户轨迹和 Qwen 用户轨迹上的差别是否一样。
+- **看什么**：EV；同一道题内成功和失败的可分性（第一个 agent token 前 / 对话中间 / 最后一次 agent→用户边界的 pair AUC）；按 A
+  的失败分类（错写、用户在写完前 STOP、上下文超限），失败 episode 的 value 从哪一轮开始下降、结算时剩下的意外 $R-V$；把每条 episode 的
+  value 序列代入 §3.2 的式子，算 SAO $\lambda$ 下写错前后 token 的 advantage。评测轨迹上额外看：两个 critic 在
+  DeepSeek 用户轨迹和 Qwen 用户轨迹上的差别是否一样。
 - **预期**：带剧本 critic 对"agent 写错库"一类失败更早下降，对"用户提前 STOP"一类两者都下降得晚。
-- **无信息的结果**：两个 critic 下降时机和 AUC 相同。那样 run 4 相对 run 5 不应有优势，"动态 $\lambda$ + 带剧本 critic"缺少机制支持。
+- **无信息的结果**：两个 critic 下降时机和 AUC 相同。那样 run 4 相对 run 5 不应有优势，"动态 $\lambda$ + 带剧本
+  critic"缺少机制支持。
 - **限制**：评测轨迹是 T=0 采样、DeepSeek 用户，与 critic 的训练分布不同；它测的是迁移，不是 in-sample 能力。
-- **成本**：8 张卡约 40–60 分钟（649 的同类前向约 3,000 条用 11 分钟；这里约 6,000 条训练轨迹加约 2,600 条评测轨迹，两个 critic），无 API 费用。脚本先由 Codex 改好、在 CPU 上 dry run。
+- **成本**：8 张卡约 40–60 分钟（649 的同类前向约 3,000 条用 11 分钟；这里约 6,000 条训练轨迹加约 2,600 条评测轨迹，两个
+  critic），无 API 费用。脚本先由 Codex 改好、在 CPU 上 dry run。
 - **时间**：GPU 被 run 4（预计今天 10:30 PDT 结束）、它的评测和 run 5（预计明天 04:15 结束）占满。
 
 ### C　之后
