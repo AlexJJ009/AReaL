@@ -171,7 +171,7 @@ DeepSeek 官方 `deepseek-flash` 作用户和 judge，第二行用 Qwen3.5-4B �
 judge（run 3′ / 2′ 两次评测合并，每题 8 次；不评 Telecom）。第三行是训练 batch 的成功率（128 条 episode，T=1）和 critic
 EV（更新前），细线每步、粗线 10 步滑动均值。颜色表示 critic（蓝标准、绿带剧本），线型表示 actor $\lambda$（实线 1，虚线 SAO）；灰色 run
 3 训练集含 Telecom。黑色星号是用 DeepSeek 用户训练的 PPO（v3ext）第 120 步。run 3 的 Qwen 评测在第 70 步之后每个
-checkpoint 只完成了 330–378/400 条（评测被中止），图中只用完成的 episode。run 4 只有训练曲线（进行中）。
+checkpoint 只完成了 330–378/400 条（评测被中止），图中只用完成的 episode。run 4 只有训练曲线（进行中）。EV 取日志里的 `critic_explained_variance_pre_update`；每步只有一个 minibatch，它和 10-19 图用的 `critic_explained_variance` 数值相同（run 3′ / 2′ 第 101–120 步均为 0.397 / 0.520），两张图可以直接比。
 
 **表 1　DeepSeek 用户评测，mean@4（%）**
 
