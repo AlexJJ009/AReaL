@@ -23,5 +23,5 @@
   误差的实验计划（提案）
 - [2026-10-18-user-sim-rerun.md](2026-10-18-user-sim-rerun.md)：用户模拟器 v3 矩阵重跑，加 U1 prompt
   patch 与 DeepSeek thinking 开关对照
-- [2026-10-24-qwenuser-no-telecom.md](2026-10-24-qwenuser-no-telecom.md)：Qwen 用户、去掉 Telecom 的 run 3′
-  与方法 run（run card）
+- [2026-10-24-qwenuser-no-telecom.md](2026-10-24-qwenuser-no-telecom.md)：Qwen 用户、去掉
+  Telecom 的 run 3′ 与方法 run（run card）

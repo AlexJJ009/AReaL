@@ -7,5 +7,7 @@
 - [motivation-review-20261013.md](motivation-review-20261013.md)：动机审查（2026-10-13）。
 - [appendix-method-draft-16.11.md](appendix-method-draft-16.11.md)：方法设计草案，已暂停（[ADR 0010](../decisions/0010-pause-method-draft.md)）。
 - [appendix-math-review-codex.md](appendix-math-review-codex.md)：对方法草案的数学审稿。
-- [reflection-20261024.md](reflection-20261024.md)：切入点反思：为什么放弃"把用户的作用从 agent 的 credit 里分出来"，转向带剧本 critic + bootstrap（2026-10-24）。
-- [discussion-20261026-qwenuser-runs.md](discussion-20261026-qwenuser-runs.md)：Qwen 用户训练的 run 3 / 3′ / 2′ / 4 的结果、advantage 与 loss 的完整式子、待做的 case study（2026-10-26）。
+- [reflection-20261024.md](reflection-20261024.md)：切入点反思：为什么放弃"把用户的作用从 agent 的 credit
+  里分出来"，转向带剧本 critic + bootstrap（2026-10-24）。
+- [discussion-20261026-qwenuser-runs.md](discussion-20261026-qwenuser-runs.md)：Qwen
+  用户训练的 run 3 / 3′ / 2′ / 4 的结果、advantage 与 loss 的完整式子、待做的 case study（2026-10-26）。
