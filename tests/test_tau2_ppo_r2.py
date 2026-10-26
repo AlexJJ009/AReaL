@@ -47,6 +47,25 @@ def test_ppo_whitening_contract_refuses_missing_or_nonbatch(monkeypatch, tmp_pat
             train.validate_ppo_contract(config)
 
 
+def test_ppo_contract_allows_only_unit_or_sao_actor_lambda(monkeypatch, tmp_path):
+    """Actor lambda may be 1 or SAO alpha=1.5; the critic target stays lambda=1."""
+    config = _config(monkeypatch, tmp_path)
+    train.validate_ppo_contract(config)
+    config.actor.gae_lambda = train.SAO_ACTOR_LAMBDA
+    config.actor.gae_lambda_kwargs = {"alpha": 1.5}
+    train.validate_ppo_contract(config)
+    for gae_lambda, kwargs, critic_lambda in (
+        (train.SAO_ACTOR_LAMBDA, {"alpha": 2.0}, 1.0),
+        (train.SAO_ACTOR_LAMBDA, {"alpha": 1.5}, None),
+        (0.95, {}, 1.0),
+    ):
+        config.actor.gae_lambda = gae_lambda
+        config.actor.gae_lambda_kwargs = kwargs
+        config.actor.critic_gae_lambda = critic_lambda
+        with pytest.raises(ValueError, match="SAO length-adaptive"):
+            train.validate_ppo_contract(config)
+
+
 def test_ppo_actor_loss_consumes_global_whitening_with_raw_returns(
     monkeypatch, tmp_path
 ):

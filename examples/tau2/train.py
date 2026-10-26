@@ -333,6 +333,22 @@ def validate_tau2_recipe(
     return domains
 
 
+SAO_ACTOR_LAMBDA = "areal.trainer.ppo.lambda_fn.sao_length_adaptive_gae"
+
+
+def _ppo_actor_lambda_allowed(actor) -> bool:
+    """Actor GAE lambda: 1, or SAO's length-adaptive lambda with alpha=1.5.
+
+    The critic target keeps lambda=1 either way (checked by the caller), as in
+    SAO and VC-PPO's decoupled GAE; only the actor advantage changes.
+    """
+    if actor.gae_lambda == 1.0:
+        return not actor.gae_lambda_kwargs
+    return actor.gae_lambda == SAO_ACTOR_LAMBDA and dict(
+        actor.gae_lambda_kwargs or {}
+    ) == {"alpha": 1.5}
+
+
 def validate_ppo_contract(config: Tau2PPOConfig, *, evaluation: bool = False) -> None:
     """Standard clipped GAE PPO with the GRPO recipe's async correction."""
     actor, critic = config.actor, config.critic
@@ -356,8 +372,7 @@ def validate_ppo_contract(config: Tau2PPOConfig, *, evaluation: bool = False) ->
         and actor.c_clip is None
         and actor.m2_threshold is None
         and actor.discount == 1.0
-        and actor.gae_lambda == 1.0
-        and not actor.gae_lambda_kwargs
+        and _ppo_actor_lambda_allowed(actor)
         and actor.critic_gae_lambda == 1.0
         and actor.reward_scaling == 1.0
         and actor.reward_bias == 0.0
@@ -375,8 +390,9 @@ def validate_ppo_contract(config: Tau2PPOConfig, *, evaluation: bool = False) ->
         and actor.kl_ctl == 0
     ):
         raise ValueError(
-            "PPO requires clipped surrogate eps=0.2, raw gamma=lambda=1 GAE, "
-            "no DIS/SAO/reward normalization/KL, and a full-parameter critic "
+            "PPO requires clipped surrogate eps=0.2, gamma=1 GAE with critic "
+            "lambda=1 and actor lambda 1 or SAO length-adaptive (alpha=1.5), "
+            "no DIS/reward normalization/KL, and a full-parameter critic "
             "with value clip=0.5"
         )
     normalization = actor.adv_norm
