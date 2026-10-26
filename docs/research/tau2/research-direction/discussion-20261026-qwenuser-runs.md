@@ -154,8 +154,9 @@ critic 的回归目标单独用 $\lambda_{\text{critic}}=1$ 算：$G_t=R$，与 
 actor 用的 advantage 再做 batch 白化：$\tilde A_t=(\hat A_t-\mu)/(\sigma+10^{-8})$，$\mu,\sigma$
 是整个 batch 所有 agent token 上的均值和标准差。SAO 论文没有写是否白化，这是本项目的选择。
 
-AReaL 代码默认不白化（`areal/api/cli_args.py` 里 `adv_norm` 默认 `None`），是 `examples/tau2/config_ppo.yaml`
-显式打开的。白化只是整体平移和缩放，不改变同一 batch 里 token 之间 advantage 的相对大小；关掉白化的对照还没跑。
+AReaL 代码默认不白化（`areal/api/cli_args.py` 里 `adv_norm` 默认 `None`），是
+`examples/tau2/config_ppo.yaml` 显式打开的。白化只是整体平移和缩放，不改变同一 batch 里 token 之间 advantage
+的相对大小；关掉白化的对照还没跑。
 
 **数值例子（白化之前）。** 两个例子共用一条 episode 和两种 critic：
 
@@ -172,14 +173,16 @@ AReaL 代码默认不白化（`areal/api/cli_args.py` 里 `adv_norm` 默认 `Non
 - 看出错误：token 0–1000 都是 $0-0.6=-0.60$；token 1001 以后是 $0-0.1=-0.10$。
 - 看不出错误：所有 token 都是 $-0.60$。
 
-写错之前的 token 和写错的那个 token 都是 −0.60，梯度分不出哪一步错了。两种 critic 只在写错之后不同：看出错误的 critic
-知道这些 token 已经救不回结局，少罚。由于 $V_t$ 只依赖 token $t$ 之前的对话，减掉它在期望上不改变梯度，只改变噪声，这就是"只降方差"。
+写错之前的 token 和写错的那个 token 都是 −0.60，梯度分不出哪一步错了。两种 critic 只在写错之后不同：看出错误的 critic 知道这些 token
+已经救不回结局，少罚。由于 $V_t$ 只依赖 token $t$ 之前的对话，减掉它在期望上不改变梯度，只改变噪声，这就是"只降方差"。
 
-**例子 2：SAO $\lambda$（run 4 / 5）。** $\lambda=1-1/(1.5\times3000)=1-1/4500\approx0.99978$。token $t$
-的目标不再是 $R$ 本身，而是 $R$ 和它之后各个 token 的 value 的加权平均：还剩 $n$ 个 token 时，$R$ 的权重是
+**例子 2：SAO $\lambda$（run 4 / 5）。**
+$\lambda=1-1/(1.5\times3000)=1-1/4500\approx0.99978$。token $t$ 的目标不再是 $R$ 本身，而是 $R$
+和它之后各个 token 的 value 的加权平均：还剩 $n$ 个 token 时，$R$ 的权重是
 $\lambda^n\approx e^{-n/4500}$，其余权重分给之后的 value，离得近的分得多。$\hat A_t$ = 目标 $-V_t$。
 
-- **token 0**（$n=2999$）：$R$ 的权重 0.51，token 1–1000 的 value 合计 0.20，token 1001–2999 合计 0.29。
+- **token 0**（$n=2999$）：$R$ 的权重 0.51，token 1–1000 的 value 合计 0.20，token 1001–2999 合计
+  0.29。
   - 看出错误：目标 $=0.51\times0+0.20\times0.6+0.29\times0.1=0.15$，$\hat A_0=0.15-0.6=-0.45$。
   - 看不出错误：目标 $=0.51\times0+0.49\times0.6=0.29$，$\hat A_0=0.29-0.6=-0.31$。
 - **token 1000，写错的那一步**（$n=1999$）：$R$ 的权重 0.64，其余 0.36 全在 token 1001 以后。
@@ -197,8 +200,8 @@ $\lambda^n\approx e^{-n/4500}$，其余权重分给之后的 value，离得近�
 例子 2 的读法：
 
 1. **SAO + 看出错误的 critic**：罚从 token 0 的 −0.45 逐渐加重，到写错那一步 −0.56 最重，写错之后骤降到 −0.06。和
-   $\lambda=1$ 相比，写错的那一步第一次比开头的 token 罚得重，梯度能分出"错在哪里"。但写错之前本来正确的 token 仍要背
-   −0.45，是 $\lambda=1$ 时的 3/4：$\lambda$ 接近 1，只能把罚往后挪一部分，不能精确定位到写错的那一步。
+   $\lambda=1$ 相比，写错的那一步第一次比开头的 token 罚得重，梯度能分出"错在哪里"。但写错之前本来正确的 token 仍要背 −0.45，是
+   $\lambda=1$ 时的 3/4：$\lambda$ 接近 1，只能把罚往后挪一部分，不能精确定位到写错的那一步。
 1. **SAO + 看不出错误的 critic**：罚从开头的 −0.31 一路加重到结尾的 −0.60，写错的那一步（−0.38）和它之后的 token
    一样重。罚被推向对话结尾，而不是写错的地方：critic 错了，bootstrap 就把错误带进 advantage。
 
