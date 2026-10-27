@@ -100,6 +100,10 @@ def test_checkpoint_eval_dry_run_preserves_user_judge_and_loads_no_engine(
     bound = tau2_evaluate.bind_eval_config(
         config, model_path="saved-actor", output_root=tmp_path
     )
+    assert bound.econfig._quota_breaker_state_path == str(
+        tmp_path / "quota-breaker.json"
+    )
+    original._quota_breaker_state_path = bound.econfig._quota_breaker_state_path
     assert bound.econfig == original
     assert (
         bound.actor.path

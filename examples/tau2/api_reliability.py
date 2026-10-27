@@ -21,9 +21,15 @@ logger = logging.getLogger("Tau2Agent")
 _T = TypeVar("_T")
 _LOCAL_LOCK = RLock()
 _LOCAL_STATE: dict[str, Any] = {}
-_QUOTA_CODES = {"AccountQuotaExceeded", "insufficient_quota"}
+_QUOTA_CODES = {
+    "AccountQuotaExceeded",
+    "insufficient_quota",
+    "InsufficientBalance",
+    "insufficient_balance",
+}
 _QUOTA_MESSAGE = re.compile(
-    r"(?:exceeded (?:the |your )?(?:(?:daily|weekly|monthly|total) )?usage quota"
+    r"(?:\binsufficient[ _]balance\b|\baccount[ _]quota[ _]exceeded\b"
+    r"|exceeded (?:the |your )?(?:(?:daily|weekly|monthly|total) )?usage quota"
     r"|(?:(?:daily|weekly|monthly|total) )?usage quota (?:has been |is )?exceeded"
     r"|(?:exhausted|used up) (?:the |your )?(?:(?:daily|weekly|monthly|total) )?usage quota)",
     re.IGNORECASE,
@@ -72,6 +78,10 @@ def classify_api_error(exc: BaseException) -> Literal["quota", "transient", "oth
         status = getattr(current, "status_code", None) or getattr(
             response, "status_code", None
         )
+        # DeepSeek official reports account exhaustion as HTTP 402, sometimes
+        # without a structured code. LiteLLM can retain only the status string.
+        if status == 402 or re.search(r"\bError code: 402\b", message):
+            return "quota"
         transient |= (
             code == "AccountRateLimitExceeded"
             or status in (408, 429)
@@ -159,6 +169,13 @@ class QuotaCircuitBreaker:
             key = "quota_errors" if kind == "quota" else "transient_api_errors"
             state[key] = state.get(key, 0) + 1
             if kind == "quota":
+                # Keep the provider's reset time across concurrent errors; a
+                # later response may omit it. Never persist raw API responses.
+                reset = re.search(
+                    r"(?:will )?reset(?:s)? at ([^.\n]+)", str(exc), re.IGNORECASE
+                )
+                if reset:
+                    state["provider_reset_time"] = reset.group(1)
                 times = [
                     t
                     for t in state.get("quota_times", [])
@@ -168,10 +185,9 @@ class QuotaCircuitBreaker:
                 state["quota_times"] = times
                 if len(times) >= self.config.quota_breaker_threshold:
                     # Keep the provider reset time, never the transport credentials.
-                    reset = re.search(
-                        r"(?:will )?reset(?:s)? at ([^.\n]+)", str(exc), re.IGNORECASE
+                    reset_text = state.setdefault(
+                        "provider_reset_time", "not supplied by provider"
                     )
-                    reset_text = reset.group(1) if reset else "not supplied by provider"
                     state["fatal"] = (
                         f"τ² quota circuit breaker: {len(times)} quota errors within "
                         f"{self.config.quota_breaker_window_seconds:g}s; provider reset: {reset_text}; "

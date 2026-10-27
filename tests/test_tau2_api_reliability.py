@@ -79,6 +79,69 @@ def make_config(tmp_path, **kwargs):
     )
 
 
+@pytest.mark.parametrize(
+    "status,body,message",
+    [
+        (402, {"error": {"message": "Insufficient Balance"}}, "Insufficient Balance"),
+        (402, {}, "Payment Required"),
+        (429, {"error": {"code": "insufficient_balance"}}, "No credit"),
+        (429, {"error": {"code": "InsufficientBalance"}}, "No credit"),
+        (429, {"error": {"code": "AccountQuotaExceeded"}}, "Account quota exceeded"),
+    ],
+)
+def test_official_account_exhaustion_trips_shared_breaker_without_retry(
+    tmp_path, status, body, message
+):
+    """Official user and judge share bounded_call and the same fatal state."""
+    config = make_config(tmp_path)
+    error = openai.APIStatusError(
+        message,
+        response=httpx.Response(
+            status, request=httpx.Request("POST", "https://mock.invalid")
+        ),
+        body=body,
+    )
+    assert classify_api_error(error) == "quota"
+    call = Mock(side_effect=error)
+    for _ in range(config.quota_breaker_threshold - 1):
+        with pytest.raises(openai.APIStatusError):
+            bounded_call(call, config=config, num_retries=120, sleep=Mock())
+    with pytest.raises(FatalRolloutError, match="provider reset: not supplied"):
+        bounded_call(call, config=config, num_retries=120, sleep=Mock())
+    assert call.call_count == config.quota_breaker_threshold
+    with pytest.raises(FatalRolloutError):
+        bounded_call(call, config=config)
+    assert call.call_count == config.quota_breaker_threshold
+    assert QuotaCircuitBreaker(config).snapshot()["provider_reset_time"] == (
+        "not supplied by provider"
+    )
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ("litellm.APIError: Error code: 402 - Payment Required", "quota"),
+        ("litellm.APIError: Insufficient Balance", "quota"),
+        ("account_quota_exceeded", "quota"),
+        ("Tokens per minute quota exceeded", "other"),
+    ],
+)
+def test_official_wrapped_string_retains_account_exhaustion_classification(
+    message, expected
+):
+    assert classify_api_error(RuntimeError(message)) == expected
+
+
+def test_breaker_preserves_reset_from_earlier_quota_response(tmp_path):
+    config = make_config(tmp_path)
+    breaker = QuotaCircuitBreaker(config)
+    breaker.record("quota", provider_error(), now=1)
+    breaker.record("quota", RuntimeError("quota exhausted"), now=2)
+    with pytest.raises(FatalRolloutError, match="2026-10-26 00:00:00"):
+        breaker.record("quota", RuntimeError("quota exhausted"), now=3)
+    assert breaker.snapshot()["provider_reset_time"] == "2026-10-26 00:00:00 +0800 CST"
+
+
 def test_quota_is_one_request_and_never_replays_episode(tmp_path):
     config = make_config(tmp_path)
     call = Mock(side_effect=provider_error())
