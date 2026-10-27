@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Queue offline PPO checkpoints on GPUs 0..6, with one user server on GPU 7.
 
-With --user-backend deepseek-official, the user simulator and NL judge are the
-DeepSeek official API, no user server starts and GPUs 0..7 all run policies.
+With --user-backend deepseek-official, no user server starts and GPUs 0..7 all
+run policies. --judge-backend independently selects the NL judge provider.
 
 Planning reads YAML as data, never through load_expr_config. --dry-run does not
 source runtime/key files, create directories, probe ports or import model code.
@@ -27,6 +27,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -48,12 +49,16 @@ TEST_TASKS = {"airline": 20, "retail": 40, "telecom": 40}
 PPO_EPISODES = 4 * sum(TEST_TASKS.values())
 KEY_FIELD = {
     "qwen-local": "ark_plan_env_file",
+    "volcano-plan": "ark_plan_env_file",
     "deepseek-official": "deepseek_env_file",
 }
 KEY_VARIABLE = {
     "qwen-local": "ARK_PLAN_API_KEY",
+    "volcano-plan": "ARK_PLAN_API_KEY",
     "deepseek-official": "DEEPSEEK_API_KEY",
 }
+QUOTA_EXIT_CODE = 86  # evaluate.py: provider breaker is fatal, never retry
+PROCESS_OWNER_ENV = "TAU2_CHECKPOINT_PROCESS_OWNER"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -89,10 +94,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--user-backend",
-        choices=sorted(KEY_FIELD),
+        choices=("qwen-local", "deepseek-official"),
         default="qwen-local",
-        help="qwen-local: Qwen user on GPU 7, Volcano judge. "
-        "deepseek-official: DeepSeek official user and judge, no user server.",
+        help="qwen-local: Qwen user on GPU 7. "
+        "deepseek-official: official API user, no user server.",
+    )
+    parser.add_argument(
+        "--judge-backend",
+        choices=("volcano-plan", "deepseek-official"),
+        help="NL judge provider (default: Volcano for Qwen users, official for official users).",
     )
     parser.add_argument(
         "--task-set",
@@ -114,6 +124,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=1,
         help="Concurrent episodes per process (one sequential judge stream per episode).",
+    )
+    parser.add_argument(
+        "--max-parallel-steps",
+        type=int,
+        help="Maximum simultaneous checkpoint attempts (default: --workers).",
     )
     parser.add_argument(
         "--port-base",
@@ -182,6 +197,7 @@ def runtime_command(
     *,
     judge: bool,
     backend: str = "qwen-local",
+    judge_backend: str | None = None,
 ) -> list[str]:
     """Source the existing CUDA environment; never echo/capture credential bytes."""
     setup = [
@@ -199,22 +215,30 @@ def runtime_command(
             / "lib/python3.12/site-packages/nvidia/curand/include"
         ),
     ]
+    credentials = []
     if judge:
+        if backend == "deepseek-official":
+            credentials.append(backend)
+        credentials.append(judge_backend or backend)
+    for credential in dict.fromkeys(credentials):
         setup += [
             'test "$(stat -c %a -- "$1")" = 600',
             "set -a",
             'source "$1"',
             "set +a",
             "shift",
-            f': "${{{KEY_VARIABLE[backend]}:?missing API key}}"',
+            f': "${{{KEY_VARIABLE[credential]}:?missing API key}}"',
         ]
-        args.append(runtime[KEY_FIELD[backend]])
+        args.append(runtime[KEY_FIELD[credential]])
     setup.append('exec "$@"')
     return ["bash", "-c", "; ".join(setup), "tau2-runtime", *args, *command]
 
 
 def build_plan(args: argparse.Namespace) -> dict[str, Any]:
     local_user = args.user_backend == "qwen-local"
+    judge_backend = args.judge_backend or (
+        "volcano-plan" if local_user else "deepseek-official"
+    )
     max_workers = 7 if local_user else 8
     if not 1 <= args.workers <= max_workers or args.judge_concurrency < 1:
         raise ValueError(
@@ -222,6 +246,8 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
         )
     if args.steps_per_epoch < 1 or args.final_step < 1:
         raise ValueError("steps-per-epoch and final-step must be positive")
+    if args.max_parallel_steps is not None and args.max_parallel_steps < 1:
+        raise ValueError("max-parallel-steps must be positive")
     if min(
         args.wait_timeout,
         args.poll_interval,
@@ -257,14 +283,17 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             raise ValueError(f"--task-set test supports {sorted(TEST_TASKS)} domains")
         planned_episodes = 4 * sum(TEST_TASKS[d] for d in dict.fromkeys(domains))
     runtime = read_json(Path(args.runtime))
-    required = (*RUNTIME_FIELDS, KEY_FIELD[args.user_backend])
+    credentials = [KEY_FIELD[judge_backend]]
+    if not local_user:
+        credentials.append(KEY_FIELD[args.user_backend])
+    required = (*RUNTIME_FIELDS, *dict.fromkeys(credentials))
     if runtime is None or any(
         not runtime.get(k) or not Path(runtime[k]).is_absolute() for k in required
     ):
         raise ValueError(
             "Runtime JSON must provide absolute paths for " + ", ".join(required)
         )
-    if set(runtime) - set(required):
+    if set(runtime) - {*RUNTIME_FIELDS, *KEY_FIELD.values()}:
         raise ValueError("Unknown runtime fields; keep secrets out of the runtime JSON")
     output = (args.output_root or run / "offline-checkpoint-eval").resolve()
     fileroot = Path(config["cluster"]["fileroot"])
@@ -326,10 +355,6 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             f"econfig.user_llm_base_url=http://127.0.0.1:{args.user_port}/v1",
             "econfig.user_llm_api_key_env=TAU2_LOCAL_USER_API_KEY",
             "++econfig.user_llm_args=" + USER_ARGS,
-            f"econfig.nl_judge_llm={JUDGE_MODEL}",
-            f"econfig.nl_judge_llm_base_url={JUDGE_URL}",
-            "econfig.nl_judge_llm_api_key_env=ARK_PLAN_API_KEY",
-            "++econfig.nl_judge_llm_args={temperature:0.0}",
         ]
     else:
         # Same model, endpoint and default (thinking) mode as the pre-10-17 PPO runs.
@@ -338,11 +363,14 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             f"econfig.user_llm_base_url={DEEPSEEK_URL}",
             "econfig.user_llm_api_key_env=DEEPSEEK_API_KEY",
             "++econfig.user_llm_args={temperature:0.0}",
-            f"econfig.nl_judge_llm={DEEPSEEK_MODEL}",
-            f"econfig.nl_judge_llm_base_url={DEEPSEEK_URL}",
-            "econfig.nl_judge_llm_api_key_env=DEEPSEEK_API_KEY",
-            "++econfig.nl_judge_llm_args={temperature:0.0}",
         ]
+    official_judge = judge_backend == "deepseek-official"
+    user_overrides += [
+        f"econfig.nl_judge_llm={DEEPSEEK_MODEL if official_judge else JUDGE_MODEL}",
+        f"econfig.nl_judge_llm_base_url={DEEPSEEK_URL if official_judge else JUDGE_URL}",
+        f"econfig.nl_judge_llm_api_key_env={KEY_VARIABLE[judge_backend]}",
+        "++econfig.nl_judge_llm_args={temperature:0.0}",
+    ]
     jobs = []
     for index, (step, name, model) in enumerate(targets):
         slot = slots[index % len(slots)]
@@ -381,6 +409,8 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             str(directory / "attempt-001"),
             "--task-set",
             args.task_set,
+            "--judge-backend",
+            judge_backend,
             "--repeats",
             "4",
             "--temperature",
@@ -402,6 +432,7 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             "protocol": protocol,
             "runtime": runtime,
             "code_sha256": code_digest(),
+            "judge_backend": judge_backend,
         }
         if args.task_set != "ppo":  # keep fingerprints of earlier ppo runs unchanged
             identity["task_set"] = args.task_set
@@ -411,12 +442,17 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "step": step,
                 "task_set": args.task_set,
+                "judge_backend": judge_backend,
                 "planned_episodes": planned_episodes,
                 **slot,
                 "model_path": str(model),
                 "output_dir": str(directory),
                 "command": runtime_command(
-                    command, runtime, judge=True, backend=args.user_backend
+                    command,
+                    runtime,
+                    judge=True,
+                    backend=args.user_backend,
+                    judge_backend=judge_backend,
                 ),
                 "fingerprint": hashlib.sha256(
                     json.dumps(identity, sort_keys=True).encode()
@@ -469,11 +505,16 @@ def build_plan(args: argparse.Namespace) -> dict[str, Any]:
         "output_root": str(output),
         "runtime": runtime,
         "user_backend": args.user_backend,
+        "judge_backend": judge_backend,
         "slots": slots,
         "jobs": jobs,
         "retry_limit": 1,
         "wait_for_checkpoints": args.wait_for_checkpoints,
-        "max_judge_streams": args.workers * args.judge_concurrency,
+        "max_judge_streams": min(args.max_parallel_steps or args.workers, args.workers)
+        * args.judge_concurrency,
+        "max_parallel_steps": min(
+            args.max_parallel_steps or args.workers, args.workers
+        ),
     }
     if local_user:
         plan.update(
@@ -541,6 +582,10 @@ def valid_result(job: dict[str, Any], attempt: Path) -> bool:
         and summary.get("official", {}).get("by_domain")
         and manifest.get("model_path") == job["model_path"]
         and manifest.get("task_set") == task_set
+        and (
+            "judge_backend" not in job
+            or manifest.get("judge_backend") == job["judge_backend"]
+        )
         and manifest.get("repeats") == 4
         and manifest.get("temperature") == 0
         and manifest.get("planned_episodes") == planned
@@ -582,35 +627,89 @@ def attempts_remaining(job: dict[str, Any]) -> int:
     return max(0, 2 - used)
 
 
+def fatal_quota_attempt(job: dict[str, Any]) -> bool:
+    """A fatal provider failure cannot become an automatic resume retry."""
+    for attempt in Path(job["output_dir"]).glob("attempt-*"):
+        receipt = read_json(attempt / "runner-attempt.json") or {}
+        if receipt.get("fingerprint") != job["fingerprint"]:
+            continue
+        failure = read_json(attempt / "runner-failure.json") or {}
+        breaker = read_json(attempt / "quota-breaker.json") or {}
+        summary = read_json(attempt / "summary.json") or {}
+        if (
+            failure.get("returncode") == QUOTA_EXIT_CODE
+            or breaker.get("fatal")
+            or summary.get("quota_breaker", {}).get("fatal")
+        ):
+            return True
+    return False
+
+
 def write_pgid(path: Path, pgid: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(str(pgid) + "\n")
 
 
 def stop_process_group(
-    process: subprocess.Popen, pgid_file: Path, grace: float = 5
+    process: subprocess.Popen,
+    pgid_file: Path,
+    grace: float = 5,
+    owner: str | None = None,
 ) -> None:
     """Signal only the session we created, including descendants after leader exit."""
-    pgid = int(pgid_file.read_text()) if pgid_file.exists() else process.pid
+    # The live manager owns this Popen and token; a partially written receipt
+    # must not block rollback. Unowned callers still validate their receipt.
+    pgid = (
+        process.pid if owner or not pgid_file.exists() else int(pgid_file.read_text())
+    )
     if pgid != process.pid or pgid <= 1 or pgid == os.getpgrp():
         raise ValueError("Refusing stale/unowned process group")
-    try:
-        os.killpg(pgid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
+
+    def owned_groups() -> set[int]:
+        groups = {pgid}
+        # Some inference descendants create their own sessions. The inherited
+        # token also identifies them after their original parent has exited.
+        if owner:
+            marker = f"{PROCESS_OWNER_ENV}={owner}".encode()
+            for entry in Path("/proc").iterdir():
+                if not entry.name.isdecimal():
+                    continue
+                try:
+                    if marker in (entry / "environ").read_bytes().split(b"\0"):
+                        group = os.getpgid(int(entry.name))
+                        if group > 1 and group != os.getpgrp():
+                            groups.add(group)
+                except (OSError, ProcessLookupError):
+                    continue
+        return groups
+
+    def send(groups: set[int], sig: int) -> None:
+        for group in groups:
+            try:
+                os.killpg(group, sig)
+            except ProcessLookupError:
+                pass
+
+    groups = owned_groups()
+    send(groups, signal.SIGTERM)
     deadline = time.monotonic() + grace
     while time.monotonic() < deadline:
         process.poll()  # reap the leader before checking for remaining descendants
-        try:
-            os.killpg(pgid, 0)
-        except ProcessLookupError:
+        found = owned_groups()
+        send(found - groups, signal.SIGTERM)
+        groups.update(found)
+        alive = False
+        for group in groups:
+            try:
+                os.killpg(group, 0)
+                alive = True
+            except ProcessLookupError:
+                pass
+        if not alive:
             break
         time.sleep(0.02)
     else:
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        send(groups | owned_groups(), signal.SIGKILL)
     process.wait(timeout=5)
     pgid_file.unlink(missing_ok=True)
 
@@ -621,7 +720,7 @@ class ProcessGroups:
     def __init__(self) -> None:
         self.stopped = threading.Event()
         self.lock = threading.Lock()
-        self.active: dict[int, tuple[subprocess.Popen, Path]] = {}
+        self.active: dict[int, tuple[subprocess.Popen, Path, str]] = {}
 
     def start(
         self, command: list[str], env: dict[str, str], log: Path, pgid: Path
@@ -630,31 +729,46 @@ class ProcessGroups:
         with self.lock:
             if self.stopped.is_set():
                 raise InterruptedError("Runner canceled")
+            owner = uuid.uuid4().hex
             with log.open("ab") as output:
                 process = subprocess.Popen(
                     command,
-                    env=env,
-                    cwd=REPO,
+                    env={**env, PROCESS_OWNER_ENV: owner},
+                    cwd=log.parent,
                     stdout=output,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                 )
-            write_pgid(pgid, process.pid)
-            self.active[process.pid] = (process, pgid)
+            self.active[process.pid] = (process, pgid, owner)
+            try:
+                write_pgid(pgid, process.pid)
+            except BaseException:
+                stop_process_group(process, pgid, owner=owner)
+                self.active.pop(process.pid)
+                raise
             return process
 
     def finish(self, process: subprocess.Popen) -> None:
         with self.lock:
-            owned = self.active.pop(process.pid, None)
+            owned = self.active.get(process.pid)
         if owned:
-            stop_process_group(*owned)
+            child, pgid, owner = owned
+            stop_process_group(child, pgid, owner=owner)
+            with self.lock:
+                self.active.pop(process.pid, None)
 
     def close(self) -> None:
         self.stopped.set()
         with self.lock:
             active = list(self.active.values())
-        for process, _ in active:
-            self.finish(process)
+        errors = []
+        for process, _, _ in active:
+            try:
+                self.finish(process)
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise RuntimeError(f"Process cleanup failed: {errors}")
 
 
 def process_env(plan: dict[str, Any], gpu: int) -> dict[str, str]:
@@ -733,15 +847,37 @@ def execute_checkpoint(
         command, env, attempt / "process.log", attempt / "process.pgid"
     )
     deadline = time.monotonic() + args.checkpoint_timeout
+    fatal_quota = None
     try:
-        while process.poll() is None:
+        while True:
+            returncode = process.poll()
+            breaker = read_json(attempt / "quota-breaker.json") or {}
+            summary = read_json(attempt / "summary.json") or {}
+            if breaker.get("fatal") or summary.get("quota_breaker", {}).get("fatal"):
+                manager.stopped.set()
+                fatal_quota = (
+                    breaker if breaker.get("fatal") else summary["quota_breaker"]
+                )
+                return QUOTA_EXIT_CODE
+            if returncode is not None:
+                return returncode
             if manager.stopped.wait(0.2):
                 raise InterruptedError("Runner canceled")
             if time.monotonic() >= deadline:
                 raise TimeoutError("Checkpoint attempt exceeded wall clock deadline")
-        return process.returncode
     finally:
         manager.finish(process)
+        if fatal_quota:
+            summary = read_json(attempt / "summary.json") or {}
+            write_json(
+                attempt / "summary.json",
+                {
+                    **summary,
+                    "status": "failed",
+                    "error": f"FatalRolloutError: {fatal_quota['fatal']}",
+                    "quota_breaker": fatal_quota,
+                },
+            )
 
 
 def run_queue(
@@ -749,6 +885,13 @@ def run_queue(
 ) -> int:
     """One serial queue per GPU. Retrying never creates a second policy on a GPU."""
     stopped = getattr(manager, "stopped", threading.Event())
+    fatal = threading.Event()
+    parallel = min(args.max_parallel_steps or args.workers, args.workers)
+    permits = threading.Semaphore(parallel)
+    if any(fatal_quota_attempt(job) for job in plan["jobs"]):
+        stopped.set()
+        write_summaries(plan)
+        return QUOTA_EXIT_CODE
 
     def slot_queue(gpu: int) -> bool:
         failed = False
@@ -775,22 +918,46 @@ def run_queue(
                 for _ in range(attempts_remaining(job)):
                     if stopped.is_set():
                         return True
-                    number = (
-                        max([int(p.name.split("-")[-1]) for p in previous] + [0]) + 1
-                    )
-                    attempt = directory / f"attempt-{number:03d}"
-                    write_json(
-                        attempt / "runner-attempt.json",
-                        {"fingerprint": job["fingerprint"]},
-                    )
-                    previous.append(attempt)
                     try:
-                        rc = execute_checkpoint(job, attempt, manager, plan, args)
+                        while not permits.acquire(timeout=0.1):
+                            if stopped.is_set():
+                                return True
+                        try:
+                            if stopped.is_set():
+                                return True
+                            number = (
+                                max(
+                                    [int(p.name.split("-")[-1]) for p in previous] + [0]
+                                )
+                                + 1
+                            )
+                            attempt = directory / f"attempt-{number:03d}"
+                            write_json(
+                                attempt / "runner-attempt.json",
+                                {"fingerprint": job["fingerprint"]},
+                            )
+                            previous.append(attempt)
+                            rc = execute_checkpoint(job, attempt, manager, plan, args)
+                        finally:
+                            permits.release()
+                        if rc == QUOTA_EXIT_CODE:
+                            fatal.set()
+                            stopped.set()
+                            write_json(
+                                attempt / "runner-failure.json",
+                                {
+                                    "error": "Fatal provider quota breaker; no retry",
+                                    "returncode": rc,
+                                },
+                            )
+                            return True
                         if rc == 0:
                             record_success(job, attempt)
                             break
                         error = f"evaluate.py exited {rc}"
                     except InterruptedError:
+                        if stopped.is_set():
+                            return True
                         raise
                     except Exception as exc:
                         error = f"{type(exc).__name__}: {exc}"
@@ -807,7 +974,7 @@ def run_queue(
             stopped.set()
             raise
     write_summaries(plan)
-    return int(any(failed))
+    return QUOTA_EXIT_CODE if fatal.is_set() else int(any(failed))
 
 
 def write_summaries(plan: dict[str, Any]) -> None:
@@ -944,6 +1111,8 @@ def run(args: argparse.Namespace) -> int:
             previous_handlers[sig] = signal.signal(sig, cancel)
         try:
             write_json(root / "plan.json", plan)
+            if any(fatal_quota_attempt(job) for job in plan["jobs"]):
+                return QUOTA_EXIT_CODE
             todo = [
                 j
                 for j in plan["jobs"]
@@ -975,7 +1144,13 @@ def run(args: argparse.Namespace) -> int:
                     model=USER_MODEL,
                 )
             code = run_queue(plan, args, manager)
-            return 143 if manager.stopped.is_set() else code
+            return (
+                code
+                if code == QUOTA_EXIT_CODE
+                else 143
+                if manager.stopped.is_set()
+                else code
+            )
         except Exception as exc:
             write_json(
                 root / "runner-error.json",
@@ -986,10 +1161,14 @@ def run(args: argparse.Namespace) -> int:
             )
             raise
         finally:
-            manager.close()
-            write_summaries(plan)
-            for sig, handler in previous_handlers.items():
-                signal.signal(sig, handler)
+            try:
+                manager.close()
+            finally:
+                try:
+                    write_summaries(plan)
+                finally:
+                    for sig, handler in previous_handlers.items():
+                        signal.signal(sig, handler)
 
 
 def main() -> None:

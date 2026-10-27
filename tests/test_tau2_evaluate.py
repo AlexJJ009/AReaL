@@ -379,6 +379,7 @@ def test_bind_eval_config_preserves_validation_sampling(tmp_path):
             max_concurrent_rollouts=None,
         ),
         rollout=None,
+        econfig=SimpleNamespace(_quota_breaker_state_path=None),
         gconfig=gconfig,
         eval_gconfig=eval_gconfig,
     )
@@ -498,6 +499,55 @@ def test_load_eval_config_applies_hydra_overrides(monkeypatch):
         "econfig.user_llm=doubao",
         "~econfig.user_llm_args.max_completion_tokens",
     ]
+
+
+@pytest.mark.parametrize(
+    "backend,model,url,key",
+    [
+        (
+            "deepseek-official",
+            "deepseek-flash",
+            "https://api.deepseek.com",
+            "DEEPSEEK_API_KEY",
+        ),
+        (
+            "volcano-plan",
+            "deepseek-v4-1-flash-261017",
+            "https://ark.cn-beijing.volces.com/api/plan/v3",
+            "ARK_PLAN_API_KEY",
+        ),
+    ],
+)
+def test_judge_backend_configures_judge_independently_of_user(
+    monkeypatch, backend, model, url, key
+):
+    """Manifest labels cannot disagree with stale YAML/override judge settings."""
+    config = SimpleNamespace(
+        eval_gconfig=SimpleNamespace(seed=None),
+        econfig=SimpleNamespace(user_llm="qwen-local", nl_judge_llm="stale-judge"),
+    )
+    monkeypatch.setattr(
+        tau2_evaluate, "load_expr_config", lambda *_: (config, "c.yaml")
+    )
+    monkeypatch.setattr(tau2_evaluate, "validate_tau2_recipe", lambda *_, **__: None)
+    args = tau2_evaluate.parse_args(
+        [
+            "--config",
+            "c.yaml",
+            "--model-path",
+            "m",
+            "--output-root",
+            "o",
+            "--judge-backend",
+            backend,
+        ]
+    )
+    loaded, _ = tau2_evaluate.load_eval_config(args)
+    assert loaded.econfig.user_llm == "qwen-local"
+    assert loaded.econfig.nl_judge_llm == model
+    assert loaded.econfig.nl_judge_llm_base_url == url
+    assert loaded.econfig.nl_judge_llm_api_key_env == key
+    assert loaded.econfig.nl_judge_llm_args == {"temperature": 0.0}
 
 
 def test_aggregate_excludes_infra_errors_like_official_and_reports_them():

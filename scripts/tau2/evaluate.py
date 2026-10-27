@@ -10,6 +10,7 @@ import math
 import os
 import subprocess
 import sys
+import threading
 from collections import defaultdict
 from contextlib import contextmanager
 from copy import deepcopy
@@ -20,6 +21,7 @@ from typing import Any
 from omegaconf import OmegaConf
 
 from examples.tau2 import benchmark_variant, task_pack
+from examples.tau2.api_reliability import QuotaCircuitBreaker, quota_exit_guard
 from examples.tau2.contracts import (
     OFFICIAL_SPLIT_SNAPSHOTS,
     OFFICIAL_TAU2_REVISION,
@@ -34,8 +36,14 @@ from examples.tau2.official_runner import (
     official_metrics,
 )
 from examples.tau2.train import get_tau2_dataset, validate_tau2_recipe
-from examples.tau2.utils import Tau2PPOConfig, nl_judge_metadata
-from scripts.tau2.checkpoint_eval import wait_http
+from examples.tau2.utils import Tau2EnvConfig, Tau2PPOConfig, nl_judge_metadata
+from scripts.tau2.checkpoint_eval import (
+    DEEPSEEK_MODEL,
+    DEEPSEEK_URL,
+    JUDGE_MODEL,
+    JUDGE_URL,
+    wait_http,
+)
 
 from areal.api.alloc_mode import ModelAllocation
 from areal.api.cli_args import SGLangConfig, load_expr_config
@@ -45,6 +53,7 @@ from areal.engine.sglang_remote import SGLangBackend
 from areal.infra import LocalScheduler
 from areal.utils import logging
 from areal.utils.printing import tabulate_stats
+from areal.utils.rollout_error import FatalRolloutError
 
 logger = logging.getLogger("Tau2Train")
 
@@ -61,6 +70,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--output-root", required=True)
     parser.add_argument("--repeats", type=int, default=4)
+    parser.add_argument(
+        "--judge-backend",
+        choices=("volcano-plan", "deepseek-official"),
+        help="Select the NL judge independently of the user simulator; otherwise use YAML.",
+    )
     parser.add_argument(
         "--task-set",
         choices=TASK_SETS,
@@ -135,6 +149,14 @@ def load_eval_config(args: argparse.Namespace) -> tuple[Tau2PPOConfig, str]:
     if not math.isfinite(args.temperature) or args.temperature < 0:
         raise ValueError("temperature must be finite and non-negative")
     config.eval_gconfig.temperature = args.temperature
+    if args.judge_backend is not None:
+        official = args.judge_backend == "deepseek-official"
+        config.econfig.nl_judge_llm = DEEPSEEK_MODEL if official else JUDGE_MODEL
+        config.econfig.nl_judge_llm_base_url = DEEPSEEK_URL if official else JUDGE_URL
+        config.econfig.nl_judge_llm_api_key_env = (
+            "DEEPSEEK_API_KEY" if official else "ARK_PLAN_API_KEY"
+        )
+        config.econfig.nl_judge_llm_args = {"temperature": 0.0}
     validate_tau2_recipe(config, evaluation=True)
     return config, config_file
 
@@ -181,6 +203,9 @@ def bind_eval_config(
     rollout.consumer_batch_size = 1
     config.rollout = rollout
     config.evaluation_rollout = rollout
+    # Every remote worker must share this attempt's fatal state with the parent.
+    # Never reuse the training run's breaker or another checkpoint's state.
+    config.econfig._quota_breaker_state_path = str(output_root / "quota-breaker.json")
 
     # Average per-trial success; task rows provide the repetition axis. Preserve
     # the resolved evaluation settings apart from the group size below.
@@ -480,6 +505,18 @@ def collect_eval_records(
 ) -> list[dict[str, Any]]:
     """Persist each official episode outcome before the next one is consumed."""
     records: list[dict[str, Any]] = []
+    breaker = QuotaCircuitBreaker(Tau2EnvConfig(**workflow_kwargs["econfig"]))
+    stopped = threading.Event()
+
+    def watch_quota() -> None:
+        while not stopped.wait(0.1):
+            try:
+                breaker.check()
+            except Exception as exc:
+                # Same shared-file escape hatch as training: a remote fatal may
+                # have been flattened to a rejection or lost its type over RPC.
+                controller.dispatcher.abort(exc)
+                return
 
     def persist(record: dict[str, Any]) -> None:
         write_record(output_root / "episodes.jsonl", record)
@@ -489,7 +526,10 @@ def collect_eval_records(
             aggregate(records, planned=len(rows), repeats=repeats),
         )
 
+    monitor = threading.Thread(target=watch_quota, name="tau2-eval-quota", daemon=True)
+    monitor.start()
     try:
+        breaker.check()
         collect_episodes(
             controller,
             rows,
@@ -498,13 +538,50 @@ def collect_eval_records(
             trajectory_root=output_root / "trajectories",
             on_record=persist,
         )
+        breaker.check()
     except Exception as exc:
         summary = aggregate(records, planned=len(rows), repeats=repeats)
-        summary["status"] = "partial"
+        state = breaker.snapshot()
+        summary["status"] = (
+            "failed"
+            if state["fatal"] or isinstance(exc, FatalRolloutError)
+            else "partial"
+        )
+        summary["quota_breaker"] = state
         summary["error"] = f"{type(exc).__name__}: {exc}"
         write_json(output_root / "summary.json", summary)
+        if summary["status"] == "failed":
+            controller.dispatcher.abort(exc)
+            # Cancel local callback waits now; do not wait for request_timeout.
+            controller.dispatcher.runner.destroy(timeout=2)
         raise
+    finally:
+        stopped.set()
+        monitor.join(timeout=2)
     return records
+
+
+def destroy_eval_controller(
+    controller: Any, econfig: Tau2EnvConfig, *, fatal: bool = False
+) -> None:
+    """Bound fatal teardown; the runner also kills all attempt-owned processes."""
+    if not fatal and not QuotaCircuitBreaker(econfig).snapshot()["fatal"]:
+        controller.destroy()
+        return
+
+    def destroy() -> None:
+        try:
+            controller.destroy()
+        except Exception:
+            logger.exception("Controller cleanup failed after quota fatal")
+
+    cleanup = threading.Thread(target=destroy, name="tau2-eval-cleanup", daemon=True)
+    cleanup.start()
+    cleanup.join(timeout=30)
+    if cleanup.is_alive():
+        logger.error(
+            "Quota teardown exceeded 30s; runner will terminate attempt processes"
+        )
 
 
 @contextmanager
@@ -604,6 +681,7 @@ def run(argv: list[str]) -> dict[str, Any]:
         "user_llm": config.econfig.user_llm,
         "user_llm_base_url": config.econfig.user_llm_base_url,
         "user_llm_args": dict(config.econfig.user_llm_args or {}),
+        "judge_backend": args.judge_backend,
         "nl_judge": nl_judge_metadata(config.econfig),
     }
     write_json(output_root / "manifest.json", manifest)
@@ -640,12 +718,15 @@ def run(argv: list[str]) -> dict[str, Any]:
         base_gpu_id=0,
     )
     controller = RemoteSGLangEngine.as_controller(config.evaluation_rollout, scheduler)
-    with policy_server(
-        server_args,
-        port=args.policy_port,
-        nccl_port=args.policy_nccl_port,
-        timeout=config.evaluation_rollout.setup_timeout,
-    ) as infos:
+    with (
+        quota_exit_guard(config.econfig),
+        policy_server(
+            server_args,
+            port=args.policy_port,
+            nccl_port=args.policy_nccl_port,
+            timeout=config.evaluation_rollout.setup_timeout,
+        ) as infos,
+    ):
         try:
             kwargs = {} if infos is None else {"server_infos": infos}
             controller.initialize(
@@ -660,9 +741,37 @@ def run(argv: list[str]) -> dict[str, Any]:
                 output_root=output_root,
                 repeats=args.repeats,
             )
+        except Exception as exc:
+            state = QuotaCircuitBreaker(config.econfig).snapshot()
+            if state["fatal"] or isinstance(exc, FatalRolloutError):
+                # Initialization can fail before the collection loop has
+                # written anything. Preserve any episodes already persisted.
+                path = output_root / "summary.json"
+                summary = (
+                    json.loads(path.read_text())
+                    if path.exists()
+                    else aggregate([], planned=len(rows), repeats=args.repeats)
+                )
+                summary.update(
+                    status="failed",
+                    quota_breaker=state,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                write_json(path, summary)
+            raise
         finally:
-            controller.destroy()
+            destroy_eval_controller(
+                controller,
+                config.econfig,
+                fatal=isinstance(sys.exc_info()[1], FatalRolloutError),
+            )
     summary = aggregate(records, planned=len(rows), repeats=args.repeats)
+    # A fatal can arrive after the final result, while servers are shutting down.
+    state = QuotaCircuitBreaker(config.econfig).snapshot()
+    if state["fatal"]:
+        summary.update(status="failed", quota_breaker=state, error=state["fatal"])
+        write_json(output_root / "summary.json", summary)
+        raise FatalRolloutError(state["fatal"])
     summary["user_llm_usage"] = summarize_user_usage(
         output_root / "user-usage.jsonl", records
     )
@@ -680,7 +789,8 @@ def run(argv: list[str]) -> dict[str, Any]:
 
 
 def main(argv: list[str]) -> None:
-    print(json.dumps(run(argv), indent=2, sort_keys=True))
+    with quota_exit_guard(None):
+        print(json.dumps(run(argv), indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

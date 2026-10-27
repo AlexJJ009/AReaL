@@ -5,6 +5,10 @@ simulator on GPU 7 and up to seven policy evaluators on GPUs 0–6. Run this que
 training releases the eight GPUs. The runner does not reserve GPUs against other jobs;
 the caller's `gpu8` queue group must provide that exclusion.
 
+`--max-parallel-steps 1` runs checkpoint attempts one at a time. The default remains one
+concurrent attempt per worker GPU; `--max-parallel-steps N` caps that concurrency
+without changing the worker GPU assignments or episode settings.
+
 Use the Python environment already installed for the training run. No extra dependencies
 are required. Describe the host paths in a **nonsecret** JSON file:
 
@@ -19,11 +23,10 @@ are required. Describe the host paths in a **nonsecret** JSON file:
 ```
 
 The key file must have mode `0600` and export `ARK_PLAN_API_KEY`. It is sourced only
-inside evaluator subprocesses during execution. The runner uses the Volcano plan
-endpoint and `deepseek-v4-1-flash-261017`. It does not load another provider's key file.
-The user server needs no judge credential. Both server kinds source
-`scripts/sao/runtime_env.sh` with the supplied SAO runtime root and venv cuRAND headers,
-matching the training environment.
+inside evaluator subprocesses during execution. The default Qwen-user judge uses the
+Volcano plan endpoint and `deepseek-v4-1-flash-261017`. The user server needs no judge
+credential. Both server kinds source `scripts/sao/runtime_env.sh` with the supplied SAO
+runtime root and venv cuRAND headers, matching the training environment.
 
 Preview the full plan without starting processes, loading model code, sourcing runtime
 or key files, probing ports, or creating output directories:
@@ -120,9 +123,12 @@ attempts retain their evaluator summaries but have no final score in the queue t
 The runner locks its output directory against duplicate invocations. User and evaluator
 subprocesses each get an owned process session and PGID file. On completion, exception,
 TERM, INT or HUP, it sends TERM to the entire session, then KILL after a grace period.
-TERM from `pueue kill` follows this path. SIGKILL and host failure cannot run cleanup
-handlers. Reusing an output directory does not kill a stale process based solely on an
-old PGID file.
+An inherited ownership token also identifies descendant servers that start another
+session, including servers whose original parent has exited. Cleanup discovers those
+process groups through Linux `/proc` and terminates them too. Child processes run in
+their own artifact directories. TERM from `pueue kill` follows this path. SIGKILL and
+host failure cannot run cleanup handlers. Reusing an output directory does not kill a
+stale process based solely on an old PGID file.
 
 ## DeepSeek official backend
 
@@ -134,13 +140,31 @@ GPU 7 runs a policy. The runtime JSON replaces `ark_plan_env_file` with
 `deepseek_env_file`, a mode-`0600` file that exports `DEEPSEEK_API_KEY`. The
 `deepseek-flash` alias can change model versions; record the returned model name.
 
+`--judge-backend {volcano-plan,deepseek-official}` selects the NL judge independently of
+the user. Omitting it preserves the existing defaults: Volcano for `qwen-local`,
+official for `deepseek-official`. For Qwen users with the official judge, pass
+`--user-backend qwen-local --judge-backend deepseek-official` and provide
+`deepseek_env_file` in the runtime JSON; no Volcano key is needed. The official judge
+uses `deepseek-flash`, `https://api.deepseek.com`, `DEEPSEEK_API_KEY`, and temperature
+0\. An official user with the Volcano judge needs both key-file fields. Reusable runtime
+JSON may contain both fields; execution sources only the providers the user and judge
+actually need. All sourced files must have mode `0600`.
+
+The resolved judge backend is recorded in the plan, evaluator manifest and checkpoint
+fingerprint. A completed attempt with a different or missing judge identity cannot be
+accepted as a result for the newly planned protocol.
+
 `--checkpoint LABEL=/absolute/hf/path` (repeatable) adds checkpoints from other runs,
 evaluated with this run's config and protocol and written to `ckpt-LABEL/`. Use it to
 compare runs under one user and judge backend instead of mixing their old configs.
 
-A provider outage or exhausted balance turns episodes into infra exclusions, and a
-checkpoint still counts as finished when scored plus excluded episodes reach 400. Check
-`infra_excluded` in `summary.md` before using a score.
+Recoverable provider failures can produce infra exclusions. Once the provider quota
+breaker is fatal, the evaluator writes a failed summary and exits 86. The runner also
+polls the attempt's breaker state, cancels all concurrent attempts, performs process
+cleanup, and exits 86 without retrying that quota failure. Check `infra_excluded` in
+`summary.md` before using any completed score. Resuming the same output and protocol
+after a fatal quota failure also exits 86; choose a fresh `--output-root` to
+intentionally restart after resolving the quota.
 
 CPU verification uses mocks for policy/user startup plus real sleeping CPU process trees
 for signal cleanup; it never loads weights or calls a judge:
@@ -151,3 +175,17 @@ CUDA_VISIBLE_DEVICES='' LITELLM_LOCAL_MODEL_COST_MAP=True \
   tests/test_tau2_checkpoint_runner.py tests/test_tau2_eval_ports.py \
   tests/test_tau2_eval_policy_ports.py
 ```
+
+## Re-judge saved trajectories
+
+`scripts/tau2/rejudge.py ATTEMPT... --judge-backend deepseek-official --runtime runtime.json`
+defaults to a read-only count of the NL-assertion judge calls needed for the saved
+attempts. It loads the canonical task files named by the runtime and checks available
+manifest hashes. It does not start a model server or make an API call in this mode.
+
+After an approved run card, add `--label <unique-label> --execute` to call the selected
+judge. Each input gets a new `ATTEMPT/rejudge-<unique-label>/` directory with status,
+re-judged trajectory files and an `agreement.csv` table comparing old and new scores.
+Existing outputs and the original trajectories remain intact; an existing label is
+rejected. Only NL assertions are recomputed; saved non-NL reward components are
+retained.
