@@ -310,9 +310,9 @@ checkpoint 只完成了 330–378/400 条（评测被中止），图中只用完
   48.1，Retail 和 Telecom 与离线评测接近，Airline 高 10pp（20 题上相当于 8 条 episode），原因没有查。
 - **Qwen**：用户 Qwen3.5-4B（自部署，non-thinking），judge 火山 `deepseek-v4-1-flash-261017`，不评
   Telecom（Qwen 用户下 step 0 只有 5.6%）。训练前、run 3′、run 2′ 是两次评测合并（每题 8 次）；run 3
-  只有一次，且被中止，Telecom 没评完。run 4 / run 5 的 Qwen 评测改用 DeepSeek 官方 `deepseek-flash` 作 judge（用户仍是
-  Qwen3.5-4B），旧的三个 checkpoint 不重判（10-26 用户决定：两个 judge 差异不大）。两个 judge 的一致率没有实测；这一列里约 17.5%
-  的 episode 成败由 judge 决定（run 2′ 第 120 步：42/240）。
+  只有一次，且被中止，Telecom 没评完。run 4 / run 5 的 Qwen 评测改用 DeepSeek 官方 `deepseek-flash` 作
+  judge（用户仍是 Qwen3.5-4B），旧的三个 checkpoint 不重判（10-26 用户决定：两个 judge 差异不大）。两个 judge
+  的一致率没有实测；这一列里约 17.5% 的 episode 成败由 judge 决定（run 2′ 第 120 步：42/240）。
 - **训练用户**：DeepSeek 官方是 `deepseek-flash`；DeepSeek 火山是
   `deepseek-v4-1-flash-261017`；Qwen3.5-4B 自部署。v3ext 和 649 不只差剧本，训练用户的后端也不同，所以这两行不是严格的 w/
   vs w/o 对照。Qwen 用户的 run 训练时只做离线评测（`offline_eval_only=true`），没有训练中 validation。
