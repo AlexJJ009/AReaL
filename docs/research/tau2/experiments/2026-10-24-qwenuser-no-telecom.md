@@ -283,20 +283,23 @@ gpu8 组（并行 1，按编号顺序执行；评测用 `--after` 依赖各自�
 
 - 经过：run 5（698）10-26 20:55 PDT 因火山 plan 5 小时额度耗尽，熔断器干净退出（code 86），状态移到
   `failed-20261026-2100-quota/`；10-27 00:35 从头重启后，用户决定训练 judge 不再用火山（额度不稳定，与他人共享），
-  再次停掉，状态移到 `failed-20261027-0035-volcano-judge-killed/`。两次都没有可用的 checkpoint，run 5 从 step 0 重跑。
+  再次停掉，状态移到 `failed-20261027-0035-volcano-judge-killed/`。两次都没有可用的 checkpoint，run 5 从
+  step 0 重跑。
 - 新 launcher `launch_ppo_qwenuser_k20261027.sh`（复制 k20261025，旧文件不动）：NL judge 改为
-  `deepseek-flash` @ `https://api.deepseek.com`，key 取 `tau2-doubao/deepseek-official.env` 的 `DEEPSEEK_API_KEY`
-  （启动时检查文件权限 600 和变量存在）。旧 launcher 的 `TAU2_DEEPSEEK_ENV_FILE` 指向别的项目的 key 文件，新文件已改正。
+  `deepseek-flash` @ `https://api.deepseek.com`，key 取
+  `tau2-doubao/deepseek-official.env` 的 `DEEPSEEK_API_KEY` （启动时检查文件权限 600 和变量存在）。旧
+  launcher 的 `TAU2_DEEPSEEK_ENV_FILE` 指向别的项目的 key 文件，新文件已改正。
 - 新代码快照 `src-41dde039-saolam-895bc69-dsquota`：与 `src-41dde039-saolam-895bc69` 只差
-  `examples/tau2/api_reliability.py`（取自合并后的 `codex/sao-math` `7bbe2b0a`：DeepSeek 402 / Insufficient
-  Balance 计为额度错误，触发熔断）。
+  `examples/tau2/api_reliability.py`（取自合并后的 `codex/sao-math` `7bbe2b0a`：DeepSeek 402 /
+  Insufficient Balance 计为额度错误，触发熔断）。
 - check-config（`check-config-dsjudge.log`）与 seed 42 的配置逐键比较，只有三项不同：`nl_judge_llm`、
   `nl_judge_llm_base_url`、`nl_judge_llm_api_key_env`。
-- 启动前 DeepSeek 官方余额 ¥328.22。pueue 698（训练）和 699（DeepSeek 评测，依赖 698）原地重启；Qwen 评测
-  也改用 DeepSeek 官方 judge、step 串行（`run-eval.sh` 加 `--judge-backend deepseek-official --max-parallel-steps 1`，代码
-  快照 `src-7bbe2b0a`，`runtime-dsjudge.json`；dry-run 确认 judge 为 `deepseek-flash` @ api.deepseek.com，plan
-  里没有火山 key）：700 = run 5（依赖 698）原地重排，711 = run 4 新排。卡住的 run 4 旧评测移到
-  `failed-20261026-quota-hang-eval-run4-priv-saolam-notel-c128/`。
+- 启动前 DeepSeek 官方余额 ¥328.22。pueue 698（训练）和 699（DeepSeek 评测，依赖 698）原地重启；Qwen 评测 也改用
+  DeepSeek 官方 judge、step 串行（`run-eval.sh` 加
+  `--judge-backend deepseek-official --max-parallel-steps 1`，代码 快照
+  `src-7bbe2b0a`，`runtime-dsjudge.json`；dry-run 确认 judge 为 `deepseek-flash` @
+  api.deepseek.com，plan 里没有火山 key）：700 = run 5（依赖 698）原地重排，711 = run 4 新排。卡住的 run 4
+  旧评测移到 `failed-20261026-quota-hang-eval-run4-priv-saolam-notel-c128/`。
 - **对 2×2 的影响**：run 2′、3′、4 的训练 judge 是火山 plan `deepseek-v4-1-flash-261017`，run 5 是官方
-  `deepseek-flash`。§13 的交互项 (run 4 − run 2′) − (run 5 − run 3′) 因此混入了 judge 差异；两个 judge 的一致率未测。
-  NL judge 只决定少量 episode 的 reward（Qwen 评测中约 17.5%），影响大小未知。
+  `deepseek-flash`。§13 的交互项 (run 4 − run 2′) − (run 5 − run 3′) 因此混入了 judge 差异；两个 judge
+  的一致率未测。 NL judge 只决定少量 episode 的 reward（Qwen 评测中约 17.5%），影响大小未知。
