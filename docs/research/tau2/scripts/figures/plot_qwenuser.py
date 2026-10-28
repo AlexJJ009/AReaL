@@ -2,7 +2,8 @@
 
 One figure, qwenuser_runs (PNG + PDF in --out):
   row 1  offline eval with the DeepSeek official user + judge: Airline / Retail / Telecom
-  row 2  offline eval with the Qwen3.5-4B user + Volcano judge: Airline / Retail / Telecom
+  row 2  offline eval with the Qwen3.5-4B user: Airline / Retail / Telecom (judge: Volcano plan
+         for run 3/3′/2′, DeepSeek official for run 4/5)
   row 3  training success rate and critic EV (pre-update) per step, 10-step means
 
 mean@4 is the per-task success rate over trials (4, or 8 when two attempts of the same
@@ -339,7 +340,8 @@ def main():
     fig.text(
         0.995,
         0.005,
-        "Judges: DeepSeek official for row 1, Volcano plan DeepSeek V4.1 Flash for row 2. "
+        "Judges: DeepSeek official for row 1; row 2 Volcano plan DeepSeek V4.1 Flash for run 3/3′/2′, "
+        "DeepSeek official for run 4/5. "
         "Step 0 (base actor) is shared by run 3′/2′/4/5.",
         ha="right",
         va="bottom",
