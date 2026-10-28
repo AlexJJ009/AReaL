@@ -306,26 +306,31 @@ gpu8 组（并行 1，按编号顺序执行；评测用 `--after` 依赖各自�
 
 ## 17. run 4 / run 5 结果与 2×2（2026-10-28）
 
-全部完成：run 5 训练（698，10-27 15:25 第 120 步，无 traceback、无额度错误），DeepSeek 评测 699、Qwen 评测 700 / 711（Qwen
-评测的 judge 为 DeepSeek 官方，run 2′/3′ 的 Qwen 评测为火山 plan），infra 剔除均为 0。
+全部完成：run 5 训练（698，10-27 15:25 第 120 步，无 traceback、无额度错误），DeepSeek 评测 699、Qwen 评测 700 /
+711（Qwen 评测的 judge 为 DeepSeek 官方，run 2′/3′ 的 Qwen 评测为火山 plan），infra 剔除均为 0。
 
-第 120 步 mean@4（%），agent / 用户 / judge T=0；EV 为第 101–120 步 `critic_explained_variance_pre_update` 均值：
+第 120 步 mean@4（%），agent / 用户 / judge T=0；EV 为第 101–120 步
+`critic_explained_variance_pre_update` 均值：
 
-| 配置                      | DeepSeek 用户 A / R / T | Qwen 用户 A / R | EV   |
-| ------------------------- | ----------------------- | --------------- | ---- |
-| step 0                    | 13.8 / 45.0 / 49.4      | 16.3 / 36.3     | —    |
+| 配置                        | DeepSeek 用户 A / R / T | Qwen 用户 A / R | EV   |
+| --------------------------- | ----------------------- | --------------- | ---- |
+| step 0                      | 13.8 / 45.0 / 49.4      | 16.3 / 36.3     | —    |
 | run 3′（标准，$\lambda=1$） | 18.8 / 54.4 / 55.0      | 21.2 / 48.8     | 0.40 |
 | run 2′（剧本，$\lambda=1$） | 17.5 / 65.6 / 67.5      | 23.1 / 43.1     | 0.52 |
-| run 5（标准，SAO）         | 13.8 / 56.3 / 54.4      | 12.5 / 44.4     | 0.48 |
-| run 4（剧本，SAO）         | 22.5 / 55.6 / 51.9      | 23.8 / 41.9     | 0.52 |
+| run 5（标准，SAO）          | 13.8 / 56.3 / 54.4      | 12.5 / 44.4     | 0.48 |
+| run 4（剧本，SAO）          | 22.5 / 55.6 / 51.9      | 23.8 / 41.9     | 0.52 |
 
-§13 的判据 (run 4 − run 2′) − (run 5 − run 3′)（DeepSeek 用户评测，按题配对 bootstrap 95% CI，20,000 次）：airline +10.0
-\[0.0, +22.5\]，retail −11.9 \[−23.1, −0.6\]，telecom −15.0 \[−29.4, −1.9\]。判据要求 > 0 且 CI 不含 0，结果方向相反：
-$\lambda=1$ 时剧本 critic 的收益在 SAO 下消失，run 4 ≈ run 5。Qwen 评测（两者同为 DeepSeek judge）run 4 − run 5：airline
-+11.3 \[0.0, +25.0\]，retail −2.5 \[−15.0, +9.4\]。局限：每个配置一个训练种子；run 5 训练 judge 与另外三个不同；未做多重比较校正。
+§13 的判据 (run 4 − run 2′) − (run 5 − run 3′)（DeepSeek 用户评测，按题配对 bootstrap 95% CI，20,000
+次）：airline +10.0 \[0.0, +22.5\]，retail −11.9 \[−23.1, −0.6\]，telecom −15.0 \[−29.4,
+−1.9\]。判据要求 > 0 且 CI 不含 0，结果方向相反： $\lambda=1$ 时剧本 critic 的收益在 SAO 下消失，run 4 ≈ run 5。Qwen
+评测（两者同为 DeepSeek judge）run 4 − run 5：airline +11.3 \[0.0, +25.0\]，retail −2.5 \[−15.0,
++9.4\]。局限：每个配置一个训练种子；run 5 训练 judge 与另外三个不同；未做多重比较校正。
 
-run 4 的轨迹 case study（Codex 712，`_artifacts/AReaL/codex-sao-math/case-study-run4-20261027/REPORT.md`）：没有整体训练崩溃；
-step 120 Telecom 中 actor 工具报错 83/160（run 3′ 50、run 2′ 24），重复 XML 设备请求、占位参数（如 `+1234567890`）也更多。
+run 4 的轨迹 case study（Codex
+712，`_artifacts/AReaL/codex-sao-math/case-study-run4-20261027/REPORT.md`）：没有整体训练崩溃； step
+120 Telecom 中 actor 工具报错 83/160（run 3′ 50、run 2′ 24），重复 XML 设备请求、占位参数（如
+`+1234567890`）也更多。
 
-后续（2026-10-28 用户批准）：§5 C 的 GPU forward 按 Codex 705 的预注册原样运行（pueue 713，critic A = run 2′、B = run 3′，8,671
-条固定轨迹）；同时 Codex 714 准备加入 run 4 / run 5 critic 的扩展（`critic-forward-run45-20261028/`，只准备，GPU 运行另出 run card）。
+后续（2026-10-28 用户批准）：§5 C 的 GPU forward 按 Codex 705 的预注册原样运行（pueue 713，critic A = run
+2′、B = run 3′，8,671 条固定轨迹）；同时 Codex 714 准备加入 run 4 / run 5 critic
+的扩展（`critic-forward-run45-20261028/`，只准备，GPU 运行另出 run card）。
