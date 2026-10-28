@@ -337,16 +337,17 @@ run 4 的轨迹 case study（Codex
 
 ## 18. run 2′ 换种子复现（2026-10-28，用户批准）
 
-- 问题：λ=1 下剧本 critic 的收益（run 2′ − run 3′，DeepSeek 评测 retail +11.3、telecom +12.5）是否只是 run 2′ 一次的运气；§17
-  的 2×2 交互项全靠这一个 run。
-- trial `run2p-priv-beta1-notel-c128-s43`（pueue 716，排在 715 之后）；评测 717（DeepSeek 用户 + judge）、718（Qwen 用户，
-  DeepSeek judge），都依赖 716。
+- 问题：λ=1 下剧本 critic 的收益（run 2′ − run 3′，DeepSeek 评测 retail +11.3、telecom +12.5）是否只是 run
+  2′ 一次的运气；§17 的 2×2 交互项全靠这一个 run。
+- trial `run2p-priv-beta1-notel-c128-s43`（pueue 716，排在 715 之后）；评测 717（DeepSeek 用户 +
+  judge）、718（Qwen 用户， DeepSeek judge），都依赖 716。
 - 与 run 2′ 的差别：`SEED=43`（训练器 `seed`、policy `sglang.random_seed`、`vllm.seed`、Qwen 用户服务器
-  `--random-seed`；run 2′ 为 42 / 42 / 42 / 随机 472006262）；NL judge 改为 DeepSeek 官方 `deepseek-flash`（与 run 5 相同）；
-  快照 `src-41dde039-saolam-895bc69-dsquota`（比 run 2′ 的 `src-41dde039` 多一个也接受 SAO 的 actor λ 校验，λ=1 时无影响，以及
-  402 额度分类）。overrides 文件与 run 2′ 相同。
-- check-config：与用 run 2′ 原 launcher / 快照 / overrides 生成的参照逐行比较，只差 `seed`、`sglang.random_seed`、`vllm.seed`
-  三行（42 → 43）和三项 judge 设置。日志在 trial 目录 `check-config-s43.log`、`check-config-run2p-reference.log`。
+  `--random-seed`；run 2′ 为 42 / 42 / 42 / 随机 472006262）；NL judge 改为 DeepSeek 官方
+  `deepseek-flash`（与 run 5 相同）； 快照 `src-41dde039-saolam-895bc69-dsquota`（比 run 2′ 的
+  `src-41dde039` 多一个也接受 SAO 的 actor λ 校验，λ=1 时无影响，以及 402 额度分类）。overrides 文件与 run 2′ 相同。
+- check-config：与用 run 2′ 原 launcher / 快照 / overrides 生成的参照逐行比较，只差
+  `seed`、`sglang.random_seed`、`vllm.seed` 三行（42 → 43）和三项 judge 设置。日志在 trial 目录
+  `check-config-s43.log`、`check-config-run2p-reference.log`。
 - 读法：DeepSeek 评测 retail / telecom 接近 65 / 67，说明 run 2′ 的收益稳；接近 55（run 3′ 水平）说明可能是种子运气，
   2×2 交互项不可靠；介于其间则合并两个种子再算。
 - 成本：训练约 14.5 小时（8 卡），DeepSeek judge 约 ¥7；评测 API 约 ¥25。启动前余额 ¥479。
