@@ -58,6 +58,9 @@ agent explains, implements and runs what the user approved.
 - Never push to GitHub and never open PRs. The branch's GitHub upstream is a public
   fork; internal research content must not go there. The upstream PR workflow, the
   `create-pr` / `review-pr` skills and "squash before PR" do not apply.
+  Exception (user decision, 2026-10-28, before phai is reclaimed): `codex/sao-math` is
+  backed up to the fork `AlexJJ009/AReaL` (public), fast-forward only, after a secret
+  scan of the pushed diff. Other branches and new pushes still need the user's go.
 - Run pre-commit on the changed files only (`pre-commit run --files <changed>`), not
   `--all-files`, which would reformat unrelated upstream code.
 - Run and test only on phai. Every `pueue add` passes `-w <the task's own artifact dir>`
