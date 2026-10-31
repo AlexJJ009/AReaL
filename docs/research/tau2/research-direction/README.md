@@ -11,3 +11,5 @@
   里分出来"，转向带剧本 critic + bootstrap（2026-10-24）。
 - [discussion-20261026-qwenuser-runs.md](discussion-20261026-qwenuser-runs.md)：Qwen
   用户训练的 run 3 / 3′ / 2′ / 4 的结果、advantage 与 loss 的完整式子、待做的 case study（2026-10-26）。
+- [brief-20261030/](brief-20261030/README.md)：给 ChatGPT 网页端的英文上下文包：项目简报、提示词、全部评测与训练指标 CSV，围绕"借鉴
+  corruption-robust bandit 改 critic loss / advantage"（2026-10-30）。
