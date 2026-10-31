@@ -1,4 +1,4 @@
-# Research brief: PPO for multi-turn agents trained against unreliable users, and what corruption-robust bandits suggest for the critic loss
+# Research brief: PPO for multi-turn agents trained against unreliable users — results so far and open questions
 
 Status as of 2026-10-30. Self-contained: a reader with no access to the chat history or the training
 machine should be able to follow it. Numbers are copied from the repository documents cited in each
@@ -15,10 +15,11 @@ simulator received). With $\lambda=1$ this is a pure baseline change: it cannot 
 gradient, only its variance. A 2×2 experiment (script-aware vs standard critic × GAE $\lambda=1$ vs a
 length-adaptive $\lambda$) plus a seed replicate shows that the script-aware critic fits better
 (explained variance 0.52–0.53 vs 0.40) but the downstream eval gain is small and only partly
-reproducible. We now want to **change the loss** rather than the critic's input, and the starting point
-is two papers on contextual bandits with adversarially corrupted rewards (§6), one of which is by our
-collaborator. We want design candidates that transfer the "uncertainty-weighted regression" idea from
-those papers to PPO's critic and/or advantage, with an honest account of the bias each introduces.
+reproducible. The results suggest our problem statement may not be the right one, and the next step is to
+clarify the problem and choose a method that changes the learning signal itself (reward, critic loss or
+target, advantage, or which tokens and episodes are trained on), not only the critic's input. One input
+our collaborator suggested is a pair of papers on contextual bandits with adversarially corrupted rewards
+(§6); whether they fit is itself an open question.
 
 ## 1. Setting
 
@@ -191,24 +192,22 @@ action selection*; in PPO the critic is only a baseline when $\lambda=1$, so rob
 changes nothing in expectation unless the actor bootstraps from it ($\lambda<1$) or the weights also
 enter the actor loss.
 
-## 7. What we want help with
+## 7. Open questions
 
-1. **Candidate designs** (3–5) for changing the critic loss and/or the advantage, inspired by the
-   uncertainty-weighted regression above. For each: the exact formula in our notation; which harm (§3)
-   it targets; what bias it introduces relative to $J$ and what objective it optimizes instead; how it
-   avoids objections S1 and S2 in §4; compute cost for a 4B critic.
-2. **The uncertainty signal.** What is a defensible LLM-critic analogue of
-   $\|x\|_{\Sigma^{-1}}$? Note the confound in S2: high uncertainty may mean "hard task", not "unreliable
-   user". Is there a way to use the user script (which we have at training time) to separate them?
-3. **Where the weight should act**: critic regression only, actor loss only, or both, given that with
-   $\lambda=1$ only the actor-side weight changes the expected gradient.
-4. **Related work** beyond the two bandit papers: corruption-robust RL with function approximation,
-   robust/weighted value regression, learning from noisy rewards in RLHF/RLVR, multi-agent credit
-   assignment where another agent's mistakes contaminate the return. For each, what it would contribute
-   and whether it collides with our framing.
-5. **One falsifying experiment per design**, within our budget: a run is ~14.5 hours on 8 GPUs; eval
-   noise is ~6pp per domain, so the design must predict an effect larger than that or a cheaper
-   diagnostic (e.g. offline critic forward passes on 8.7k fixed trajectories) must be able to refute it.
+1. **Is the research question right?** We framed the problem as "user errors corrupt the agent's
+   credit; separate the user's effect from the agent's". The evidence in §5 (better critic fit, small and
+   inconsistent policy gains, no benefit from letting the actor bootstrap from the better critic) may
+   point to a different bottleneck: too little learning signal per episode, eval noise larger than the
+   effect, users that are hard rather than wrong, or something else. What problem do the data actually
+   support?
+2. **What to change in the learning signal.** Reward, critic loss or target, advantage, or which tokens
+   and episodes enter the loss. §3's argument says a better baseline alone only addresses variance.
+3. **Do the corruption-robust bandit ideas in §6 transfer**, and if so, what plays the role of the
+   uncertainty weight, and where should the weight act (critic, actor, or both)? The objections S1/S2 in
+   §4 apply to any "downweight suspect samples" design.
+4. **Falsification.** For any idea: which result in the existing data, or which cheap experiment, would
+   show it is wrong? A training run costs ~14.5 hours on 8 GPUs; eval noise is ~6pp per domain; 8.7k
+   fixed trajectories are available for offline critic forward passes.
 
 ## 8. Source documents (in the repository `AlexJJ009/AReaL`, branch `codex/sao-math`)
 
