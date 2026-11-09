@@ -243,3 +243,18 @@ bundle，tree 与本地一致；官方 τ² `b7ea907` 与 fixed-v3 数据（三�
 **根因未定**。采取的措施是让这份副本可丢弃：工具与清单搬进仓库 `scripts/ailab/`，用 `install.sh` 装回机器； `doctor.sh`
 在长任务前检查 checkout / 脚本 / 工具 / 模型文件数 / 剩余空间（故意挪开文件验证过会变红）； `rebuild-checkout.sh` 用 fork
 加常驻工作区的 bundle 两分钟重建，不需要从 WSL 传输。
+
+**11-09 14:30 的追加核查**（phai-relay-f6 会话答复）：它当时确实把整个 `.../lgx` 给了那个 Codex 作业写权限
+（`PHAI_CODEX_EXTRA_WRITABLE`，作业 `ops/local-model-cache`
+impl2，11:55–13:38，覆盖整个窗口），而它真正需要写的只有 `lgx/sglang-qwen35-4b`；这个配置错误它会改成只给子目录。但它 2.5 MB 的
+exec 记录里匹配 `areal`、`git clean`、 `rm -rf`、`mv` 的记录是 0 条，全部删除动作锚定在 `sglang-qwen35-4b`
+内，被调用脚本里的删除目标也逐个读过，`guard.py` 的根路径从 `__file__` 解析，结构上到不了 `areal-dev`。证据边界：exec 记录只含
+Codex 自己发出的命令原文，脚本内部的删除要靠读脚本排除。 **根因仍未定**，但写权限边界这条已经收窄。
+
+**rjob 的实际可用量（14:10 实测，同一会话）**：GPU **拿不到**。`llmagent_gpu`（命名空间 `ailab-llmagent`，528 卡已分
+376）用户已明确不再申请，其 13:34 起的 1 卡作业被平台以"分区需要调卡"关掉；`llmagentinfra_gpu`
+（`ailab-llmagentinfra`）总共只有 16 卡且占满，其中 8 卡是本账号的 rlaunch worker 在跑同事的推理服务。纯 CPU 作业可用：
+`--gpu 0` 在 infra 组 64 核 / 128 GiB 稳定起来（约 40 秒），队列声明单 pod 上限 `cpu-limit: 80`、
+`memory-limit: 200Gi`，组内共 384 核且常被占到 350 以上，所以要 64 核以上先打招呼。rjob 墙钟上限无人验证过，长训练前先用一个纯 CPU
+的 sleep 作业压时长。坑：`rjob delete` 不要按 showname 删——命名空间共用，同名的新作业（含别人的）会被打掉，一律用完整 metadata
+name。
