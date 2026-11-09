@@ -1,0 +1,67 @@
+{
+ "repo": "datasets/inclusionAI/AReaL-tau2-data",
+ "revision": "86971dc03da6e7c1a7933295e05b84aab8215386",
+ "source": "https://huggingface.co/api/datasets/inclusionAI/AReaL-tau2-data/tree/main?recursive=true (2026-11-09); tau2_sft_train.jsonl (874 MB, SFT only) deliberately excluded",
+ "files": [
+  {
+   "path": ".gitattributes",
+   "size": 2852,
+   "blob_sha1": "2f9f3fad27a6ddbea1daa4818e4f586efe6c0bef"
+  },
+  {
+   "path": "README.md",
+   "size": 6722,
+   "blob_sha1": "07302566fac0440bc1814fe17c19e16c09b34074"
+  },
+  {
+   "path": "tau2_rl_database/tau2_airline_db.json",
+   "size": 7042725,
+   "blob_sha1": "c6a1e817aa9102c5822e83affb3595acbc312701"
+  },
+  {
+   "path": "tau2_rl_database/tau2_airline_new_db_1.json",
+   "size": 21412748,
+   "sha256": "b69dbaee93456de6a612bd2ea5174225afe746be4e109c075a9f4db15aaa56c3"
+  },
+  {
+   "path": "tau2_rl_database/tau2_airline_new_db_2.json",
+   "size": 20841499,
+   "sha256": "a8a5201ee4f4959bd38787089957029846f79760bf26a9756f996aab166cf1ad"
+  },
+  {
+   "path": "tau2_rl_database/tau2_airline_new_db_3.json",
+   "size": 7082202,
+   "blob_sha1": "37df6c0315deb4331243d84a91cdfd71419a656a"
+  },
+  {
+   "path": "tau2_rl_database/tau2_retail_new_db_1.json",
+   "size": 7635287,
+   "blob_sha1": "5ac2b1ee3e6a0a5017b7417bbf424d55a2be6cc7"
+  },
+  {
+   "path": "tau2_rl_database/tau2_retail_new_db_2.json",
+   "size": 10632839,
+   "sha256": "4cfa2f845239052f0e062328dbfb2b41477639079c123e957a473f9e192c0e4a"
+  },
+  {
+   "path": "tau2_rl_database/tau2_retail_new_db_3.json",
+   "size": 4069707,
+   "blob_sha1": "bc6ab819498efef2c362faf6ef77c53bf816ee17"
+  },
+  {
+   "path": "tau2_rl_database/tau2_retail_new_db_4.json",
+   "size": 8622494,
+   "blob_sha1": "3f769d7f97fc4b96b2ff2e0975232ac84ce6fe8c"
+  },
+  {
+   "path": "tau2_rl_database/tau2_telecom_db.toml",
+   "size": 9628,
+   "blob_sha1": "6c8a639d85896a049a5daf87332107a840a55aac"
+  },
+  {
+   "path": "tau2_rl_train.jsonl",
+   "size": 8692745,
+   "blob_sha1": "773c3842f86d3be88933ce4b146f08817441eac6"
+  }
+ ]
+}

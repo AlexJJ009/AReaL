@@ -213,3 +213,33 @@ SAO smoke 526 用修复后的代码跑了 2 步，两次推权重都成功，各
     `config_ppo.yaml` 已有 `offline_eval_only` 键，`+` 前缀会报错，所以全部改用 `++`；CPU check-config
     通过（126 步、开关读回为 true）。
   - method run 的离线评测还没排，677 开始后再排。
+
+## 6 工作区从 phai 迁到 ailab 开发机；GPFS 上的 checkout 无故消失（2026-11-09）
+
+**迁移**：phai 的 GPU 机器被回收，SSH 已不可达，`dataset/tau2/` 下筛好的 648 道题 pack 和它的 `decisions.json`
+只存在那台机器上，没有副本，视为丢失（原始题和筛选流程仍在：HF 的
+`inclusionAI/AReaL-tau2-data`、[training-data.md §5](training-data.md)、`scripts/tau2/build_areal_task_pack.py`）。
+新工作区在 ailab 开发机（`science-agent`）的
+`/mnt/shared-storage-gpfs2/gpfs2-agent-deepresearch/lgx/areal-dev`，GPU 通过平台 `rjob`
+申请（该机本身无 GPU，6 CPU / 13 GB，与同事共用 root）。工具见
+[scripts/ailab/README.md](../../../scripts/ailab/README.md)。
+
+重建的内容与校验：checkout 浅克隆（depth 460，fork 的完整 upstream 历史会让全量克隆在 13 GB 内存上被杀）加 WSL 侧 2 个提交的
+bundle，tree 与本地一致；官方 τ² `b7ea907` 与 fixed-v3 数据（三个 digest 与
+[benchmark-variants.md §1.5](benchmark-variants.md) 固定值一致）；`Qwen3-4B-Instruct-2507` 固定
+`cdbee75f`，13/13 文件按 HF 哈希校验；`AReaL-tau2-data` 固定 `86971dc0`，12/12 校验（874 MB 的 SFT
+文件未取）。
+
+**事故**：checkout `areal-dev/AReaL` 在 12:17–12:39 CST 之间从 GPFS 上消失，同一父目录下的
+`bin/`、`models/`、 `AGENTS.md`、`_notes/` 全部完好——只少了那一个嵌套 git 仓库。排查结果：
+
+- 不是本会话的命令（该窗口内只有传脚本、守卫测试、模型下载；守卫测试只用 `tempfile`）。
+- `lgx/.git`、`.codex`、`.agents`、`.aws` 四个空目录是 Codex 的 bwrap 沙箱给可写根建的挂载点，不是 git 仓库。
+- 两个 phai-relay 会话逐条核对过该窗口：它们在 `lgx/` 下只写 `lgx/sglang-qwen35-4b`，所有 Codex 事件日志里没有 提到
+  `areal-dev`、`git clean` 或对其它 `lgx` 路径的 rm/rmtree。
+- 嫌疑但未证实：另一线程的一个 Codex 作业 ~12:20 启动，沙箱把 `.../lgx` 整个绑为可写。只扫过命令字符串，不是证据。
+- `df` 当时剩 228 GB，不是磁盘压力；同目录下任务的低盘清理门槛是 40 GB，未触发。
+
+**根因未定**。采取的措施是让这份副本可丢弃：工具与清单搬进仓库 `scripts/ailab/`，用 `install.sh` 装回机器； `doctor.sh`
+在长任务前检查 checkout / 脚本 / 工具 / 模型文件数 / 剩余空间（故意挪开文件验证过会变红）； `rebuild-checkout.sh` 用 fork
+加常驻工作区的 bundle 两分钟重建，不需要从 WSL 传输。
