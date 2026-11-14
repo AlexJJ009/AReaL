@@ -43,7 +43,7 @@ upstream_paths:
 | `areal/infra/launcher/local.py`                       | `SGLangConfig` import + `to_structured_cfg`.                                                                                         |
 | `areal/infra/launcher/slurm.py`                       | `SGLangConfig` import + `to_structured_cfg`.                                                                                         |
 | `areal/v2/inference_service/controller/controller.py` | `SGLangConfig` in gateway controller.                                                                                                |
-| `areal/v2/inference_service/data_proxy/backend.py`    | HTTP protocol implementation for inference service proxy (SGLangBridgeBackend).                                                      |
+| `areal/v2/inference_service/data_proxy/app.py`        | Selects and delegates to SGLangBridgeBackend in `areal/v2/inference_service/sglang/bridge.py`.                                       |
 
 ### Tertiary (tests, config)
 
@@ -61,11 +61,11 @@ the target version. Focus on: **missing new required parameters**, **removed old
 parameters**, **renamed parameters**, **changed return types**, **changed method
 signatures on returned objects**, and **moved/renamed modules**.
 
-> **Note:** Most sglang integration in AReaL is HTTP-based — the server is launched as a
-> subprocess and communicated with over REST. Only `areal/experimental/openai/` imports
-> the Python SDK directly. For the HTTP-based call sites, the risk is in **JSON field
-> renames** in request payloads and response bodies, not in Python API signature
-> changes.
+> **Note:** Check both HTTP and Python interfaces. HTTP call sites depend on request and
+> response JSON fields. `areal/experimental/openai/` and
+> `areal/v2/inference_service/sglang/` also import SGLang Python APIs directly,
+> including scheduler internals; verify those imports and signatures at the target
+> version.
 
 ______________________________________________________________________
 

@@ -1,5 +1,7 @@
 # ailab 开发机的工作区工具
 
+> 旧环境归档（2026-11-13）：此 workspace 当前不可用。保留以下配置供迁移参考；复用前核对目标机器与权限。
+
 phai 的 GPU 机器被回收后，研究工作搬到 ailab 开发机（`science-agent`），GPU 通过平台的 `rjob` 申请。本目录是那台机器上 工作区
 `/mnt/shared-storage-gpfs2/gpfs2-agent-deepresearch/lgx/areal-dev` 的工具源，从 phai-relay 的
 `/root/phai-dev/bin` 迁移改写而来（去掉 pueue，换成分离进程加 `check.sh` 轮询）。

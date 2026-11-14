@@ -52,14 +52,16 @@ Key architectural principles:
 
 ### Key Methods
 
-**Initialization**: Initialize MegatronEngine with model, optimizer, parallel strategy,
-and additional configuration parameters as needed.
+**Initialization**: Construct `MegatronEngine(config: TrainEngineConfig)`, configure its
+parallel strategy, then call `initialize(addr, ft_spec, ...)`. Follow the trainer's
+engine setup in `areal/trainer/rl_trainer.py` or `areal/trainer/sft_trainer.py`.
 
 **Training Operations:**
 
-- `forward()` / `backward()`: Coordinated across all parallel dimensions
-- `step()`: Weight update with gradient synchronization
-- `state_dict()` / `load_state_dict()`: Distributed checkpoint handling
+- `forward()`: Forward-only evaluation through the inherited engine interface
+- `forward_backward_batch()`: Coordinated forward/backward execution
+- `train_batch()`: Training batch with optimizer update
+- `save(meta)` / `load(meta)`: Checkpoint handling with `SaveLoadMeta`
 
 ## Configuration
 
@@ -87,16 +89,15 @@ Configure MegatronEngine using `ParallelStrategy` for model parallelism and
 
 ### 2. Engine Initialization
 
-Initialize MegatronEngine by importing `MegatronEngine` from
-`areal.engine.megatron_engine` and creating an instance with model, optimizer, parallel
-strategy, and optional configuration parameters like virtual pipeline parallelism and
-sequence parallelism.
+Create `MegatronEngine` from `areal.engine.megatron_engine` with `TrainEngineConfig`.
+Set virtual pipeline and sequence parallelism through its configuration. Use the
+trainer's lifecycle to configure parallelism and initialize model and optimizer state.
 
 ### 3. Training Loop Integration
 
-Integrate MegatronEngine into training workflows using standard training operations:
-gradient zeroing, forward pass, backward pass, and optimization steps. Utilize engine
-methods for distributed checkpoint management including saving and loading checkpoints.
+Use `train_batch()` for training updates and `forward_backward_batch()` when managing
+forward/backward execution separately. Follow the trainer's calls to `save()` and
+`load()` for distributed checkpoint management.
 
 ### 4. Integration with Workflows
 

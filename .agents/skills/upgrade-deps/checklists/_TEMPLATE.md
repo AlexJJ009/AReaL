@@ -1,14 +1,13 @@
-<!-- Template for per-package API checklists. Copy this file and fill in for each package. -->
-
-______________________________________________________________________
-
-package: <pip-package-name> github: \<org/repo> branch_template: "v\$\{VERSION}"
+---
+package: <pip-package-name>
+github: <org/repo>
+branch_template: "v${VERSION}"
 upstream_paths:
+  - path/to/relevant/file.py
+  - path/to/relevant/module/
+---
 
-- path/to/relevant/file.py
-- path/to/relevant/module/
-
-______________________________________________________________________
+<!-- Template for per-package API checklists. Copy this file and fill in for each package. -->
 
 ## Affected Files
 

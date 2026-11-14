@@ -1,5 +1,7 @@
 # areal-dev — AReaL τ² research workspace on the ailab dev machine
 
+> 旧环境归档（2026-11-13）：此 workspace 当前不可用。保留以下配置供迁移参考；复用前核对目标机器与权限。
+
 Rules for every agent (Codex, Claude) working in
 `/mnt/shared-storage-gpfs2/gpfs2-agent-deepresearch/lgx/areal-dev`. Code conventions and
 the research rules are in the repository's `AGENTS.md` and `AReaL/AGENTS.md`, which

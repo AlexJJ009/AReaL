@@ -115,15 +115,19 @@ VALID_DATASETS = [
     "<name>",
 ]
 
-# Add to _get_custom_dataset function
-def _get_custom_dataset(name: str, ...):
-    # ... existing code
-    elif name == "<name>":
-        from areal.dataset.<name> import get_<name>_sft_dataset, get_<name>_rl_dataset
-        if dataset_type == "sft":
-            return get_<name>_sft_dataset(path, split, max_length, tokenizer)
-        else:
-            return get_<name>_rl_dataset(path, split, max_length, tokenizer)
+# Add branches to the existing _get_custom_dataset dispatcher:
+elif "<name>" in path and type == "sft":
+    from areal.dataset.<name> import get_<name>_sft_dataset
+
+    return get_<name>_sft_dataset(
+        path=path, split=split, tokenizer=tokenizer, max_length=max_length
+    )
+elif "<name>" in path and type == "rl":
+    from areal.dataset.<name> import get_<name>_rl_dataset
+
+    return get_<name>_rl_dataset(
+        path=path, split=split, tokenizer=tokenizer, max_length=max_length
+    )
 ```
 
 ### Step 3: Add Config (Optional)
@@ -172,14 +176,17 @@ def test_rl_dataset_loads(tokenizer):
 
 ### SFT Dataset
 
+The tokenized SFT loader above returns equal-length `input_ids` and `loss_mask`:
+
 ```python
 {
-    "messages": [
-        {"role": "user", "content": "..."},
-        {"role": "assistant", "content": "..."},
-    ]
+    "input_ids": [1, 2, 3, 4],
+    "loss_mask": [0, 0, 1, 1],
 }
 ```
+
+Chat-format source data with `messages` needs preprocessing into these fields. See
+`areal/dataset/gsm8k.py` for the current tokenized loader.
 
 ### RL Dataset
 

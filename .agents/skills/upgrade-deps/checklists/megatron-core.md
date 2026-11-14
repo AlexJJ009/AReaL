@@ -35,15 +35,15 @@ upstream_paths:
 
 ### Secondary (model / infra layer)
 
-| File                                              | Imports / Usage                                                                                                                                                                                        |
-| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `areal/models/mcore/registry.py`                  | `GPTModel`, `DDP`, `TransformerConfig`, `parallel_state`, `AutoConfig`                                                                                                                                 |
-| `areal/models/mcore/bailing_moe.py`               | `MLATransformerConfig`, `LayerType`, `ModuleSpec`, `SelfAttention`, `AttnMaskType`, `TransformerLayer`, `TransformerLayerSubmodules`, `TransformerBlockSubmodules`, `apply_rotary_pos_emb`, rope_utils |
-| `areal/models/mcore/tree_attn/module_megatron.py` | `TransformerConfig`, `SelfAttention`, `AttnMaskType`, layer specs                                                                                                                                      |
-| `areal/models/mcore/lightning_attention.py`       | `parallel_state`, `apply_rotary_pos_emb`, `MegatronModule`, `ModuleSpec`, `build_module`                                                                                                               |
-| `areal/models/mcore/bailing_moe_bridge.py`        | `MLATransformerConfig`, `AttnBackend`                                                                                                                                                                  |
-| `areal/models/mcore/common.py`                    | `TransformerConfig`                                                                                                                                                                                    |
-| `areal/models/mcore/qwen3.py`                     | `gpt_layer_specs`, `TransformerConfig`                                                                                                                                                                 |
+| File                                        | Imports / Usage                                                                                                                                                                                        |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `areal/models/mcore/registry.py`            | `GPTModel`, `DDP`, `TransformerConfig`, `parallel_state`, `AutoConfig`                                                                                                                                 |
+| `areal/models/mcore/bailing_moe.py`         | `MLATransformerConfig`, `LayerType`, `ModuleSpec`, `SelfAttention`, `AttnMaskType`, `TransformerLayer`, `TransformerLayerSubmodules`, `TransformerBlockSubmodules`, `apply_rotary_pos_emb`, rope_utils |
+| `areal/models/tree_attn/module_megatron.py` | `TransformerConfig`, `SelfAttention`, `AttnMaskType`, layer specs                                                                                                                                      |
+| `areal/models/mcore/lightning_attention.py` | `parallel_state`, `apply_rotary_pos_emb`, `MegatronModule`, `ModuleSpec`, `build_module`                                                                                                               |
+| `areal/models/mcore/bailing_moe_bridge.py`  | `MLATransformerConfig`, `AttnBackend`                                                                                                                                                                  |
+| `areal/models/mcore/common.py`              | `TransformerConfig`                                                                                                                                                                                    |
+| `areal/models/mcore/qwen3.py`               | `gpt_layer_specs`, `TransformerConfig`                                                                                                                                                                 |
 
 ### Tertiary (tests, infra)
 
@@ -469,7 +469,7 @@ ______________________________________________________________________
 
 Called in `areal/models/mcore/bailing_moe.py`,
 `areal/models/mcore/lightning_attention.py`,
-`areal/models/mcore/tree_attn/module_megatron.py`:
+`areal/models/tree_attn/module_megatron.py`:
 
 ```python
 from megatron.core.transformer import ModuleSpec, build_module

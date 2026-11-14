@@ -77,24 +77,14 @@ def _extract_answer(completion: str) -> str:
     return completion.strip()
 ```
 
-### Step 2: Register in __init__.py
+### Step 2: Expose the Reward Function
 
-Update `areal/reward/__init__.py`:
+Pass the callable or its dotted import path (for example,
+`"areal.reward.<name>.<name>_reward_fn"`) as `reward_fn` to `RLVRWorkflow`. See
+`areal/workflow/rlvr.py` for loading and wrapping.
 
-```python
-# Add to VALID_REWARD_FN
-VALID_REWARD_FN = [
-    # ... existing reward functions
-    "<name>",
-]
-
-# Add to get_reward_fn function
-def get_reward_fn(name: str, **kwargs):
-    # ... existing code
-    elif name == "<name>":
-        from areal.reward.<name> import <name>_reward_fn
-        return <name>_reward_fn
-```
+For a package-level export, add the function name to `__all__` and its module path to
+`_LAZY_IMPORTS` in `areal/reward/__init__.py`, following the existing rewards.
 
 ### Step 3: Handle Blocking Operations
 
@@ -103,12 +93,14 @@ workflow will wrap it with `AsyncRewardWrapper`:
 
 ```python
 # In your workflow
-from areal.reward import AsyncRewardWrapper
+from areal.api import AsyncRewardWrapper
 
-self.reward_fn = AsyncRewardWrapper(reward_fn)
+self.async_reward_fn = AsyncRewardWrapper(reward_fn)
 
 # Then call it asynchronously
-rewards = await self.reward_fn(prompt, completions, **data)
+reward = await self.async_reward_fn(
+    prompt, completions, prompt_ids, completion_ids, **data
+)
 ```
 
 ### Step 4: Add Tests
@@ -147,7 +139,7 @@ def test_reward_wrong_answer():
 | GSM8K      | `areal/reward/gsm8k.py`           | Math answer verification     |
 | Geometry3K | `areal/reward/geometry3k.py`      | Geometry answer verification |
 | CLEVR      | `areal/reward/clevr_count_70k.py` | Counting verification        |
-| MathVerify | `areal/reward/math_verify.py`     | General math verification    |
+| MathVerify | `areal/reward/__init__.py`        | General math verification    |
 
 ## Function Signature
 

@@ -466,7 +466,7 @@ rm -rf "${REPO_ROOT}/<package>-src"
 ### Step 7: Run Pre-Commit
 
 ```bash
-pre-commit run --all-files
+pre-commit run --files <changed-file1> <changed-file2>
 ```
 
 ### Step 8: Generate Upgrade Summary

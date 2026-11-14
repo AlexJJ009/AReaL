@@ -75,7 +75,9 @@ FSDPEngine works with all `WorkflowLike` implementations, especially:
 
 - **RLVRWorkflow**: RLHF with PPO subclasses
 - **MultiTurnWorkflow**: Multi-turn conversation training
-- **SFTWorkflow**: Supervised fine-tuning
+
+For supervised fine-tuning, `SFTTrainer` creates `FSDPLMEngine` directly; see
+`areal/trainer/sft_trainer.py`.
 
 ### Integration Pattern
 

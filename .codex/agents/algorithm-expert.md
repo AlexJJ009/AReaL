@@ -21,13 +21,18 @@ AReaL supports multiple PPO-like algorithms, differing in normalization and clip
 
 | Algorithm   | Key Features                       | Config Override                       |
 | ----------- | ---------------------------------- | ------------------------------------- |
-| **PPO**     | Critic-based, GAE advantage        | `kl_ctl>0`                            |
+| **PPO**     | Critic-based, GAE advantage        | `critic` config; see `gsm8k_ppo.yaml` |
 | **GRPO**    | Critic-free, group normalization   | Default config                        |
 | **Dr.GRPO** | Mean-only normalization            | `adv_norm.std_level=null`             |
 | **GSPO**    | Sequence-level importance sampling | `+importance_sampling_level=sequence` |
 | **DAPO**    | Dynamic batch size                 | `dapo_dynamic_bs.yaml`                |
 | **RLOO**    | Leave-one-out baseline             | `rloo.yaml`                           |
 | **SAPO**    | Asymmetric loss                    | `+use_sapo_loss=true`                 |
+
+Critic creation is controlled by `config.critic` in `areal/trainer/rl_trainer.py`. Read
+it together with the advantage settings to identify the algorithm. `kl_ctl` controls KL
+regularization independently; `examples/math/gsm8k_ppo.yaml` uses a critic with
+`kl_ctl: 0.0`.
 
 ### 2. Core Configuration
 
@@ -38,7 +43,7 @@ Location: `areal/api/cli_args.py` -> `PPOActorConfig`, `NormConfig`
 ```python
 # PPOActorConfig
 eps_clip: float = 0.2          # PPO clipping parameter
-kl_ctl: float = 0.1            # KL penalty (0 for critic-free)
+kl_ctl: float = 0.1            # KL regularization coefficient
 discount: float = 1.0          # gamma for future rewards
 gae_lambda: float = 1.0        # GAE lambda parameter
 
@@ -139,10 +144,10 @@ print(f"Clipping rate: {clipped.float().mean():.2%}")
 
 ## Key Files
 
-| File                                | Purpose                    |
-| ----------------------------------- | -------------------------- |
-| `areal/api/cli_args.py`             | PPOActorConfig, NormConfig |
-| `areal/trainer/ppo/actor.py`        | PPO loss computation       |
-| `areal/workflow/rlvr.py`            | Single-turn workflow       |
-| `areal/reward/__init__.py`          | Reward function registry   |
-| `docs/en/algorithms/grpo_series.md` | Algorithm documentation    |
+| File                                | Purpose                         |
+| ----------------------------------- | ------------------------------- |
+| `areal/api/cli_args.py`             | PPOActorConfig, NormConfig      |
+| `areal/trainer/ppo/actor.py`        | PPO loss computation            |
+| `areal/workflow/rlvr.py`            | Single-turn workflow            |
+| `areal/reward/__init__.py`          | Reward exports and lazy imports |
+| `docs/en/algorithms/grpo_series.md` | Algorithm documentation         |

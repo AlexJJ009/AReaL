@@ -62,7 +62,7 @@ class MyWorkflow(RolloutWorkflow):
         self,
         engine: InferenceEngine,
         data: dict[str, Any],
-    ) -> dict[str, Any] | None | dict[str, InteractionWithTokenLogpReward]:
+    ) -> dict[str, torch.Tensor]:
         """Run a single episode. MUST be async and non-blocking."""
 
         # 1. Prepare input_ids from data
@@ -94,13 +94,28 @@ class MyWorkflow(RolloutWorkflow):
             **data,
         )
 
-        # 5. Return results in expected format
-        return {
-            "input_ids": torch.tensor(resp.input_tokens),
-            "output_ids": torch.tensor(resp.output_tokens),
-            "reward": torch.tensor(reward),
+        # 5. Build token-aligned tensors with batch dimension 1
+        seq = resp.input_tokens + resp.output_tokens
+        result = {
+            "input_ids": torch.tensor(seq, dtype=torch.int32),
+            "attention_mask": torch.ones(len(seq), dtype=torch.bool),
+            "loss_mask": torch.tensor(
+                [0] * resp.input_len + [1] * resp.output_len, dtype=torch.int32
+            ),
+            "logprobs": torch.tensor(
+                [0.0] * resp.input_len + resp.output_logprobs, dtype=torch.float32
+            ),
+            "versions": torch.tensor(
+                [-1] * resp.input_len + resp.output_versions, dtype=torch.int32
+            ),
+            "rewards": torch.tensor(reward, dtype=torch.float32),
         }
+        return {key: value.unsqueeze(0) for key, value in result.items()}
 ```
+
+Use `RLVRWorkflow.arun_episode` in `areal/workflow/rlvr.py` as the reference for output
+fields and dtypes. For explicit episode termination, follow its
+`length_stop_is_terminal`, `terminated`, and `truncated` handling.
 
 ### Step 2: Register in __init__.py
 

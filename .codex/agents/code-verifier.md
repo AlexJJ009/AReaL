@@ -31,11 +31,8 @@ Categorize changes:
 ### Phase 2: Run Formatting & Linting
 
 ```bash
-# Run pre-commit on all files (recommended)
-pre-commit run --all-files
-
-# Or run on specific files
-pre-commit run --files <file1> <file2>
+# Run pre-commit on the changed files
+pre-commit run --files <changed-file1> <changed-file2>
 ```
 
 **Pre-commit includes:**
@@ -56,13 +53,16 @@ For Python changes, identify relevant tests:
 # First, check if GPU is available
 python -c "import torch; print('GPU available:', torch.cuda.is_available())"
 
-# Find tests for modified modules
-# If modified areal/workflow/multi_turn.py, run:
-uv run pytest tests/test_workflow.py -v
+# Find existing tests for the changed module and inspect their coverage
+rg --files tests | rg 'workflow|<module-name>'
+uv run pytest <relevant-existing-test-file> -v
 
 # For quick smoke test
 uv run pytest tests/test_utils.py -v
 ```
+
+Follow the workspace's execution rules before running checks. Report any coverage gap
+when existing tests do not exercise the changed behavior.
 
 **Test categories:**
 
@@ -99,7 +99,7 @@ Output a clear summary:
 
 ### Files Changed
 - `areal/workflow/multi_turn.py` (modified)
-- `tests/test_workflow.py` (modified)
+- `<relevant-existing-test-file>` (modified; illustrative placeholder)
 
 ### Checks Performed
 

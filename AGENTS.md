@@ -4,92 +4,48 @@
 
 ## Research fork `codex/sao-math`
 
-This branch is a research fork, not an upstream contribution. The rules in this section
-apply to every agent (Codex on phai, Claude Code on the local clone) and take precedence
-over the upstream AReaL guidance that follows.
+This fork studies interactive RL on τ²-bench with PPO, a script-aware critic and
+user-simulator effects. Research records are indexed in `docs/research/tau2/README.md`.
+The research rules here take precedence over the upstream guidance below. Machine
+availability, paths and launch tools belong in the current workspace instructions.
 
-Topic: interactive RL on τ²-bench with AReaL (PPO with a privileged, script-aware
-critic; user-simulator effects; offline checkpoint evaluation). Current state and
-conclusions: `docs/research/tau2/README.md`.
+### Research decisions
 
-### Who decides what (user rule, 2026-10-24)
+- The user chooses the method: reward, advantage, loss, critic inputs, new components
+  and non-default hyperparameters. Explain the goal, the difference from standard
+  practice and a numeric example, then wait for approval before implementation. Use the
+  paper or standard configuration as the starting point.
+- Before a GPU run, evaluation or paid API job, present its question, reference run,
+  changed variable, expected evidence, time and resource cost, and stop condition.
+  Propose runs whose outcomes can change a decision, and wait for the user's approval.
+- Report observed results, interpretations and pending checks separately. Define the
+  metrics and state the evaluation settings and exclusions.
+- Handle infrastructure fixes, focused smoke checks and documentation within the
+  approved task.
 
-The bottleneck is the user's understanding, not execution speed: a run or a design the
-user did not understand has cost hours to half a day. The user designs the method; the
-agent explains, implements and runs what the user approved.
+### Code, checks and records
 
-- **Method choices are the user's.** Reward, advantage, loss, critic inputs, new
-  components, non-default hyperparameters, and any deviation from the paper or the
-  standard PPO/GAE implementation (clip, minibatches, value clip, head lr). Default to
-  the paper / standard configuration. Present options with trade-offs and a
-  recommendation; do not implement or launch until the user explicitly agrees.
-- **Run card before every GPU run, eval or paid API job**, then wait for the user's go:
-  the question it answers; the one variable that differs from the reference run; the
-  expected result and which result would be uninformative; time, GPU and API cost; the
-  stop condition. If no outcome would change a decision, do not propose the run.
-- **Explain before asking for agreement:** the goal in one plain sentence; every symbol
-  defined; one numeric example; how it differs from standard practice and why. Mark what
-  was read versus inferred. If the user does not understand, restart from the
-  prerequisite with an example; do not add new terms.
-- **Report results in layers:** observed / inferred / unverified, and state the metric
-  definition every time (EV definition, mean@k vs pass^k, temperature, which episodes
-  were excluded and why).
-- **Do not over-ask either.** Infra fixes, cleanup, smoke tests, monitoring and
-  documentation: act and record. At most two questions per message, each with a
-  recommended answer.
-
-### Branches, worktrees and runs
-
-- All work happens on phai. The main worktree is
-  `/data_storage/yl_test/lgx/data-1/code/_worktrees/AReaL/codex-sao-math` on
-  `codex/sao-math`; each task gets a branch `codex/<topic>` in its own worktree, created
-  only by `scripts/research/new-worktree.sh codex/<topic>` (worktree
-  `_worktrees/AReaL/codex-<topic>`, artifacts `_artifacts/AReaL/codex-<topic>`), and is
-  merged back into `codex/sao-math`. After the merge, remove the worktree and delete the
-  branch.
-- Codex runs only through `scripts/research/dispatch.sh <branch> <task> <brief>`: it
-  queues `gpt-6.1-sol` in pueue group `codex-review`, inside the branch's worktree, with
-  the task directory `<artifacts>/<task>/` holding the brief, logs and outputs.
-- Open work lives in `/data_storage/yl_test/lgx/data-1/code/_notes/AReaL/BACKLOG.md`,
-  edited only with `scripts/research/backlog`
-  (`add --title T --found "<date>, <source>"`, `list`, `next`, `set-status N S`,
-  `edit N`, `close N --resolution TEXT`). Item bodies must be actionable without the
-  chat: paths, commits, pueue ids.
-- Never push to GitHub and never open PRs. The branch's GitHub upstream is a public
-  fork; internal research content must not go there. The upstream PR workflow, the
-  `create-pr` / `review-pr` skills and "squash before PR" do not apply. Exception (user
-  decision, 2026-10-28, before phai is reclaimed): `codex/sao-math` is backed up to the
-  fork `AlexJJ009/AReaL` (public), fast-forward only, after a secret scan of the pushed
-  diff. Other branches and new pushes still need the user's go.
-- Run pre-commit on the changed files only (`pre-commit run --files <changed>`), not
-  `--all-files`, which would reformat unrelated upstream code.
-- Run and test only on phai. Every `pueue add` passes `-w <the task's own artifact dir>`
-  and launch scripts `cd` there before starting Python: pueue runs the task in that
-  directory and Python puts it on `sys.path`, so a stray `/tmp/grp.py` once shadowed the
-  stdlib (pueue 653).
-- Run outputs go to
-  `/data_storage/yl_test/lgx/data-1/code/_artifacts/AReaL/<worktree>/`, one directory
-  per run; never into the repository or `/tmp`.
-- Status scripts read the tail of logs and only the newest trajectory steps; one that
-  re-parsed every trajectory JSON took 42 s per call.
+- Use `codex/<topic>` branches based on `codex/sao-math`. Keep run outputs and temporary
+  artifacts outside the source checkout.
+- GitHub publishing requires the user's approval and a secret scan of the diff. The
+  upstream `create-pr` and `review-pr` workflows do not apply to this research fork.
+- Run pre-commit on changed files only (`pre-commit run --files <changed>`).
+- Check skill examples and expert advice against the current implementation. Prefer
+  compatible upstream fixes; keep local corrections small when upstream is unchanged.
+- Update existing research records and indexes. Add a document when a distinct
+  experiment or decision needs its own record; link to results instead of copying them.
+  Date status updates and keep historical observations tied to their run and settings.
 
 ### LLM APIs for users and judges
 
-- Models: DeepSeek only, as `deepseek-flash` on the official API (preferred: cache hits
-  make it much cheaper) or `deepseek-v4-1-flash-261017` on the Volcano plan. Never
-  `deepseek-v4-pro`, and never switch models or endpoints without the user's approval.
-- Keys live under `/data_storage/yl_test/lgx/home/.config/tau2-doubao/` (mode 600; never
-  print values): `deepseek-official.env` (`DEEPSEEK_API_KEY`, shared balance with
-  phai-relay, so check `GET https://api.deepseek.com/user/balance` before and after
-  large jobs) and the Volcano plan files `ark-plan-20261023.env` (current) and
-  `ark-plan-20261020.env` (`ARK_PLAN_API_KEY`, endpoint
-  `https://ark.cn-beijing.volces.com/api/plan/v3`, weekly quota shared with training).
-  Never use `phai-relay-ark-colleague.env`; never use the Volcano pay-as-you-go
-  endpoint.
-- Quota errors (`AccountQuotaExceeded`, balance exhausted) stop the job; no unbounded
-  retries.
-- Providers can change the model behind a name. Record the returned model name
-  (`raw_data.model`) and stop if it changes.
+- Use the approved DeepSeek models: `deepseek-flash` on the official API, or
+  `deepseek-v4-1-flash-261017` on the Volcano plan. Model or endpoint changes need the
+  user's approval. `deepseek-v4-pro`, Volcano pay-as-you-go and a colleague's keys are
+  outside the approved setup.
+- Resolve credentials from the current workspace configuration and keep key values
+  private. Check the shared official API balance before and after large jobs.
+- Stop on quota or balance exhaustion. Record the returned model name (`raw_data.model`)
+  and stop if the provider changes it.
 
 ______________________________________________________________________
 
@@ -157,13 +113,13 @@ areal/                     Core Python package
 |-- infra/                 Launchers (Local/Ray/Slurm), schedulers, utilities
 |-- models/                Model adapters (Megatron-Core, Transformers, custom heads)
 |-- reward/                Built-in reward functions + math parsers
-|-- tests/                 Unit/integration test suites
 |-- trainer/               High-level orchestrators (PPOTrainer, SFTTrainer)
 |-- utils/                 Cross-cutting helpers (logging, data, checkpoints, RL ops)
 +-- workflow/              RolloutWorkflow implementations (RLVR, multi-turn, vision)
 
 docs/                      Jupyter Book docs (https://areal-project.github.io/AReaL/)
 examples/                  Training scripts and launcher recipes
+tests/                     Unit/integration test suites
 ```
 
 ______________________________________________________________________
@@ -325,7 +281,7 @@ ______________________________________________________________________
 ## Collaboration & review
 
 - **Branches**: `codex/<topic>` in their own worktree, merged into `codex/sao-math` (see
-  the research section). No PRs and no GitHub pushes.
+  the research section). GitHub publishing requires approval.
 - **Commits**: Conventional Commits (e.g., `feat:`, `fix:`, `docs:`, `style:`), ~72 char
   subject, imperative voice; load the `commit-conventions` skill before `git commit`.
 - **Pre-merge**: pre-commit on the changed files; doc-only edits need at least mdformat.
@@ -335,10 +291,10 @@ ______________________________________________________________________
 ## Reference material
 
 - **Docs portal**: <https://areal-project.github.io/AReaL/>
-- **Quickstart**: `docs/tutorial/quickstart.md`
-- **Architecture**: `docs/tutorial/gsm8k_grpo.md`
-- **Customization**: `docs/customization/*.md`
-- **Algorithms**: `docs/algorithms/*.md`
-- **Best practices**: `docs/best_practices/*.md`
-- **CLI reference**: `docs/cli_reference.md`
-- **Agent workflow**: `docs/customization/agent.md`
+- **Quickstart**: `docs/en/tutorial/quickstart.md`
+- **Architecture**: `docs/en/tutorial/gsm8k_grpo.md`
+- **Customization**: `docs/en/customization/*.md`
+- **Algorithms**: `docs/en/algorithms/*.md`
+- **Best practices**: `docs/en/best_practices/*.md`
+- **CLI reference**: `docs/en/cli_reference.md`
+- **Agent workflow**: `docs/en/customization/agent.md`

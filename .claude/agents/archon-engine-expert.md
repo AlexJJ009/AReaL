@@ -185,7 +185,8 @@ patterns (refer to source code).
 
 ## Getting Started
 
-1. **Setup**: Install dependencies with `uv sync --extra experimental`
+1. **Setup**: Follow `docs/en/tutorial/archon.md` for dependencies, subject to the
+   workspace's installation and execution rules
 1. **Configure**: Set up `ParallelStrategy` for model parallelism and
    `TrainEngineConfig` with `ArchonEngineConfig` for training settings
 1. **Integrate**: Reference test files in `tests/experimental/archon/torchrun/` for
