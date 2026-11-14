@@ -23,6 +23,10 @@ if out=$("$D/bin/cpactl" status 2>&1); then say OK "cpa: $(echo "$out" | grep -E
 else say FAIL "cpa down (bin/cpactl start): $(echo "$out" | tr '\n' ';')"; fi
 code=$(curl -s -o /dev/null -m 5 --noproxy '*' -w '%{http_code}' http://127.0.0.1:8317/v1/models || true)
 [ "$code" = 401 ] && say OK "cpa api enforces auth (401 without key)" || say FAIL "cpa api without key returned $code (expected 401)"
+# codex 0.169 spawns codex-code-mode-host from its own release directory; a lone copied binary runs but every
+# tool call fails ("host executable was not found", 2026-11-14).
+host=$(dirname "$(readlink -f "$(command -v codex)")")/codex-code-mode-host
+[ -x "$host" ] && say OK "codex code-mode host $host" || say FAIL "missing $host: install the whole codex release dir"
 gpus=$(nvidia-smi --query-gpu=name,memory.used --format=csv,noheader 2>/dev/null | tr '\n' ';')
 [ -n "$gpus" ] && say OK "gpus: $gpus" || say FAIL "nvidia-smi shows no GPU"
 free=$(df -BG --output=avail "$D" | tail -1 | tr -dc 0-9)

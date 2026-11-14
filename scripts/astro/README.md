@@ -33,8 +33,11 @@ astro-ssh doctor.sh                                           # before any long 
 config was placed once from the AiLab backup
 (`~/phai-backup/secrets-20261113/credentials.tar`,
 `root/phai-dev/home/.codex-cpa/config.toml`, project path changed to `/root/lgx/Areal`).
-`uv` and `codex` in `home/.local/bin` are the WSL binaries copied over (uv 0.11.1,
-codex-cli 0.169.0).
+`uv` (0.11.1) is the WSL binary copied to `home/.local/bin`. `codex` (0.169.0) must be
+the whole standalone release directory (`~/.codex/packages/standalone/releases/<ver>/`
+on WSL, copied to `home/.local/lib/codex/` and symlinked): a lone `codex` binary starts,
+but every tool call fails because `codex-code-mode-host` is missing. `doctor.sh` checks
+for it.
 
 ## CPA (`cpactl.sh`, installed as `/root/lgx/bin/cpactl`)
 
