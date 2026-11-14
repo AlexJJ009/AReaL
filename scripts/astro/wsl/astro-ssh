@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# astro-ssh: run a command on astro-a100 (matpool container, two A100s, workspace /root/lgx), retrying only
+# connection-setup failures. Adapted from phai-ssh (2026-11-14).
+#
+# Usage: astro-ssh [--deadline SECONDS] [--raw] [ssh options...] 'remote command'
+#        astro-ssh 'bash -s' < script.sh    # stdin is buffered and replayed on retry
+#
+# The remote command runs with the workspace environment (/root/lgx/bin/lib.sh: TMPDIR, HOME, PATH with uv and
+# codex, CODEX_HOME, resolve) when that file exists; --raw skips it (plain root shell, e.g. for /root tools).
+# The whole call, retries included, ends within --deadline (default 100 s), so it fits the Bash tool's default
+# 120 s foreground timeout. Retried: handshake resets/timeouts and broken ControlMaster sockets (the master is
+# stopped first). Not retried: the remote command's own exit status, or a drop after the command started.
+set -u
+host=${ASTRO_SSH_HOST:-astro-a100}
+deadline=100; raw=0
+while [ $# -gt 0 ]; do
+  case $1 in
+    --deadline) deadline=$2; shift 2 ;;
+    --raw) raw=1; shift ;;
+    *) break ;;
+  esac
+done
+if [ $# -ge 1 ] && [ "$raw" = 0 ]; then
+  set -- "${@:1:$#-1}" "[ -r /root/lgx/bin/lib.sh ] && . /root/lgx/bin/lib.sh; ${!#}"
+fi
+
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$tmp"' EXIT
+: > "$tmp/in"
+if [ -p /dev/stdin ] || [ -f /dev/stdin ]; then cat > "$tmp/in"; fi  # only a pipe or file; never a tty
+
+setup_error='kex_exchange_identification|Connection reset by [0-9a-fA-F:.]+ port|Connection timed out|Connection refused|banner exchange|Connection closed by ([0-9a-fA-F:.]+|UNKNOWN) port [0-9]+$|read from master failed|Control socket connect|ControlSocket .* already exists|Could not resolve hostname'
+end=$(( $(date +%s) + deadline ))
+attempt=0
+while :; do
+  attempt=$((attempt + 1))
+  left=$(( end - $(date +%s) ))
+  if [ "$left" -lt 5 ]; then echo "astro-ssh: deadline ${deadline}s reached after $((attempt - 1)) attempts" >&2; exit 255; fi
+  timeout "$left" ssh -o ConnectTimeout=20 "$host" "$@" < "$tmp/in" 2> "$tmp/err"
+  rc=$?
+  cat "$tmp/err" >&2
+  # 124: the deadline killed ssh; the command may or may not have run, so it is reported, not retried.
+  [ "$rc" -eq 124 ] && { echo "astro-ssh: deadline ${deadline}s reached during attempt $attempt (not retried)" >&2; exit 124; }
+  # Only a 255 with a setup-phase message is retried; anything else is the remote command's own result.
+  if [ "$rc" -eq 255 ] && grep -Eq "$setup_error" "$tmp/err"; then
+    ssh -O stop "$host" 2>/dev/null
+  else
+    exit "$rc"
+  fi
+  [ "$attempt" -ge 3 ] && { echo "astro-ssh: giving up after $attempt attempts" >&2; exit 255; }
+  echo "astro-ssh: connection setup failed (attempt $attempt), retrying" >&2
+  sleep 5
+done

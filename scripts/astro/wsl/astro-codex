@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Usage: astro-codex <branch> <task> <brief-file> [resume-session-id]
+# Starts bin/dispatch.sh detached in the AReaL workspace on astro-a100 (/root/lgx). The branch's worktree must
+# exist there (astro-ssh 'new-worktree.sh <branch>'). <brief-file> is a WSL path: it is uploaded to
+# <artifacts>/<task>/BRIEF.md first. Codex runs gpt-6.1-sol through the CPA on astro itself (127.0.0.1:8317)
+# WITHOUT a sandbox (the container denies user namespaces); the guard hook is the seatbelt.
+# The CPA client key lives only on WSL ($ASTRO_CODEX_KEY_FILE, default ~/.config/phai-codex/cpa.key) and goes
+# over SSH stdin, never to disk there.
+# Logs: <artifacts>/<task>/logs/{codex-events.jsonl,codex-last.txt,codex-stderr.txt,dispatch.txt}.
+# Wait with: astro-wait codex <branch> <task>   (run_in_background)
+set -euo pipefail
+[ $# -ge 3 ] || { sed -n 2p "$0" >&2; exit 2; }
+KEY_FILE=${ASTRO_CODEX_KEY_FILE:-$HOME/.config/phai-codex/cpa.key}
+[ -s "$KEY_FILE" ] || { echo "missing key file $KEY_FILE" >&2; exit 1; }
+[ -f "$3" ] || { echo "brief $3 not found on WSL" >&2; exit 1; }
+branch=$(printf '%q' "$1") task=$(printf '%q' "$2") resume=$(printf '%q' "${4:-}")
+astro-ssh "set -e; resolve $branch; mkdir -p \"\$ART/\"$task/logs; cat > \"\$ART/\"$task/BRIEF.md" < "$3"
+astro-ssh "set -e; resolve $branch; TD=\$ART/$task
+IFS= read -r CPA_API_KEY; export CPA_API_KEY
+setsid nohup /root/lgx/bin/dispatch.sh $branch $task \"\$TD/BRIEF.md\" $resume < /dev/null > \"\$TD/logs/dispatch.txt\" 2>&1 &
+echo \$! > \"\$TD/logs/dispatch.pid\"
+echo \"started \$! -> \$TD/logs/\"" < "$KEY_FILE"

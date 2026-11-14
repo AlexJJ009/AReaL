@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Usage: astro-wait [--every SECONDS] [--max SECONDS] <kind> <args...>
+# Waits for a job in the astro-a100 workspace by polling its non-blocking /root/lgx/bin/check.sh (kinds: codex,
+# job). Start it with run_in_background; it exits 0 when the job finished (printing its result), 2 when check.sh
+# cannot tell, 3 on timeout. Connection failures are retried by astro-ssh and do not end the wait.
+set -u
+every=30; max=14400
+while [ $# -gt 0 ]; do
+  case $1 in --every) every=$2; shift 2 ;; --max) max=$2; shift 2 ;; *) break ;; esac
+done
+[ $# -ge 1 ] || { sed -n 2,5p "$0" >&2; exit 2; }
+args=$(printf '%q ' "$@")
+end=$(( $(date +%s) + max ))
+out=
+while [ "$(date +%s)" -lt "$end" ]; do
+  out=$(astro-ssh --deadline 60 "/root/lgx/bin/check.sh $args" 2>/dev/null); rc=$?
+  case $rc in
+    0) printf '%s\n' "$out"; exit 0 ;;
+    2) printf '%s\n' "$out"; exit 2 ;;
+  esac
+  sleep "$every"
+done
+echo "timeout after ${max}s: $out"; exit 3
