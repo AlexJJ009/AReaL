@@ -43,23 +43,22 @@ model_instructions_file = "./fsdp-expert.md"
 在 AReaL 里，Codex 的“可直接执行工作流”就是放在 `.agents/skills/` 下的**仓库级 skill**。Codex 这里不把 `/`
 命令作为主要工作流表面，而是让你请求相应的 skill， 然后由 Codex 端到端执行该流程。
 
-| Skill                   | 用途                                             |
-| ----------------------- | ------------------------------------------------ |
-| `add-dataset`           | 向 `areal/dataset/` 添加新的数据集加载器         |
-| `add-workflow`          | 创建新的 `RolloutWorkflow` 实现                  |
-| `add-reward`            | 实现新的奖励函数                                 |
-| `add-archon-model`      | 向 Archon 引擎添加新的模型架构                   |
-| `add-unit-tests`        | 添加或扩展单元测试                               |
-| `debug-distributed`     | 排查卡死、OOM、NCCL 和 launcher 配置问题         |
-| `commit-conventions`    | 在提交前准备 Conventional Commit 信息            |
-| `review-pr`             | 执行只读 PR 审查工作流并输出风险分析             |
-| `create-pr`             | 变基、压缩提交、准备元数据并创建或更新 GitHub PR |
-| `translate-doc-zh`      | 将 `docs/en/` 下的文档翻译到 `docs/zh/`          |
-| `update-docker-image`   | 更新运行时镜像依赖并驱动 Docker PR 流程          |
-| `upgrade-megatron-core` | 审计并升级 Megatron-Core 兼容性                  |
-| `upgrade-vllm`          | 审计并升级 vLLM 兼容性                           |
+| Skill                | 用途                                     |
+| -------------------- | ---------------------------------------- |
+| `add-dataset`        | 向 `areal/dataset/` 添加新的数据集加载器 |
+| `add-workflow`       | 创建新的 `RolloutWorkflow` 实现          |
+| `add-reward`         | 实现新的奖励函数                         |
+| `add-archon-model`   | 向 Archon 引擎添加新的模型架构           |
+| `add-unit-tests`     | 添加或扩展单元测试                       |
+| `debug-distributed`  | 排查卡死、OOM、NCCL 和 launcher 配置问题 |
+| `commit-conventions` | 在提交前准备 Conventional Commit 信息    |
+| `translate-doc-zh`   | 将 `docs/en/` 下的文档翻译到 `docs/zh/`  |
 
-这就是“Codex 在本仓库里可直接执行的工作流是什么”的答案。
+依赖升级统一使用 `upgrade-deps` skill。使用示例前，先与当前实现核对。
+
+### 本地审查与提交
+
+审查分支 diff，按改动范围咨询领域专家，运行相关检查，再按 `commit-conventions` 提交。 合并前核对改动和检查结果；向远端发布时遵循项目的批准要求。
 
 ### Codex 自定义 agents
 
@@ -84,13 +83,13 @@ Codex 自定义 agents 是在 `.codex/config.toml` 中注册的专用顾问。�
 
 Codex: [加载 add-workflow，检查 areal/workflow/，实现修改]
 
-> 审查这个 PR
+> 在合并前审查这个分支
 
-Codex: [加载 review-pr，分析 diff，并咨询匹配的 expert agents]
+Codex: [检查 diff，咨询相关专家，运行定向检查]
 
-> 创建或更新这个 PR
+> 提交已审查的修改
 
-Codex: [加载 create-pr，检查分支状态，并执行 PR 工作流]
+Codex: [使用 commit-conventions，提交已验证的改动]
 ```
 
 ## OpenCode 兼容性
@@ -117,18 +116,9 @@ opencode
 OpenCode 会读取 `AGENTS.md`，并从 `.opencode/` 目录发现 agents、commands、skills 和
 plugins；在相关场景下它也可以读取 `.claude/skills/`。
 
-### OpenCode 的工作流表面
+### OpenCode 工作流
 
-OpenCode 维持自己的 command 和 agent 体系：
-
-| 命令                | 用途                     |
-| ------------------- | ------------------------ |
-| `/create-pr`        | 变基、压缩提交并创建 PR  |
-| `/review-pr`        | 智能代码审查，带风险分析 |
-| `/translate-doc-zh` | 将英文文档翻译为中文     |
-
-OpenCode 相关资产位于 `.opencode/agents/`、`.opencode/command/`、 `.opencode/skills/` 和
-`.opencode/package.json`。
+实现指引位于 `.opencode/skills/`，共享 skill 位于 `.agents/skills/`，领域专家定义位于 `.opencode/agents/`。
 
 ## Claude Code 兼容性
 
@@ -146,9 +136,7 @@ AReaL/
 |   +-- agents/              # Codex agent 配置和指令文件
 |-- .opencode/
 |   |-- agents/              # OpenCode expert agents
-|   |-- command/             # OpenCode slash commands
-|   |-- skills/              # OpenCode skills
-|   +-- package.json         # OpenCode plugin 依赖
+|   +-- skills/              # OpenCode skills
 +-- .claude/
     |-- agents/              # Claude Code agents
     |-- commands/            # Claude Code commands
@@ -160,15 +148,15 @@ AReaL/
 
 AReaL 同时支持三套 harness，但三者暴露可复用工作流的方式不同：
 
-| 概念                 | Codex                                   | OpenCode                                  | Claude Code                                       |
-| -------------------- | --------------------------------------- | ----------------------------------------- | ------------------------------------------------- |
-| 项目上下文           | `AGENTS.md`                             | `AGENTS.md`                               | `CLAUDE.md`                                       |
-| 仓库级工作流         | `.agents/skills/`                       | `.opencode/skills/`、`.opencode/command/` | `.claude/skills/`、`.claude/commands/`            |
-| 自定义子代理         | `.codex/config.toml` + `.codex/agents/` | `.opencode/agents/`                       | `.claude/agents/`                                 |
-| 主要可执行工作流形态 | 仓库级 skill                            | slash command 或 skill                    | slash command 或 skill                            |
-| 代理调度方式         | 显式调用 custom agent                   | `task(subagent_type="...", ...)`          | 自动路由                                          |
-| 专家命名             | `fsdp-expert`、`archon-expert`、...     | `fsdp-expert`、`archon-expert`、...       | `fsdp-engine-expert`、`archon-engine-expert`、... |
-| 提交辅助             | `commit-conventions` skill              | `commit-conventions` skill                | `commit-conventions` skill + `/gen-commit-msg`    |
+| 概念                 | Codex                                   | OpenCode                               | Claude Code                                       |
+| -------------------- | --------------------------------------- | -------------------------------------- | ------------------------------------------------- |
+| 项目上下文           | `AGENTS.md`                             | `AGENTS.md`                            | `CLAUDE.md`                                       |
+| 仓库级工作流         | `.agents/skills/`                       | `.opencode/skills/`、`.agents/skills/` | `.claude/skills/`、`.claude/commands/`            |
+| 自定义子代理         | `.codex/config.toml` + `.codex/agents/` | `.opencode/agents/`                    | `.claude/agents/`                                 |
+| 主要可执行工作流形态 | 仓库级 skill                            | slash command 或 skill                 | slash command 或 skill                            |
+| 代理调度方式         | 显式调用 custom agent                   | `task(subagent_type="...", ...)`       | 自动路由                                          |
+| 专家命名             | `fsdp-expert`、`archon-expert`、...     | `fsdp-expert`、`archon-expert`、...    | `fsdp-engine-expert`、`archon-engine-expert`、... |
+| 提交辅助             | `commit-conventions` skill              | `commit-conventions` skill             | `commit-conventions` skill + `/gen-commit-msg`    |
 
 Claude Code 还提供一些额外的通用代理：
 
@@ -186,7 +174,7 @@ AReaL/
 +-- .claude/
     |-- agents/            # 5 个领域专家 + 3 个通用代理（共 8 个）
     |-- skills/           # 引导式工作流（与 OpenCode 共享）
-    |-- commands/         # 自动化操作（create-pr、gen-commit-msg、review-pr）
+    |-- commands/         # 提交信息和文档命令
     |-- hooks/            # 预/后操作钩子
     +-- rules/            # 代码质量标准
 ```

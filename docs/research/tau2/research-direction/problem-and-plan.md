@@ -1,8 +1,12 @@
 # 研究方向：用户不可靠时怎么训练多轮 agent（2026-10-19 重写）
 
-本文是当前版本，只写现在有效的问题定义、方法和实验计划。2026-10-11 到 10-19 的旧内容（β 拆分、截断 +
-bootstrap、检测器、逆方差加权草案的完整讨论和决策表）在 git 提交 `5f66f66` 的同名文件里；§7 只保留改变过方向的决策。其他文档里在 10-19
-之前引用的 problem-and-plan §1–§5，指的是那个旧版本。
+本文保留 2026-10-19 至 10-20 的问题定义、推导和实验计划，不代表当前有效方案。后续的
+[10-24 反思](reflection-20261024.md)收窄了归因主张；[10-30 简报 §4–5](brief-20261030/BRIEF.md) 汇总了
+persona 加权的反证和完成的 2×2：剧本 critic 的 EV 提升较稳定，评测收益未稳定复现，长度自适应 λ 的预期交互作用未出现。
+新方法仍需另行讨论、由用户决定。
+
+2026-10-11 到 10-19 的旧内容（β 拆分、截断 + bootstrap、检测器、逆方差加权草案的完整讨论和决策表）在 git 提交 `5f66f66`
+的同名文件里；§7 只保留改变过方向的决策。其他文档里在 10-19 之前引用的 problem-and-plan §1–§5，指的是那个旧版本。
 
 ## 1 问题
 
@@ -338,7 +342,11 @@ critic 对照（run 3），所以还不能归因到带剧本 critic。跑完（2
   - Asymmetric Actor-Critic for Multi-turn LLM Agents（2604.00304）：运行时 critic 监督固定的
     actor，不看用户目标，也不是 RL 的 value。
 
-## 6 之后：按 persona 缩放（D2、D3 通过后再做）
+## 6 当时的假设：按 persona 缩放（后续证据不支持）
+
+以下保留原推导。后续[剧本 critic case study](../privileged-critic-case-study/REPORT.md)发现，剧本噪声主要反映
+agent 成败，与非 U1 失败的相关强于与 U1 的相关；[10-24 反思 §2–3](reflection-20261024.md)
+据此否定将它直接当作用户可靠度的解释。固定边界和剧本没有解决残差混入 agent 错误的问题，下面的权重不是待执行方案。
 
 老师的直觉是"置信度低的用户少学"。卡点是可辨识性：成功率低可能是用户不可靠，也可能是用户难缠但 agent 能应对（后者该多学）。带剧本的 critic
 下两者落在不同的段：难缠但可应对的用户，结局由 agent 怎么应对决定，变化在 agent 段；不可靠的用户，agent 说完之后结局仍取决于他乱不乱来，用户段波动大。
@@ -560,7 +568,7 @@ episode 的总结，只是不含这一条的 $R$。
 问题：reward 只加在最后一个 agent token 上（`actor.py:272-295`），前面的 token 是怎么用到它的？是不是把 $R$ 复制给所有
 token？
 
-不是复制。它沿着递推从后往前传。GAE 的循环（[gae.py:65](../../../../areal/trainer/ppo/gae.py:65)
+不是复制。它沿着递推从后往前传。GAE 的循环（[gae.py:65](../../../../areal/trainer/ppo/gae.py#L65)
 起，`for t in reversed(...)`）每一步做
 
 $$
@@ -749,7 +757,7 @@ LLM 里"一步"是一个 token，reward 在最后一个 token。距离结尾 $k$
 - 对话长度不一。$k=100$ 时 $0.95^{100}\approx0.6\%$。同一个固定 $\lambda$ 对长短不同的 episode 很不公平。
 
 SAO
-的做法（[lambda_fn.py:38](../../../../areal/trainer/ppo/lambda_fn.py:38)，`sao_length_adaptive_gae`）：
+的做法（[lambda_fn.py:38](../../../../areal/trainer/ppo/lambda_fn.py#L38)，`sao_length_adaptive_gae`）：
 
 $$
 \lambda=1-\frac{1}{\alpha L},\quad\alpha=1.5,
@@ -763,14 +771,14 @@ $L$ 是这条 episode 的 action token 数。平均看 $1/(1-\lambda)=\alpha L=1
 `vapo_length_adaptive_gae`）和 [SAO](https://arxiv.org/abs/2607.07508)。
 
 **我们的设定**：actor 和 critic 都用
-$\lambda=1$，$\gamma=1$（[config_ppo.yaml:45-46](../../../../examples/tau2/config_ppo.yaml:45)），所以没有衰减问题；代价是
+$\lambda=1$，$\gamma=1$（[config_ppo.yaml:46-47](../../../../examples/tau2/config_ppo.yaml#L46)），所以没有衰减问题；代价是
 B.6 反例 1 的 MC 噪声。
 
 ### B.9 Skip-Observation：跳过的是什么
 
 容易产生一个误解："SAO 的 GAE 忽略 observation，PPO 的不忽略"。本仓库里两者用同一个 `gae.py`。`loss_mask=0` 的
 token（用户回复、工具返回）不算时间步：循环里遇到它们，`nextvalues` 和 `lastgaelam`
-原样带过去（[gae.py:83-87](../../../../areal/trainer/ppo/gae.py:83)），GAE 实际只在 agent token
+原样带过去（[gae.py:83-87](../../../../areal/trainer/ppo/gae.py#L83)），GAE 实际只在 agent token
 组成的子序列上算。
 
 "跳过"**不是**说 critic 不看用户的话。critic 在下一个 agent token 之前读到了用户回复，$W$ 已经包含了它；跳过的意思是用户 token 不是
@@ -791,7 +799,7 @@ token。
 | $V_{k+1}$ | 用户回复之后、agent 下一轮开口前 | 看用户怎么回 |
 
 代码注释里把 $V_{k+1}$ 叫作
-$W$（[gae.py:77](../../../../areal/trainer/ppo/gae.py:77)），二者是同一个量。最后一轮之后 $V_{K+1}=R$。
+$W$（[gae.py:77](../../../../areal/trainer/ppo/gae.py#L77)），二者是同一个量。最后一轮之后 $V_{K+1}=R$。
 
 **例子。** 用户要取消预订 EHGLP3。agent 这一轮问"请提供预订号"，问得规范，读数从 0.50 升到 0.55。用户的回复有两种，各一半：
 
@@ -816,7 +824,7 @@ $$
 $$
 
 代码在 agent 这一轮最后一个 token
-上做这件事（[gae.py:75-80](../../../../areal/trainer/ppo/gae.py:75)），再由递推传给这一轮和之前所有 agent
+上做这件事（[gae.py:75-80](../../../../areal/trainer/ppo/gae.py#L75)），再由递推传给这一轮和之前所有 agent
 token。
 
 | β   | 用户报对          | 用户报错          | 平均    |
@@ -839,8 +847,8 @@ agent 的错。β 把它缩小，就等于替 agent 打了折，这是偏差。�
 取消错时 $U_k$ 就该掉下去，错误回到 agent 段，β 不再碰它。§5.2 的 D3 测的就是这一点。
 
 **β 是不是只在用户边界上的 λ。** 作用相似：都是"这一段少看真实结果，多信 critic 的平均"。区别是 λ 对每一步都打折，并把衰减传给后面所有步；β
-只缩这一次用户回复，之前和之后的变化照常全额累加（[gae.py:81](../../../../areal/trainer/ppo/gae.py:81)）。agent 自己的
-token 仍是 $\lambda=1$，critic 的误差只在用户边界进入 advantage。
+只缩这一次用户回复，之前和之后的变化照常全额累加（[gae.py:81](../../../../areal/trainer/ppo/gae.py#L81)）。agent
+自己的 token 仍是 $\lambda=1$，critic 的误差只在用户边界进入 advantage。
 
 **分工与实验。** 带剧本的 critic 让 (C) 尽量成立，β 才只缩用户的运气；β 把这份运气从 agent 的分数里拿掉。2×2 实验（§5.1）里 run
 1（带剧本 + β=0.5）对 run 2（带剧本 + β=1），测的就是：在带剧本的 critic 下，β 降方差的收益是否大于 (C) 不完全成立带来的偏差。

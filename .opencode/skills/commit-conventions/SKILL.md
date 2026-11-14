@@ -12,7 +12,7 @@ Commit message conventions and scope inference rules for the AReaL repository.
 **ALWAYS load this skill when making any git commit in AReaL.** This includes:
 
 - Direct commits (`git commit`)
-- Commits during PR creation (`/create-pr`)
+- Merge or squash commits between research branches
 - Commits delegated via `task(load_skills=["commit-conventions"], ...)`
 - Any agent workflow that produces a commit
 
@@ -63,7 +63,7 @@ Infer scope from the **primary** changed file paths:
 | `areal/infra/`                                               | `infra`                        |
 | `areal/trainer/`                                             | `trainer`                      |
 | `areal/models/`                                              | `models`                       |
-| `areal/experimental/`                                        | `archon`                       |
+| `areal/experimental/`                                        | `experimental`                 |
 | `docs/`                                                      | `docs`                         |
 | `examples/`                                                  | `examples`                     |
 | `AGENTS.md`, `.agents/`, `.claude/`, `.codex/`, `.opencode/` | `agents`                       |
@@ -113,15 +113,10 @@ with configuration examples.
 **Agent/tooling changes:**
 
 ```
-chore(agents): port review-pr command to OpenCode
+chore(agents): align shared development instructions
 
-Add OpenCode-native commands with task() category
-delegation instead of hardcoded model names.
-
-Key changes:
-- Create .opencode/command/ with review-pr, create-pr
-- Replace hardcoded model routing with platform-native review routing
-- Add expert subagent consultation patterns
+Update the affected client copies to follow the same
+repository conventions.
 ```
 
 **Governance/maintainer changes:**

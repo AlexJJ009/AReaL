@@ -64,30 +64,38 @@ $\nabla_\theta J_{KDRL}(\theta)$ 是 $\nabla_\theta J_{GRPO}( \theta) + \beta
 
 ## 运行示例
 
-在 YAML 中加入 teacher 配置：
+教师支持 `teacher.engine_type` 的两种模式：`rollout` 使用 vLLM/SGLang 推理引擎；`train`
+使用旧版训练引擎。推荐先查看
+[rollout teacher 示例](../../../examples/distillation/gsm8k_grpo_distill_mode_rolloutEngine.yaml)。
+对应配置如下：
 
 ```yaml
 teacher:
-  backend: fsdp:d1p1t4
+  engine_type: rollout
+  path: Qwen/Qwen2.5-14B-Instruct
+  rollout:
+    backend: "vllm:d1p1t2"
+    scheduling_spec:
+      - task_type: worker
+        port_count: 2
+        gpu: 1
+        mem: 32
+        cmd: python3 -m areal.infra.rpc.rpc_server
+        env_vars: {}
   rl_loss_weight: 1.0
-  distill_loss_weight: 0.005
-  experiment_name: ${experiment_name}
-  trial_name: ${trial_name}
-  path: Qwen/Qwen3-32B
-  init_from_scratch: false
-  disable_dropout: true
-  dtype: ${actor.dtype}
-  mb_spec:
-    max_tokens_per_mb: 10240
-  optimizer: null
-  scheduling_spec: ${actor.scheduling_spec}
+  distill_loss_weight: 5e-3
 ```
 
 本地调度器示例命令：
 
 ```bash
-python3 examples/math/gsm8k_rl.py --config examples/distillation/gsm8k_grpo_distill.yaml scheduler.type=local experiment_name=gsm8k-grpo-distillation trial_name=trial0
+python3 examples/math/gsm8k_rl.py \
+  --config examples/distillation/gsm8k_grpo_distill_mode_rolloutEngine.yaml \
+  scheduler.type=local experiment_name=gsm8k-grpo-distillation trial_name=trial0
 ```
+
+[train teacher 示例](../../../examples/distillation/gsm8k_grpo_distill_mode_trainEngine.yaml)
+采用 `engine_type: train` 和嵌套的 `teacher.train` 配置，写法见[英文说明](../../en/algorithms/distillation.md)。
 
 ## 结果
 

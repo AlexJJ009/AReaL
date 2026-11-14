@@ -3,7 +3,7 @@
 | 项                 | 内容                                                                                         |
 | ------------------ | -------------------------------------------------------------------------------------------- |
 | 编号               | EXP-2026-10-24-qwenuser-no-telecom                                                           |
-| 状态               | run card 草稿（2026-10-24）；run 3′ 设计已同意，未启动；方法 run 的设计待定（§5）            |
+| 状态               | 已完成（截至 2026-10-30）：run 3′/2′/4/5 及 run 2′ seed-43；结果见 §12、§17、§18.1           |
 | 设计 / 执行 / 批准 | GongxunLi / Claude / GongxunLi                                                               |
 | 代码               | `codex/sao-math`，沿用 run 3 的源码快照 `tau2-ppo-qwenuser-20261021/src-41dde039`            |
 | 产物目录           | `_artifacts/AReaL/codex-sao-math/tau2-ppo-qwenuser-20261021/`（与 run 3 同一目录，便于对照） |
@@ -73,18 +73,10 @@ Telecom episode 很长（约一半撞到 max_steps），去掉后每步会变快
 - 如果改用 DeepSeek 用户训练：约 15,000 episode，按 pueue 689 的单价（2,000 条 ¥27.4）约
   ¥200，超过目前余额能承受的范围（¥211.88，与 phai-relay 共用）。
 
-## 5. 方法 run（设计待定）
+## 5. 方法 run 的后续决定
 
-用户的设想：带剧本 critic + SAO 的长度自适应 λ（$\lambda = 1 - 1/(1.5L)$，$L$ 为整条轨迹的 agent token 数）。
-
-待定的两点：
-
-1. "SAO"只换 λ，还是用整套 SAO 配置？本仓库之前的 SAO run（`sao-formal-qwen3-v3-mse`）相对 PPO 改了 6 处：λ、不白化
-   advantage、DIS clip 0.3/5.0 代替 PPO clip、critic 冻结 attention、critic lr 5e-6、每步先更新
-   critic 2 次 （[2026-10-15-qwen3-ppo-grpo-sao.md](2026-10-15-qwen3-ppo-grpo-sao.md)
-   §2、§4.0）。那组对比里 PPO 与 SAO 在 120 步分不出优劣。
-1. 对照组。"带剧本 + λ=1"在 Qwen 用户、无 Telecom 的设置下还没有跑过（649 是 DeepSeek 用户）。只跑 run 3′ 和"带剧本 + SAO
-   λ"，两者差两个变量。
+原讨论在“只换 actor λ”和“整套 SAO”之间待定；后续批准的 run 2′ 只加剧本（§9），run 4/5 只改 actor λ（§13），不采用整套 SAO
+的其他改动。原 SAO 与 PPO 的配置差异见 [10-15 实验记录 §2、§4.0](2026-10-15-qwen3-ppo-grpo-sao.md)。
 
 ## 6. 运行记录
 
@@ -98,7 +90,7 @@ Telecom episode 很长（约一半撞到 max_steps），去掉后每步会变快
 
 ## 7. 结果
 
-（训练和评测结束后填写。）
+run 3′/2′ 的结果见 §12，run 4/5 的 2×2 见 §17，seed-43 复现见 §18.1；本页按时间追加，以下早期提案的后续决定见相应运行记录。
 
 ## 8. 讨论更新（2026-10-24，未定稿）
 
@@ -107,10 +99,7 @@ logp）约 250 s； Qwen 用户服务器平均只有 0.74 个在途请求（最�
 672 条）：retail 69 s、 airline 80 s、telecom 345 s（p90 1331 s，最长 1810 s，撞到 1800 s 超时）。瓶颈是
 rollout 并发 32，不是用户服务器。
 
-**提速提案（待批准）**：`rollout.max_concurrent_rollouts` 32 → 128（与 v3ext 相同）；步数 120 → 约 84（14
-epoch）。依据：之前 PPO 的提升集中在前 70 步（§4.0 of 2026-10-15 记录：0→70 +8.3pp，70→120 +4.2pp 且 CI 含
-0）；actor lr 为常数，截断不改变前 84 步的训练；对照用 v3ext globalstep 79/89 的 checkpoint。估计约 8 分钟/步，84 步约
-11 小时（推断）。
+并发和步数的后续批准见 §6：并发改为 128，保留 120 步，未采用缩短到 84 步的提案。
 
 **方法 run**：只换 actor 的 λ（`gae_lambda=sao_length_adaptive_gae`，α=1.5），critic 目标保持
 λ=1（`critic_gae_lambda=1.0`，与 SAO 论文和之前的 SAO run 相同），advantage 白化、clip、critic 设置都保持
@@ -356,8 +345,8 @@ run 4 的轨迹 case study（Codex
 
 训练 716、DeepSeek 评测 717、Qwen 评测 718 都成功完成。下表取自各 checkpoint 的 `summary.json` 和
 `main.log`，由 `docs/research/tau2/scripts/collect_brief_tables.py` 汇总到
-`research-direction/brief-20261030/{eval_mean4.csv,train_per_step.csv}`。mean@4（%），agent / 用户 / judge
-T=0，infra 剔除 0 条；Qwen 评测 run 2′/3′ 是两次 attempt 平均，s43 只有一次。
+`research-direction/brief-20261030/{eval_mean4.csv,train_per_step.csv}`。mean@4（%），agent
+/ 用户 / judge T=0，infra 剔除 0 条；Qwen 评测 run 2′/3′ 是两次 attempt 平均，s43 只有一次。
 
 | 配置                   | DeepSeek 用户 A / R / T，第 120 步 | 第 90 步 R / T | Qwen 用户 A / R，第 120 步 | EV（101–120） | 训练 reward（1–20 → 101–120） |
 | ---------------------- | ---------------------------------- | -------------- | -------------------------- | ------------- | ----------------------------- |
@@ -367,19 +356,20 @@ T=0，infra 剔除 0 条；Qwen 评测 run 2′/3′ 是两次 attempt 平均，
 
 按 §18 预先写的读法：
 
-- retail 60.6 介于 55 与 65 之间，合并两个种子：第 120 步平均 63.1，比 run 3′ 高 8.7pp；90 与 120 两步平均，s43 61.9、s42
-  65.6、run 3′ 56.6。
-- telecom 53.1 与 run 3′ 的 55.0 持平：seed 42 的 +12.5pp 没有复现。第 90 步两个种子都高于 run 3′（56.3、55.6 对
-  45.0），第 120 步 s43 没有保持。
+- retail 60.6 介于 55 与 65 之间，合并两个种子：第 120 步平均 63.1，比 run 3′ 高 8.7pp；90 与 120 两步平均，s43
+  61.9、s42 65.6、run 3′ 56.6。
+- telecom 53.1 与 run 3′ 的 55.0 持平：seed 42 的 +12.5pp 没有复现。第 90 步两个种子都高于 run 3′（56.3、55.6
+  对 45.0），第 120 步 s43 没有保持。
 - EV 复现：0.53 对 0.52，剧本 critic 拟合更好在两个种子上一致，但没有稳定地转成评测提升。
-- 用 s43 代替 run 2′ 重算 §13 的交互项 (run 4 − run 2′) − (run 5 − run 3′)：retail −6.9，telecom −0.6。仍不 > 0；§17
-  的 −11.9 / −15.0 有一部分来自 seed 42 偏高。
-- Qwen 评测：两个种子的 run 2′ retail（43.1、41.3）都低于 run 3′（48.8），方向一致，幅度在同 checkpoint 重测差距（最多 6pp）附近。
+- 用 s43 代替 run 2′ 重算 §13 的交互项 (run 4 − run 2′) − (run 5 − run 3′)：retail −6.9，telecom
+  −0.6。仍不 > 0；§17 的 −11.9 / −15.0 有一部分来自 seed 42 偏高。
+- Qwen 评测：两个种子的 run 2′ retail（43.1、41.3）都低于 run 3′（48.8），方向一致，幅度在同 checkpoint 重测差距（最多
+  6pp）附近。
 
 局限：
 
 - **没有 CI**：逐 episode 结果 `episodes.jsonl` 没有进 phai 回收前的备份（备份只收了 summary 和日志），所有 run
   都不能再做按题配对 bootstrap，以后的比较只能用总分。
-- s43 训练 judge 是 DeepSeek 官方 `deepseek-flash`，seed 42 是火山 plan，两者训练 reward 不可直接比；Qwen 评测的 judge
-  同样不同（s43 官方，run 2′/3′ 火山 plan）。
+- s43 训练 judge 是 DeepSeek 官方 `deepseek-flash`，seed 42 是火山 plan，两者训练 reward 不可直接比；Qwen
+  评测的 judge 同样不同（s43 官方，run 2′/3′ 火山 plan）。
 - s43 的 retail 四次重复之间从 50.0 到 67.5，单次评测噪声与上面多数差值同量级。

@@ -1,5 +1,8 @@
 # 研究文档索引
 
+记录按对应实验的日期、模型与设置阅读。当前运行和模型授权以仓库 `AGENTS.md` 为准。
+
+- [仓库级 ADR](../decisions/README.md)记录 harness、运行环境、算法和数据协议等原始决策，与下方 τ² 研究 ADR 分别编号。
 - [tau2/](tau2/README.md)：τ² 基线审计、训练数据、critic、SAO 运行、研究方向和决策记录。
   - [tau2/README.md](tau2/README.md)：问题、状态、结论和目录。
   - [tau2/decisions/](tau2/decisions/README.md)：τ² 决策记录（ADR）。

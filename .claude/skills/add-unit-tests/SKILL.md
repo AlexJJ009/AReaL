@@ -68,7 +68,7 @@ Use appropriate pytest markers:
 
 | Marker                                  | When to Use                                                  |
 | --------------------------------------- | ------------------------------------------------------------ |
-| `@pytest.mark.slow`                     | Test takes > 10 seconds (excluded from CI by default)        |
+| `@pytest.mark.slow`                     | Test takes > 30 seconds (excluded from CI by default)        |
 | `@pytest.mark.ci`                       | Slow test that must run in CI (use with `@pytest.mark.slow`) |
 | `@pytest.mark.asyncio`                  | Async test functions                                         |
 | `@pytest.mark.skipif(cond, reason=...)` | Conditional skip                                             |
@@ -76,9 +76,10 @@ Use appropriate pytest markers:
 
 **CI Test Strategy**:
 
-- `@pytest.mark.slow`: Excluded from CI by default (CI runs `pytest -m "not slow"`)
+- `@pytest.mark.slow`: Excluded unless also marked `ci`; CI uses `(not slow or ci)` plus
+  a backend filter
 - `@pytest.mark.slow` + `@pytest.mark.ci`: Slow but must run in CI
-- No marker: Runs in CI (fast unit tests)
+- No marker: Selected when its backend and environment requirements are satisfied
 
 ```python
 @pytest.mark.asyncio
@@ -189,8 +190,8 @@ python -c "import torch; print('GPU available:', torch.cuda.is_available())"
 # Run specific test file
 uv run pytest tests/test_<name>.py
 
-# Skip slow tests (CI default)
-uv run pytest -m "not slow"
+# CI marker selection; the workflow also excludes the other inference backend
+uv run pytest -m "not slow or ci" <relevant-existing-test-file>
 
 # Run with verbose output
 uv run pytest -v

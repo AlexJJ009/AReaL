@@ -5,6 +5,11 @@ Date: 2026-10-09
 Status: Accepted; failure classification superseded by
 [ADR 0009](0009-official-tau2-runner-semantics.md)
 
+The pinned harness remains the base.
+[ADR 0010](0010-tau2-official-and-fixed-benchmark-variants.md) adds the fixed variant,
+and the later [judge ADR](../research/tau2/decisions/0002-nl-judge-decoupled.md)
+separates judge configuration from the user simulator.
+
 Applies to `examples/tau2/` (`agent.py`, `contracts.py`, `train.py`, `utils.py`),
 `scripts/tau2/`, and the AReaL OpenAI-compatible proxy under
 `areal/experimental/openai/`.

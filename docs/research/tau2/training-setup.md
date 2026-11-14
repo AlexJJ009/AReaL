@@ -3,13 +3,17 @@
 > 来源：原 README 第 12.1–12.6 节。拆分前的全文见 git 提交 b8d95027 中的
 > docs/research/2026-10-09-tau2-high-baseline-audit/README.md。
 
-## 1 题目划分
+本文 §1–2 记录 2026-10-10 起的早期 fixed-v3、Airline/Retail 训练设置；§3 的失败处理另有算法适用范围。 后续 pack、Qwen
+用户和 Telecom 实验见[训练数据](training-data.md)及
+[10-24 实验记录](experiments/2026-10-24-qwenuser-no-telecom.md)，不能套用这里的题数或用户设置。
+
+## 1 早期题目划分
 
 不用 Telecom，用 fixed 变体去重后的训练集（[benchmark-variants.md §1.4](benchmark-variants.md)）。
 
 | 模式           | 训练集                                      | 训练中评测                                      |
 | -------------- | ------------------------------------------- | ----------------------------------------------- |
-| formal（本轮） | 99 题：Airline 30、Retail 69                | 官方 test 60 题：Airline 20、Retail 40          |
+| formal（早期） | 99 题：Airline 30、Retail 69                | 官方 test 60 题：Airline 20、Retail 40          |
 | tune           | 从这 99 题切出 79 题：Airline 24、Retail 55 | dev 20 题：Airline 6、Retail 14，同样来自训练集 |
 
 - **tune 的 dev 切法**：每个领域先排序，再用 `Random("42:<domain>")` 打乱，取 `round(n × 0.2)` 题。代码会检查 dev
@@ -23,10 +27,15 @@
 
 ## 2 运行与配置约定
 
-都用 DeepSeek-Flash 做用户模拟器和 NL judge，temperature 0，不设回复上限，key 从 `TAU2_DEEPSEEK_ENV_FILE`
-读取。每次运行都要传 `econfig.benchmark_variant=fixed`，并把 `TAU2_DATA_DIR` 指向 fixed 数据目录（当前为
-fixed-v3，[benchmark-variants.md §1.5](benchmark-variants.md)）。配置的默认值是
-official，目录与变体不符时会拒绝启动。
+早期运行用 DeepSeek-Flash 做用户模拟器和 NL judge，temperature 0，用户模拟器不设回复上限，key 从
+`TAU2_DEEPSEEK_ENV_FILE` 读取。运行显式传 `econfig.benchmark_variant=fixed`，并把 `TAU2_DATA_DIR`
+指向对应 fixed 数据目录（当时为 fixed-v3，[benchmark-variants.md §1.5](benchmark-variants.md)）。
+
+本地代码中，`examples/tau2/config_grpo.yaml` 和 `config_critic_production.yaml` 默认 `official`，
+`config_ppo.yaml` 覆盖为 `fixed`；目录与变体不符时拒绝启动。PPO 由 `examples/tau2/ppo_data.py` 合并 fixed
+Airline/Retail 官方训练题与配置的 packs，评测固定为 Airline 20、Retail 40、Telecom 40，共 100 题； 不是上述 99/60
+题设置。历史 Qwen 用户训练见实验记录；当前用户与 judge 的批准模型范围仍以仓库 `AGENTS.md` 的 DeepSeek-only 约定为准，换模型或
+endpoint 需用户批准。
 
 - **critic 的 epoch**（ADR 0005）：actor 固定（lr 0）。每个 epoch 给每道训练题现采一条 temperature 1 的
   episode，只更新 critic。每个 epoch 的最后一个 batch 只有 3 题（`drop_last: false`）。
@@ -34,7 +43,7 @@ official，目录与变体不符时会拒绝启动。
 - **critic 的验证**：开头用训练的 `gconfig`（temperature 1，每题 1 次）采一次 60 条固定轨迹，之后每次验证都复用这批轨迹。验证测的是
   critic，不是 policy，所以没有 mean@4 / pass^k。
 
-- **资源**：8 张 A100-80GB。
+- **当时的资源分配**：8 张 A100-80GB。
 
   - critic：rollout 用 4 卡，actor 和 critic 共用另外 4 卡，阶段之间 offload。
   - GRPO / SAO：rollout 3 卡，独立评测 1 卡，actor 4 卡。
@@ -42,6 +51,9 @@ official，目录与变体不符时会拒绝启动。
 - **运行目录**：每次运行都要用新的 `TAU2_RUN_ROOT`，因为 `recover.mode=auto` 会续跑同一目录。
 
 ## 3 训练侧的处理（已实现）
+
+以下失败分类和重试预算沿用官方 runner 语义；存活成员阈值按组大小计算。GRPO 的 n=8 时阈值为 4， PPO / critic 每题一条时为 1，不应把“至少 4
+条”套到单 rollout 训练。具体实现见 `examples/tau2/agent.py`、`utils.py` 和 `evaluation.py`。
 
 - **单次回复上限**：保留 4096，以节省资源（用户决定）。已知代价：上一轮 12% 到 17% 的 Airline 训练 episode
   至少有一次回复被截断（[recuris-and-leaderboard.md §4](recuris-and-leaderboard.md)）。
@@ -85,6 +97,6 @@ DAPO。下表的结论来自代码，不是文档：
   3pp（[step0-evaluations.md §3](step0-evaluations.md)）；采样噪声的 95% 半宽，合计约 ±4.1pp，Airline 约
   ±6.4pp（[initial-audit.md §2.1](initial-audit.md)）。 几个点的变化不能当作训练有效。
 - **对 Doubao 或 gpt-5.2 用户的泛化**：训练和评测都用 DeepSeek 用户，换用户后的效果需要另跑评测。
-- **critic 对 SAO 的具体贡献**：MSE / EV 只说明 critic 拟合了 temperature 1 下的回报。它对 SAO 有没有帮助，只能从 SAO
-  与 GRPO 的对比里间接看出，而这个对比还混着两种算法的其他差异。
+- **早期 critic 对 SAO 的具体贡献**：MSE / EV 只说明 critic 拟合了 temperature 1 下的回报。它对 SAO 有没有帮助，只能从
+  SAO 与 GRPO 的对比里间接看出，而这个对比还混着两种算法的其他差异。
 - **NL judge 带来的 reward 噪声有多大**：Airline 有 26 道题按 NL 断言计分，judge 就是用户模拟器所用的模型。

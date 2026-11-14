@@ -309,7 +309,7 @@ python3 train.py --config path/to/config.yaml
 You can override specific parameters from the command line:
 
 ```bash
-python3 train.py --config path/to/config.yaml actor.lr=1e-4 seed=42
+python3 train.py --config path/to/config.yaml actor.optimizer.lr=1e-4 seed=42
 ```
 
 For detailed examples, see the experiment configurations in the `examples/` directory.
@@ -332,7 +332,7 @@ python3 train.py --config path/to/config.yaml
 您可以通过命令行覆盖特定参数：
 
 ```bash
-python3 train.py --config path/to/config.yaml actor.lr=1e-4 seed=42
+python3 train.py --config path/to/config.yaml actor.optimizer.lr=1e-4 seed=42
 ```
 
 详细示例请参阅 `examples/` 目录中的实验配置。

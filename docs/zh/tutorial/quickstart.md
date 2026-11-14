@@ -12,7 +12,7 @@ GSM8K。在继续之前，请确保已完成[安装和环境设置](installation
 - 配置文件 YAML：
   [examples/math/gsm8k_grpo.yaml](https://github.com/areal-project/AReaL/blob/main/examples/math/gsm8k_grpo.yaml)
 
-我们的训练脚本会自动下载数据集（openai/gsm8k）和模型（Qwen/Qwen2-1.5B-Instruct）。要使用默认配置运行示例，请从仓库目录执行：
+我们的训练脚本会自动下载数据集（openai/gsm8k）和模型（Qwen/Qwen2.5-1.5B-Instruct）。要使用默认配置运行示例，请从仓库目录执行：
 
 ```
 python3 examples/math/gsm8k_rl.py --config examples/math/gsm8k_grpo.yaml scheduler.type=local experiment_name=<您的实验名称> trial_name=<您的试验名称>

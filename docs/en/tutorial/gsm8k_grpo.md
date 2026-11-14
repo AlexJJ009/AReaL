@@ -181,16 +181,21 @@ def main(args):
 
     # 3. Define workflow configuration (imported on workers)
     workflow_kwargs = dict(
-        reward_fn="areal.reward.gsm8k.gsm8k_reward_fn",
-        gconfig=config.gconfig,
-        tokenizer=config.tokenizer_path,
+        temperature=config.gconfig.temperature,
+        top_p=config.gconfig.top_p,
+        max_tokens=config.gconfig.max_tokens,
+        max_completion_tokens=config.gconfig.max_new_tokens,
     )
+    eval_workflow_kwargs = workflow_kwargs.copy()
+    eval_workflow_kwargs["temperature"] = 0.6
 
     # 4. Train with PPOTrainer
     with PPOTrainer(config, train_dataset=train_dataset, valid_dataset=valid_dataset) as trainer:
         trainer.train(
-            workflow="areal.workflow.rlvr.RLVRWorkflow",
+            workflow="areal.workflow.openai.math_agent.MathAgent",
             workflow_kwargs=workflow_kwargs,
+            eval_workflow="areal.workflow.openai.math_agent.MathAgent",
+            eval_workflow_kwargs=eval_workflow_kwargs,
         )
 ```
 
@@ -237,8 +242,19 @@ controllers. The controller handles worker creation, RPC dispatch, and result me
 
 ### Workflow Specification
 
-In `examples/math/gsm8k_rl.py`, workflows are specified as strings to enable dynamic
-importing on remote workers:
+`examples/math/gsm8k_rl.py` uses
+[`MathAgent`](https://github.com/areal-project/AReaL/blob/main/areal/workflow/openai/math_agent.py),
+specified as an import string so workers can instantiate it dynamically. Its `run`
+method sends the dataset messages through the OpenAI-compatible chat completions API and
+returns a binary reward using `math_verify.parse` and `math_verify.verify` against
+`data["answer"]`. Training uses the generation settings above; evaluation uses the same
+agent with temperature 0.6. See the [agentic RL guide](agentic_rl.md) for this API.
+
+### RLVRWorkflow: Alternative Low-Level Workflow
+
+[`RLVRWorkflow`](https://github.com/areal-project/AReaL/blob/main/areal/workflow/rlvr.py)
+is also supported. To use this alternative, replace the agent and its keyword arguments
+with the low-level workflow and its own arguments:
 
 ```python
 trainer.train(
@@ -246,6 +262,12 @@ trainer.train(
     workflow_kwargs={
         "reward_fn": "areal.reward.gsm8k.gsm8k_reward_fn",
         "gconfig": config.gconfig,
+        "tokenizer": config.tokenizer_path,
+    },
+    eval_workflow="areal.workflow.rlvr.RLVRWorkflow",
+    eval_workflow_kwargs={
+        "reward_fn": "areal.reward.gsm8k.gsm8k_reward_fn",
+        "gconfig": config.gconfig.new(temperature=0.6),
         "tokenizer": config.tokenizer_path,
     },
 )
@@ -340,6 +362,9 @@ on **CPU**:
 - Sends HTTP callbacks when trajectories complete
 
 #### Request Flow
+
+The following sketch uses the low-level `RLVRWorkflow` alternative and its keyword
+arguments above; `MathAgent` uses the agent API instead of `arun_episode`.
 
 ```python
 # 1. Controller calls prepare_batch
@@ -547,7 +572,7 @@ Both are called automatically during `trainer.train()`. For details, see the
 
 The
 [`Evaluator`](https://github.com/areal-project/AReaL/blob/main/areal/utils/evaluator.py)
-runs periodic evaluations on validation sets. Configure via `config.evaluation`. Called
+runs periodic evaluations on validation sets. Configure via `config.evaluator`. Called
 automatically in `trainer.train()`.
 
 ### Metrics Tracking

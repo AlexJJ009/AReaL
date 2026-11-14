@@ -4,12 +4,11 @@
 
 ## 文件
 
-| 文件 | 内容 |
-| --- | --- |
-| `BRIEF.md` | 英文自包含简报：设定、PPO 推导、试过的方法与审稿意见、当前结果、导师建议的两篇 bandit 论文、待讨论的问题 |
-| `PROMPT.md` | 第一条消息的草稿，可按当时的想法改 |
-| `eval_mean4.csv` | 所有 run 各 checkpoint（step 0/30/60/90/120）、两种用户评测的 mean@4 |
-| `train_per_step.csv` | 5 个 run 每步的训练 reward 和 critic EV |
+| 文件                 | 内容                                                                                                     |
+| -------------------- | -------------------------------------------------------------------------------------------------------- |
+| `BRIEF.md`           | 英文自包含简报：设定、PPO 推导、试过的方法与审稿意见、当前结果、导师建议的两篇 bandit 论文、待讨论的问题 |
+| `eval_mean4.csv`     | 所有 run 各 checkpoint（step 0/30/60/90/120）、两种用户评测的 mean@4                                     |
+| `train_per_step.csv` | 5 个 run 每步的训练 reward 和 critic EV                                                                  |
 
 CSV 由 `../../scripts/collect_brief_tables.py` 从备份的 `summary.json` 和 `main.log` 生成。
 

@@ -26,12 +26,11 @@ Fixes #(issue)
 
 - [ ] I have read the
   [Contributing Guide](https://github.com/areal-project/community/blob/main/CONTRIBUTING.md)
-- [ ] Pre-commit hooks pass (`pre-commit run --all-files`)
+- [ ] Pre-commit hooks pass (`pre-commit run --files <changed files>`)
 - [ ] Relevant tests pass; new tests added for new functionality
 - [ ] Documentation updated (if applicable; built with `./docs/build_all.sh`)
-- [ ] Branch is up to date with `main`
-- [ ] Self-reviewed via `/review-pr` command
-- [ ] This PR was created by a coding agent via `/create-pr`
+- [ ] Branch is up to date with the intended base branch
+- [ ] Reviewed the diff and consulted relevant domain expertise
 - [ ] This PR is a breaking change
 
 **Breaking Change Details (if applicable):**

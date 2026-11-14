@@ -4,6 +4,9 @@ Date: 2026-10-09
 
 Status: Accepted
 
+Scope is the Qwen3.5 baseline named below. Later Qwen3 comparisons use separate
+[configurations and experiment settings](../research/tau2/experiments/2026-10-15-qwen3-ppo-grpo-sao.md).
+
 Applies to `examples/tau2/config_grpo.yaml`, `config_sao.yaml`,
 `config_critic_production.yaml`, `examples/tau2/agent.py`, `examples/tau2/train.py`,
 `scripts/tau2/evaluate.py` and the proxy chat-template path in

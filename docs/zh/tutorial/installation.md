@@ -79,7 +79,7 @@ default = true
 ```bash
 # 在 Linux 上使用 CUDA 时添加 `--extra cuda` 以获得完整功能
 uv sync --extra cuda
-# 或者不带 CUDA 支持
+# 不启用可选 GPU extras（未经验证的 CPU 安装方案）
 # uv sync
 # 或者包含开发和测试的额外包
 # uv sync --group dev
@@ -105,43 +105,18 @@ uv sync --extra cuda
 uv pip install -r pyproject.vllm.toml --extra cuda
 ```
 
-#### Flash Attention 预编译 Wheel
+#### Flash Attention 依赖
 
-Flash Attention v2 包含在 `--extra cuda` 中，但 PyPI 仅提供源码分发包，从源码编译耗时约 30 分钟。为跳过编译，请在运行
-`uv sync` **之前**安装**预编译 wheel**。
+两份 manifest 都没有定义 `flash-attn` extra，也没有在标准 `cuda` 捆绑包中直接声明 Flash Attention v2。
+推理后端的依赖可能引入注意力相关包；实际解析结果请查看所选的 lock 文件。
 
-Flash Attention wheel 在编译时与特定 PyTorch 版本绑定。SGLang（默认 `pyproject.toml`）使用 **torch
-2.9**，vLLM（`pyproject.vllm.toml`）使用 **torch 2.10**，请选择对应的 wheel。将 `cpXYZ` 替换为您的 Python
-版本（3.11 对应 `cp311`，3.12 对应 `cp312`）。
+本 fork 的默认 `pyproject.toml` 单独定义了 `sao-math`，其中直接固定了适用于 Python 3.12、Linux x86_64、CUDA
+12.8 和 PyTorch 2.9 的 Flash Attention v2 wheel。这个研究用 extra 与 `cuda`
+分开，`pyproject.vllm.toml` 中也没有它。不要将该 wheel 用于其他 Python 或 PyTorch 版本。
 
-**SGLang**（默认，torch 2.9）：
-
-```bash
-# Python 3.12
-uv pip install "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu128torch2.9-cp312-cp312-linux_x86_64.whl"
-# Python 3.11
-# uv pip install "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu128torch2.9-cp311-cp311-linux_x86_64.whl"
-
-uv sync --extra cuda
-```
-
-**vLLM**（torch 2.10，需要 `pyproject.vllm.toml`）：
-
-```bash
-cp pyproject.vllm.toml pyproject.toml
-cp uv.vllm.lock uv.lock
-# Python 3.12
-uv pip install "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu128torch2.10-cp312-cp312-linux_x86_64.whl"
-# Python 3.11
-# uv pip install "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu128torch2.10-cp311-cp311-linux_x86_64.whl"
-
-uv sync --extra cuda
-```
-
-浏览所有可用 wheel： <https://github.com/mjun0812/flash-attention-prebuild-wheels/releases>。
-
-同样的 `uv sync` 命令也适用于 macOS 和不带 CUDA 支持的 Linux。CUDA 包（包括 flash-attn） 会通过平台标记自动跳过。但是，需要
-CUDA 的训练和推理功能将不可用。此配置仅适用于开发、测试和非 GPU 工作流。
+平台标记检查操作系统和架构，不检测 GPU。即使 Linux/WSL 机器没有 GPU，Linux x86_64 标记仍然匹配； `tms` 只检查 Linux。macOS
+会排除标记为 Linux 的包，但这并不能证明 CPU 安装受支持。 仅使用 CPU 开发时，应按具体检查所需选择依赖，避免启用 GPU extras。这里没有验证通用的
+CPU 训练或推理安装方案。
 
 您也可以单独安装各个 extra，而不是完整的 `cuda` 捆绑包：
 
@@ -149,10 +124,10 @@ CUDA 的训练和推理功能将不可用。此配置仅适用于开发、测试
 - `vllm`：vLLM 推理引擎（在 `pyproject.vllm.toml` 中）
 - `megatron`：Megatron 训练后端
 - `tms`：Torch Memory Saver
-- `flash-attn`：Flash Attention v2
 - `kernels`：Hugging Face Kernels 运行时
-- `cuda-train`：仅训练包（megatron + tms + kernels，不含推理后端）
-- `cuda`：cuda-train + 推理后端 + flash-attn
+- `cuda-train`：megatron + tms + kernels + NVIDIA ModelOpt + TileLang +
+  flash-linear-attention（不含推理后端）
+- `cuda`：cuda-train + 所选推理后端 + PyTorch 包
 
 ### 在训练中使用 Hugging Face Kernels
 

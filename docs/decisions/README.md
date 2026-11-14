@@ -21,7 +21,12 @@ options that were actually considered. Use `NNNN-short-title.md` with an English
 For a genuine reversal, keep the old rationale and link the successor with
 `Supersedes`/`Superseded by`. Do not renumber records or reuse numbers.
 
-## Current records
+Records retain their original scope and settings. Later amendments are linked in each
+record. Numbers are local to this directory. The separate
+[τ² research ADRs](../research/tau2/decisions/README.md) record later research choices.
+Current run and model approvals follow the repository `AGENTS.md`.
+
+## Records
 
 - [0001 Run τ²-Bench through the pinned official harness and AReaL proxy](0001-official-tau2-harness.md)
 - [0002 Use non-thinking Qwen3.5-4B with a 32K episode context for τ²-Bench](0002-tau2-policy-generation-protocol.md)
@@ -32,3 +37,5 @@ For a genuine reversal, keep the old rationale and link the successor with
 - [0007 Carry explicit episode termination and bootstrap flags into GAE](0007-explicit-episode-termination.md)
 - [0008 Run Qwen3.5 FSDP2/SGLang training from a locked uv environment on A100](0008-qwen35-runtime-environment.md)
 - [0009 Schedule τ² episodes with the official runner's retry, exclusion and metric rules](0009-official-tau2-runner-semantics.md)
+- [0010 Train and evaluate τ² on an official and a fixed benchmark variant](0010-tau2-official-and-fixed-benchmark-variants.md)
+- [0011 Train on surviving group members and replay lost τ² tasks once per epoch](0011-tau2-lost-episodes-in-training.md)

@@ -21,6 +21,7 @@ parts:
     - file: tutorial/gsm8k_grpo
   - caption: 最佳实践
     chapters:
+    - file: best_practices/cli_guide
     - file: best_practices/algo_perf
     - file: best_practices/workflow
     - file: best_practices/debugging

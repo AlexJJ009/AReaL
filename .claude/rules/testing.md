@@ -11,7 +11,7 @@ paths:
 
 | Marker                                  | When to Use          |
 | --------------------------------------- | -------------------- |
-| `@pytest.mark.slow`                     | Takes > 10 seconds   |
+| `@pytest.mark.slow`                     | Takes > 30 seconds   |
 | `@pytest.mark.asyncio`                  | Async test functions |
 | `@pytest.mark.skipif(cond, reason=...)` | Conditional skip     |
 | `@pytest.mark.parametrize(...)`         | Parameterized tests  |

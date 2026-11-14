@@ -75,8 +75,9 @@ plus `torch` (tracked for Docker impact only, not API-audited) are listed.
 
 **Scope rules:**
 
-- **sglang-only / vllm-only**: Edit and lock only the affected variant.
-- **shared**: Edit both files; lock both variants.
+- **sglang-only / vllm-only**: Edit only the affected pyproject. The repository lock
+  script regenerates both lockfiles as a pair; review both diffs.
+- **shared**: Edit both pyproject files and regenerate the lockfile pair.
 - **shared-divergent**: The two variants intentionally use different versions of the
   same package. If the user supplies a single target version, **ask which variant(s) to
   apply it to** rather than assuming convergence. If the user supplies two targets
@@ -250,23 +251,17 @@ For each requested package, using the Package Impact Matrix:
    `megatron-bridge` needs a corresponding version bump. Warn if it does but was not
    included in the command.
 
-### Step 2: Lock Dependencies (Variant-Aware)
+### Step 2: Regenerate Lockfiles
 
-Regenerate lock files for each **affected variant**. A variant is affected if any of its
-pyproject file's dependencies were modified. If conflicts arise during locking, do NOT
-attempt to resolve them in this step — just report them and defer resolution to Step 3.
-
-**SGLang variant** (if `pyproject.toml` was modified):
+After editing the affected pyproject files, run the shared script once:
 
 ```bash
 bash scripts/uv_lock.sh
 ```
 
-**vLLM variant** (if `pyproject.vllm.toml` was modified):
-
-```bash
-bash scripts/uv_lock.sh
-```
+It regenerates both `uv.lock` and `uv.vllm.lock`; the pyproject pre-commit hook uses the
+same script. Review both lockfile diffs for changes beyond the requested upgrade. Keep
+dependency edits within the approved scope. Handle resolution conflicts in Step 3.
 
 If `uv lock` fails for either variant:
 
@@ -469,69 +464,15 @@ rm -rf "${REPO_ROOT}/<package>-src"
 pre-commit run --files <changed-file1> <changed-file2>
 ```
 
-### Step 8: Generate Upgrade Summary
+### Step 8: Report and Review the Upgrade
 
-Dump a formatted markdown summary to `upgrade-summary.md` in the repository root (this
-file is gitignored and ephemeral). The summary MUST include:
+In the task response or commit description, summarize version changes, affected
+variants, API compatibility fixes, verification results and unresolved issues. Keep
+supporting evidence in the task's artifact directory outside the source checkout. For a
+failed upgrade, state the failure and the remaining work.
 
-```markdown
-## Dependency Upgrade Summary
-
-**Date:** YYYY-MM-DD
-**Requested:** <original command>
-
-### Version Changes
-
-| Package | Old Version | New Version | Variant(s) |
-| ------- | ----------- | ----------- | ---------- |
-| ...     | ...         | ...         | ...        |
-
-### Dependency Resolution
-
-- <auto-resolved change description>
-- ...
-
-### Dockerfile Changes
-
-- <change description, or "No changes required">
-
-### API Compatibility Audit
-
-#### <package-name> (old → new)
-
-**Breaking changes found:**
-- [file:line] description of change
-
-**Module moves / renames:**
-- [old_path] → [new_path]
-
-**Version-guarded code:**
-- [file:line] status (still needed / can be removed)
-
-**No breaking changes found** _(if clean)_
-
-#### ...
-
-### Unresolved Issues (if any)
-
-- <description of issue and why it could not be auto-resolved>
-```
-
-If the upgrade failed at any step, the summary should still be generated with the
-failure reason clearly documented in the "Unresolved Issues" section.
-
-### Step 9: Create PR and Trigger CI (Optional)
-
-Ask the user if they want to create a PR.
-
-If the user agrees:
-
-1. Load the `create-pr` skill to create the PR.
-1. Trigger the CI workflow manually via `.github/workflows/build-docker-image.yml` (only
-   if the Dockerfile was modified or inference backend versions changed).
-1. The Docker build CI builds both sglang and vllm images, then automatically triggers
-   testing on each. Debug until the overall workflow succeeds.
-1. If you encounter issues that cannot be resolved, ask the user for help.
+Review the diff and relevant checks before committing or merging the research branch.
+Publishing and any remote CI jobs follow the repository's approval requirements.
 
 ______________________________________________________________________
 

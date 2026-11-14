@@ -4,6 +4,12 @@ Date: 2026-10-09
 
 Status: Accepted
 
+Scope is the original `config_critic_production.yaml` recipe. Later research uses
+[expanded data](../research/tau2/critic/critic0-expanded-data.md) and a separate
+[head-initialization path](../research/tau2/decisions/0012-critic-head-init.md). The
+[critic 510 selection](../research/tau2/decisions/0014-sao-critic-510-step55.md) amends
+the final-checkpoint requirement for SAO 534 and records its test-selection bias.
+
 Applies to `scripts/tau2/train_critic.py`, `scripts/tau2/train_critic.sh`,
 `scripts/tau2/run.sh data critic`, `examples/tau2/config_critic_production.yaml`, and
 the SAO critic input `TAU2_CRITIC_PATH` in `examples/tau2/config_sao.yaml`.

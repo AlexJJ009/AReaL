@@ -142,7 +142,8 @@ teacher:
   distill_loss_weight: 0.005
 ```
 
-Example command using local scheduler:
+The [train teacher example](../../../examples/distillation/gsm8k_grpo_distill_mode_trainEngine.yaml)
+uses this nested configuration. Run it with the local scheduler:
 
 ```bash
 python3 examples/math/gsm8k_rl.py \

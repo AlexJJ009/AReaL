@@ -4,6 +4,10 @@ Date: 2026-10-09
 
 Status: Accepted
 
+Scope is the A100/CUDA-compat environment described below. Its build and launch
+instructions depend on that host setup. Current machine availability and launch tools
+follow the workspace instructions.
+
 Applies to `pyproject.toml` (`sao-math` extra), `uv.lock`,
 `scripts/sao/bootstrap_env.sh`, `scripts/sao/runtime_env.sh`,
 `scripts/sao/check_dependencies.py`, `scripts/sao/run_ppo.sh`, `scripts/sao/run_sao.sh`,

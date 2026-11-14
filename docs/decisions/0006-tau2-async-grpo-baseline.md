@@ -4,6 +4,11 @@ Date: 2026-10-09
 
 Status: Accepted
 
+Scope is the original Qwen3.5 `config_grpo.yaml` baseline.
+[ADR 0011](0011-tau2-lost-episodes-in-training.md) amends complete-group handling. Later
+Qwen3 comparison budgets are recorded in the
+[comparison experiment](../research/tau2/experiments/2026-10-15-qwen3-ppo-grpo-sao.md).
+
 Applies to `examples/tau2/config_grpo.yaml`, `examples/tau2/train.py`,
 `scripts/tau2/train_mixed.sh`, `scripts/tau2/train_{airline,retail,telecom}.sh` and
 `scripts/tau2/run.sh policy <domain> grpo`.

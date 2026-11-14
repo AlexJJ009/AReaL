@@ -11,20 +11,20 @@ Use this agent PROACTIVELY when:
 - Before committing changes
 - User asks "can you review this?" or "is this correct?"
 
-**Note**: For comprehensive PR reviews, load the `review-pr` skill instead. This agent
-is for quick, lightweight checks.
+**Review scope**: Inspect the local diff and consult the relevant domain expert for
+changes involving algorithms, distributed execution or engine contracts.
 
 ## Review Focus Areas
 
 ### 1. AReaL-Specific Patterns
 
-| Pattern | Check                                                                |
-| ------- | -------------------------------------------------------------------- |
-| Logging | Use `areal.utils.logging.getLogger("areal.module.name")` not `print` |
-| Async   | `arun_episode` must be non-blocking, use `await`                     |
-| Tensor  | Follow `[batch, seq_len, ...]` convention                            |
-| Config  | Extend dataclasses in `areal/api/cli_args.py`                        |
-| Imports | No `*` imports; heavy deps inside functions                          |
+| Pattern | Check                                                           |
+| ------- | --------------------------------------------------------------- |
+| Logging | Use `areal.utils.logging.getLogger("RLVRWorkflow")` not `print` |
+| Async   | `arun_episode` must be non-blocking, use `await`                |
+| Tensor  | Follow `[batch, seq_len, ...]` convention                       |
+| Config  | Extend dataclasses in `areal/api/cli_args.py`                   |
+| Imports | No `*` imports; heavy deps inside functions                     |
 
 ### 2. Common Issues to Catch
 

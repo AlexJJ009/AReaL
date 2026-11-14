@@ -4,6 +4,11 @@ Date: 2026-10-10
 
 Status: Accepted
 
+The patch inventory below records the 2026-10-10 decision. Later fixed-v3 additions are
+recorded in [benchmark variants](../research/tau2/benchmark-variants.md) and
+`examples/tau2/benchmark_fixes.json`. Local GRPO and critic production configs default
+to `official`. Fixed runs select `econfig.benchmark_variant=fixed` with matching data.
+
 Applies to `examples/tau2/benchmark_variant.py`, `examples/tau2/benchmark_fixes.json`,
 `examples/tau2/agent.py`, `examples/tau2/train.py`, `scripts/tau2/evaluate.py`,
 `scripts/tau2/train_critic.py`, `scripts/tau2/build_fixed_data.py` and

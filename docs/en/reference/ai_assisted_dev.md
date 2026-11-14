@@ -47,24 +47,25 @@ In AReaL, the directly executable Codex workflows are **repo-local skills** unde
 `.agents/skills/`. Codex does not use `/` commands here as its primary workflow surface.
 Instead, you ask Codex to use the matching skill and carry out the workflow end to end.
 
-| Skill                   | Purpose                                                            |
-| ----------------------- | ------------------------------------------------------------------ |
-| `add-dataset`           | Add a new dataset loader under `areal/dataset/`                    |
-| `add-workflow`          | Create a new `RolloutWorkflow` implementation                      |
-| `add-reward`            | Implement a new reward function                                    |
-| `add-archon-model`      | Add a new model architecture to the Archon engine                  |
-| `add-unit-tests`        | Add or extend unit tests                                           |
-| `debug-distributed`     | Troubleshoot hangs, OOMs, NCCL issues, and launcher misconfig      |
-| `commit-conventions`    | Prepare a Conventional Commit message before committing            |
-| `review-pr`             | Run the read-only PR review workflow with risk analysis            |
-| `create-pr`             | Rebase, squash, prepare metadata, and create or update a GitHub PR |
-| `translate-doc-zh`      | Translate `docs/en/` content into `docs/zh/`                       |
-| `update-docker-image`   | Update runtime image dependencies and drive the Docker PR flow     |
-| `upgrade-megatron-core` | Audit and upgrade Megatron-Core compatibility                      |
-| `upgrade-vllm`          | Audit and upgrade vLLM compatibility                               |
+| Skill                | Purpose                                                       |
+| -------------------- | ------------------------------------------------------------- |
+| `add-dataset`        | Add a new dataset loader under `areal/dataset/`               |
+| `add-workflow`       | Create a new `RolloutWorkflow` implementation                 |
+| `add-reward`         | Implement a new reward function                               |
+| `add-archon-model`   | Add a new model architecture to the Archon engine             |
+| `add-unit-tests`     | Add or extend unit tests                                      |
+| `debug-distributed`  | Troubleshoot hangs, OOMs, NCCL issues, and launcher misconfig |
+| `commit-conventions` | Prepare a Conventional Commit message before committing       |
+| `translate-doc-zh`   | Translate `docs/en/` content into `docs/zh/`                  |
 
-These skills are the answer to "what is Codex's directly executable workflow in this
-repository?".
+Dependency upgrades use the `upgrade-deps` skill. Check its examples against the current
+implementation before applying them.
+
+### Local review and commits
+
+Inspect the branch diff, consult the relevant domain expert and run the checks for the
+changed files. Use `commit-conventions` for commit messages and review the changes
+before a local merge. Publishing to a remote follows the repository approval rules.
 
 ### Custom Codex agents
 
@@ -91,13 +92,13 @@ when to do so.
 
 Codex: [loads add-workflow, inspects areal/workflow/, implements changes]
 
-> Review this PR
+> Review this branch before merging
 
-Codex: [loads review-pr, analyzes the diff, consults the matching expert agents]
+Codex: [inspects the diff, consults relevant experts, runs focused checks]
 
-> Create or update the PR
+> Commit the reviewed changes
 
-Codex: [loads create-pr, checks branch state, prepares the PR workflow]
+Codex: [uses commit-conventions and commits the verified change set]
 ```
 
 ## OpenCode Compatibility
@@ -125,18 +126,10 @@ opencode
 OpenCode reads `AGENTS.md` and discovers agents, commands, skills, and plugins from
 `.opencode/`. It can also read `.claude/skills/` where relevant.
 
-### OpenCode workflow surface
+### OpenCode workflows
 
-OpenCode keeps its own command and agent system:
-
-| Command             | Purpose                                    |
-| ------------------- | ------------------------------------------ |
-| `/create-pr`        | Rebase, squash commits, and create PR      |
-| `/review-pr`        | Intelligent code review with risk analysis |
-| `/translate-doc-zh` | Translate English documentation to Chinese |
-
-OpenCode-specific assets live in `.opencode/agents/`, `.opencode/command/`,
-`.opencode/skills/`, and `.opencode/package.json`.
+Use the implementation skills under `.opencode/skills/` and the shared skills under
+`.agents/skills/`. Domain expert definitions live in `.opencode/agents/`.
 
 ## Claude Code Compatibility
 
@@ -155,9 +148,7 @@ AReaL/
 |   +-- agents/              # Codex agent config files and instruction markdown
 |-- .opencode/
 |   |-- agents/              # OpenCode expert agents
-|   |-- command/             # OpenCode slash commands
-|   |-- skills/              # OpenCode skills
-|   +-- package.json         # OpenCode plugin dependencies
+|   +-- skills/              # OpenCode skills
 +-- .claude/
     |-- agents/              # Claude Code agents
     |-- commands/            # Claude Code commands
@@ -169,15 +160,15 @@ AReaL/
 
 AReaL supports all three harnesses, but each one exposes reusable workflows differently:
 
-| Concept                          | Codex                                   | OpenCode                                  | Claude Code                                       |
-| -------------------------------- | --------------------------------------- | ----------------------------------------- | ------------------------------------------------- |
-| Project context                  | `AGENTS.md`                             | `AGENTS.md`                               | `CLAUDE.md`                                       |
-| Repo workflows                   | `.agents/skills/`                       | `.opencode/skills/`, `.opencode/command/` | `.claude/skills/`, `.claude/commands/`            |
-| Custom subagents                 | `.codex/config.toml` + `.codex/agents/` | `.opencode/agents/`                       | `.claude/agents/`                                 |
-| Primary executable workflow form | Repo-local skill                        | Slash command or skill                    | Slash command or skill                            |
-| Agent dispatch                   | Explicit custom agent invocation        | `task(subagent_type="...", ...)`          | Automatic routing                                 |
-| Expert names                     | `fsdp-expert`, `archon-expert`, ...     | `fsdp-expert`, `archon-expert`, ...       | `fsdp-engine-expert`, `archon-engine-expert`, ... |
-| Commit helper                    | `commit-conventions` skill              | `commit-conventions` skill                | `commit-conventions` skill + `/gen-commit-msg`    |
+| Concept                          | Codex                                   | OpenCode                               | Claude Code                                       |
+| -------------------------------- | --------------------------------------- | -------------------------------------- | ------------------------------------------------- |
+| Project context                  | `AGENTS.md`                             | `AGENTS.md`                            | `CLAUDE.md`                                       |
+| Repo workflows                   | `.agents/skills/`                       | `.opencode/skills/`, `.agents/skills/` | `.claude/skills/`, `.claude/commands/`            |
+| Custom subagents                 | `.codex/config.toml` + `.codex/agents/` | `.opencode/agents/`                    | `.claude/agents/`                                 |
+| Primary executable workflow form | Repo-local skill                        | Slash command or skill                 | Slash command or skill                            |
+| Agent dispatch                   | Explicit custom agent invocation        | `task(subagent_type="...", ...)`       | Automatic routing                                 |
+| Expert names                     | `fsdp-expert`, `archon-expert`, ...     | `fsdp-expert`, `archon-expert`, ...    | `fsdp-engine-expert`, `archon-engine-expert`, ... |
+| Commit helper                    | `commit-conventions` skill              | `commit-conventions` skill             | `commit-conventions` skill + `/gen-commit-msg`    |
 
 Claude Code also ships with additional general-purpose agents:
 
@@ -195,7 +186,7 @@ AReaL/
 +-- .claude/
     |-- agents/            # 5 domain experts + 3 general-purpose (8 total)
     |-- skills/            # Guided workflows (shared with OpenCode)
-    |-- commands/          # Automated actions (create-pr, gen-commit-msg, review-pr)
+    |-- commands/          # Commit-message and documentation commands
     |-- hooks/             # Pre/post action hooks
     +-- rules/             # Code quality standards
 ```

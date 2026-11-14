@@ -4,6 +4,13 @@ Date: 2026-10-09
 
 Status: Accepted
 
+The original Qwen3.5 protocol is recorded below.
+[ADR 0010](0010-tau2-official-and-fixed-benchmark-variants.md) supersedes the
+unchanged-data choice for fixed runs, and
+[ADR 0009](0009-official-tau2-runner-semantics.md) fixes the reported metrics. Later
+task pools and the 100-task PPO evaluation are described in
+[training settings](../research/tau2/training-setup.md).
+
 Applies to `examples/tau2/train.py`, `examples/tau2/utils.py`,
 `examples/tau2/config_*.yaml`, `scripts/tau2/evaluate.py`,
 `scripts/tau2/upload_metrics.py` and `scripts/tau2/train_critic.py`.

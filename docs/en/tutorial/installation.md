@@ -85,7 +85,7 @@ If your network connection is stable, you can skip this step.
 ```bash
 # Use `--extra cuda` on Linux with CUDA for full functionality
 uv sync --extra cuda
-# Or without CUDA support
+# Without optional GPU extras (not a validated CPU setup)
 # uv sync
 # Or with additional packages for development and testing
 # uv sync --group dev
@@ -123,48 +123,22 @@ Alternatively, without replacing `pyproject.toml`:
 uv pip install -r pyproject.vllm.toml --extra cuda
 ```
 
-#### Flash Attention Pre-built Wheels
+#### Flash Attention Dependencies
 
-Flash Attention v2 is included in `--extra cuda`, but PyPI only ships source
-distributions that require CUDA compilation (~30 min). To skip compilation, install a
-**pre-built wheel** before running `uv sync`.
+Neither manifest defines a `flash-attn` extra or directly includes Flash Attention v2 in
+the standard `cuda` bundle. Backend dependencies may bring attention packages; check the
+selected lockfile for resolved dependencies.
 
-Flash Attention wheels are linked against a specific PyTorch version at compile time.
-SGLang (the default `pyproject.toml`) uses **torch 2.9** and vLLM
-(`pyproject.vllm.toml`) uses **torch 2.10**, so you must pick the matching wheel.
-Replace `cpXYZ` with your Python version (`cp311` for 3.11, `cp312` for 3.12).
+This fork's default `pyproject.toml` separately defines `sao-math`, which directly pins
+a Flash Attention v2 wheel for Python 3.12, Linux x86_64, CUDA 12.8 and PyTorch 2.9.
+This research extra is separate from `cuda` and is absent from `pyproject.vllm.toml`. Do
+not reuse its wheel for a different Python or PyTorch version.
 
-**SGLang** (default, torch 2.9):
-
-```bash
-# Python 3.12
-uv pip install "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu128torch2.9-cp312-cp312-linux_x86_64.whl"
-# Python 3.11
-# uv pip install "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu128torch2.9-cp311-cp311-linux_x86_64.whl"
-
-uv sync --extra cuda
-```
-
-**vLLM** (torch 2.10, requires `pyproject.vllm.toml`):
-
-```bash
-cp pyproject.vllm.toml pyproject.toml
-cp uv.vllm.lock uv.lock
-# Python 3.12
-uv pip install "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu128torch2.10-cp312-cp312-linux_x86_64.whl"
-# Python 3.11
-# uv pip install "https://github.com/mjun0812/flash-attention-prebuild-wheels/releases/download/v0.7.16/flash_attn-2.8.3+cu128torch2.10-cp311-cp311-linux_x86_64.whl"
-
-uv sync --extra cuda
-```
-
-Browse all available wheels at
-<https://github.com/mjun0812/flash-attention-prebuild-wheels/releases>.
-
-The same `uv sync` command also works on macOS and Linux without CUDA support. CUDA
-packages (including flash-attn) are automatically skipped via platform markers. However,
-training and inference features requiring CUDA will not be available. This configuration
-is suitable only for development, testing, and non-GPU workflows.
+Platform markers check the OS and architecture, not GPU availability. Linux x86_64
+markers still match on a Linux/WSL machine without a GPU; `tms` checks only Linux. macOS
+excludes packages marked for Linux, but that does not establish a supported CPU
+installation. For CPU-only development, select dependencies for the specific checks you
+need and avoid GPU extras. No general CPU training or inference setup is validated here.
 
 You can also install individual extras instead of the full `cuda` bundle:
 
@@ -172,10 +146,10 @@ You can also install individual extras instead of the full `cuda` bundle:
 - `vllm`: vLLM inference engine (in `pyproject.vllm.toml`)
 - `megatron`: Megatron training backend
 - `tms`: Torch Memory Saver
-- `flash-attn`: Flash Attention v2
 - `kernels`: Hugging Face Kernels runtime
-- `cuda-train`: Training packages only (megatron + tms + kernels, no inference backend)
-- `cuda`: cuda-train + inference backend + flash-attn
+- `cuda-train`: megatron + tms + kernels + NVIDIA ModelOpt + TileLang +
+  flash-linear-attention (no inference backend)
+- `cuda`: cuda-train + the selected inference backend + PyTorch packages
 
 ### Using Hugging Face Kernels in Training
 

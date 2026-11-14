@@ -27,14 +27,16 @@ availability, paths and launch tools belong in the current workspace instruction
 
 - Use `codex/<topic>` branches based on `codex/sao-math`. Keep run outputs and temporary
   artifacts outside the source checkout.
-- GitHub publishing requires the user's approval and a secret scan of the diff. The
-  upstream `create-pr` and `review-pr` workflows do not apply to this research fork.
+- Review changes and relevant checks before committing or merging research branches.
+  GitHub publishing requires the user's approval and a secret scan of the diff.
 - Run pre-commit on changed files only (`pre-commit run --files <changed>`).
 - Check skill examples and expert advice against the current implementation. Prefer
   compatible upstream fixes; keep local corrections small when upstream is unchanged.
 - Update existing research records and indexes. Add a document when a distinct
   experiment or decision needs its own record; link to results instead of copying them.
   Date status updates and keep historical observations tied to their run and settings.
+  Delete completed cleanup plans, disposable prompts and obsolete backups after use;
+  keep reusable instructions and unique experimental evidence.
 
 ### LLM APIs for users and judges
 
@@ -79,7 +81,7 @@ uv run python docs/generate_cli_docs.py
 - No hardcoded secrets, paths, or endpoints.
 - No skipping pre-commit hooks.
 - No guessing cluster configs or rebuilding CUDA/driver stacks.
-- Integration tests require multi-node hardware -- explain skips explicitly.
+- Check each test's hardware and service requirements; explain unavailable checks.
 
 **Always do**:
 
@@ -136,8 +138,8 @@ ______________________________________________________________________
 | Reward function  | `xxx_reward_fn` | `gsm8k_reward_fn`, `geometry3k_reward_fn` |
 
 **Logging**: `areal.utils.logging.getLogger(name)` with **PascalCase** names -- never
-`print` or `logging.__name__`. Per-rank format: `[{Component} Rank {N}]`. Register new
-loggers with color in `areal/utils/logging.py`.
+`print` or `getLogger(__name__)`. Per-rank format: `[{Component} Rank {N}]`. Register
+new loggers with color in `areal/utils/logging.py`.
 
 **Performance**:
 
@@ -187,9 +189,9 @@ step-by-step implementation guides.
 | Agent configs     | `.opencode/agents/*.md` (frontmatter)   | `.codex/config.toml` + `.codex/agents/*.toml` + `*.md` |
 | Skills            | `.opencode/skills/` + `.agents/skills/` | `.agents/skills/<name>/SKILL.md`                       |
 
-Directly executable workflows (both platforms): `add-workflow`, `translate-doc-zh`. The
-`create-pr` and `review-pr` skills are upstream PR tooling and are not used on this
-fork.
+Implementation and maintenance skills live in `.agents/skills/`. For local review,
+inspect the diff with the relevant domain expert and run the focused verification checks
+before committing or merging.
 
 ______________________________________________________________________
 
@@ -257,11 +259,11 @@ ______________________________________________________________________
 
 *Applies to: `**/tests/**`, `test_*.py`*
 
-| Marker                                  | When                             |
-| --------------------------------------- | -------------------------------- |
-| `@pytest.mark.slow`                     | > 10s (excluded from default CI) |
-| `@pytest.mark.slow` + `@pytest.mark.ci` | Slow but must run in CI          |
-| `@pytest.mark.asyncio`                  | Async tests                      |
+| Marker                                  | When                                |
+| --------------------------------------- | ----------------------------------- |
+| `@pytest.mark.slow`                     | > 30s (excluded unless marked `ci`) |
+| `@pytest.mark.slow` + `@pytest.mark.ci` | Slow but must run in CI             |
+| `@pytest.mark.asyncio`                  | Async tests                         |
 
 - Naming: `test_<what>_<condition>_<expected>()` with Arrange/Act/Assert.
 - GPU: skip gracefully (`@pytest.mark.skipif(not CUDA_AVAILABLE, reason="...")`).
@@ -269,19 +271,17 @@ ______________________________________________________________________
 - Assertions: `torch.testing.assert_close()` with explicit `rtol`/`atol`; prefer
   `tmp_path`, `monkeypatch`.
 
-| Suite       | Command                       | GPU       |
-| ----------- | ----------------------------- | --------- |
-| Unit        | `pytest tests/test_*.py`      | No        |
-| GRPO        | `pytest tests/grpo/`          | Yes       |
-| FSDP        | `pytest tests/test_fsdp_*.py` | Yes       |
-| Distributed | `pytest tests/torchrun/`      | Multi-GPU |
+Select test files by their actual dependencies. Top-level `tests/test_*.py` includes GPU
+and service-dependent tests. Some distributed checks use one host, while others need
+multiple GPUs or nodes. The CI marker filter is `(not slow or ci)` with an additional
+backend exclusion; see `.github/workflows/test-areal.yml`.
 
 ______________________________________________________________________
 
 ## Collaboration & review
 
-- **Branches**: `codex/<topic>` in their own worktree, merged into `codex/sao-math` (see
-  the research section). GitHub publishing requires approval.
+- **Branches**: review `codex/<topic>` changes before merging into `codex/sao-math`. Use
+  separate worktrees for concurrent work. GitHub publishing requires approval.
 - **Commits**: Conventional Commits (e.g., `feat:`, `fix:`, `docs:`, `style:`), ~72 char
   subject, imperative voice; load the `commit-conventions` skill before `git commit`.
 - **Pre-merge**: pre-commit on the changed files; doc-only edits need at least mdformat.

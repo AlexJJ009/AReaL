@@ -170,16 +170,21 @@ def main(args):
 
     # 3. 定义工作流配置（在工作进程上导入）
     workflow_kwargs = dict(
-        reward_fn="areal.reward.gsm8k.gsm8k_reward_fn",
-        gconfig=config.gconfig,
-        tokenizer=config.tokenizer_path,
+        temperature=config.gconfig.temperature,
+        top_p=config.gconfig.top_p,
+        max_tokens=config.gconfig.max_tokens,
+        max_completion_tokens=config.gconfig.max_new_tokens,
     )
+    eval_workflow_kwargs = workflow_kwargs.copy()
+    eval_workflow_kwargs["temperature"] = 0.6
 
     # 4. 使用 PPOTrainer 进行训练
     with PPOTrainer(config, train_dataset=train_dataset, valid_dataset=valid_dataset) as trainer:
         trainer.train(
-            workflow="areal.workflow.rlvr.RLVRWorkflow",
+            workflow="areal.workflow.openai.math_agent.MathAgent",
             workflow_kwargs=workflow_kwargs,
+            eval_workflow="areal.workflow.openai.math_agent.MathAgent",
+            eval_workflow_kwargs=eval_workflow_kwargs,
         )
 ```
 
@@ -222,7 +227,17 @@ PPOTrainer（控制器进程）
 
 ### 工作流规范
 
-在 `examples/math/gsm8k_rl.py` 中，工作流指定为字符串，以便在远程工作进程上动态导入：
+`examples/math/gsm8k_rl.py` 使用
+[`MathAgent`](https://github.com/areal-project/AReaL/blob/main/areal/workflow/openai/math_agent.py)，
+通过导入字符串让工作进程动态实例化。它的 `run` 方法通过兼容 OpenAI 的 chat completions API 发送数据集中的消息，再用
+`math_verify.parse` 和 `math_verify.verify` 对照 `data["answer"]`
+计算二元奖励。训练使用上面的生成参数；评估使用相同的 agent，将 temperature 设为 0.6。 此 API 的用法见
+[agentic RL 指南](agentic_rl.md)。
+
+### RLVRWorkflow：另一种低级工作流
+
+[`RLVRWorkflow`](https://github.com/areal-project/AReaL/blob/main/areal/workflow/rlvr.py)
+仍受支持。选择这种实现时，应将 agent 和对应的关键字参数一并替换为低级工作流及其参数：
 
 ```python
 trainer.train(
@@ -230,6 +245,12 @@ trainer.train(
     workflow_kwargs={
         "reward_fn": "areal.reward.gsm8k.gsm8k_reward_fn",
         "gconfig": config.gconfig,
+        "tokenizer": config.tokenizer_path,
+    },
+    eval_workflow="areal.workflow.rlvr.RLVRWorkflow",
+    eval_workflow_kwargs={
+        "reward_fn": "areal.reward.gsm8k.gsm8k_reward_fn",
+        "gconfig": config.gconfig.new(temperature=0.6),
         "tokenizer": config.tokenizer_path,
     },
 )
@@ -317,6 +338,8 @@ TrainController           训练工作进程
 - 轨迹完成时发送 HTTP 回调
 
 #### 请求流程
+
+以下示意使用上面的低级 `RLVRWorkflow` 实现及其关键字参数；`MathAgent` 通过 agent API 执行，不使用 `arun_episode`。
 
 ```python
 # 1. 控制器调用 prepare_batch
@@ -512,7 +535,7 @@ AReaL 提供两种检查点机制：
 ### 评估
 
 [`Evaluator`](https://github.com/areal-project/AReaL/blob/main/areal/utils/evaluator.py)
-在验证集上运行定期评估。通过 `config.evaluation` 配置。在 `trainer.train()` 中自动调用。
+在验证集上运行定期评估。通过 `config.evaluator` 配置。在 `trainer.train()` 中自动调用。
 
 ### 指标跟踪
 

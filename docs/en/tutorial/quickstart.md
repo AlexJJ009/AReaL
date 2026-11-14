@@ -15,8 +15,8 @@ To run the experiment, you will need:
   [examples/math/gsm8k_grpo.yaml](https://github.com/areal-project/AReaL/blob/main/examples/math/gsm8k_grpo.yaml)
 
 Our training scripts will automatically download the dataset (openai/gsm8k) and model
-(Qwen/Qwen2-1.5B-Instruct). To run the example with default configuration, execute from
-the repository directory:
+(Qwen/Qwen2.5-1.5B-Instruct). To run the example with default configuration, execute
+from the repository directory:
 
 ```
 python3 examples/math/gsm8k_rl.py --config examples/math/gsm8k_grpo.yaml scheduler.type=local experiment_name=<your experiment name> trial_name=<your trial name>

@@ -25,11 +25,13 @@
   v3/v4 标注上的离线验证 （G+T recall 约 80%，U3 约 57%；约 30% 的 agent 致败被误判为用户错误）。
 - [user-error-detectors/](user-error-detectors/REPORT.md)：规则、gold、因果 judge 三类检测器在标注集和
   critic 前向边界上的离线比较。训练轨迹上用户致败几乎都是 U1，失败门控的 U1 规则 precision 约 82%，judge 没有增量；
-  训练检测器定为失败门控的 U1 规则。
+  这是当时的检测器选择；10-19 后已放弃检测器主线，见[问题与计划 §3](research-direction/problem-and-plan.md)。
 
 ### 训练
 
-- [training-setup.md](training-setup.md)：题目划分、运行约定、训练侧对丢失 episode 的处理。
+- [training-setup.md](training-setup.md)：早期 99/60 题设置、后续 PPO 范围差异，以及训练侧对丢失 episode 的处理。
+- [experiments/2026-10-24-qwenuser-no-telecom.md](experiments/2026-10-24-qwenuser-no-telecom.md)：Qwen
+  用户、无 Telecom 的 2×2 和 seed-43 复现，结果截至 10-30。
 - [training-data.md](training-data.md)：AReaL-tau2-data 的核查、筛选、pack 和 Telecom pack。
 - [critic/](critic/README.md)：critic 实验（扩数据、value head、EV 上限、数据配比、case study）。
 - [sao-runs.md](sao-runs.md)：SAO mix pack + critic 510 第 55 步。
@@ -57,6 +59,15 @@
 
 ### 研究方向与决策
 
+- [compliance-erosion-case-study/](compliance-erosion-case-study/REPORT.md)：训练前后 policy
+  合规变化，保留不同标注版本的定义与校准。
+
+- [train-test-coverage/](train-test-coverage/REPORT.md)：训练与测试的能力覆盖差异及人工检查。
+
+- [injection/DESIGN.md](injection/DESIGN.md)：用户错误注入器设计（2026-11-09 草案，待讨论；未实现、未运行）。
+
 - [research-direction/](research-direction/README.md)：问题定义、分析、相关工作、方法草案附录、审稿。
+
 - [decisions/](decisions/README.md)：决策记录（ADR）。
+
 - [experiments/](experiments/README.md)：实验记录：每个实验一份，含假设、设置、运行记录和结果。

@@ -10,7 +10,7 @@ Use this agent PROACTIVELY when:
 - User has made code changes and is about to commit
 - User asks "is this ready to commit?" or "can you check this?"
 - After implementing a feature or fix
-- Before creating a PR
+- Before merging a research branch
 
 ## Verification Workflow
 
@@ -43,7 +43,6 @@ pre-commit run --files <changed-file1> <changed-file2>
 | mdformat     | Markdown formatting                                         |
 | clang-format | C/C++ formatting                                            |
 | nbstripout   | Strip Jupyter notebook outputs                              |
-| autoflake    | Remove unused imports                                       |
 
 ### Phase 3: Run Tests (If Applicable)
 
@@ -64,17 +63,10 @@ uv run pytest tests/test_utils.py -v
 Follow the workspace's execution rules before running checks. Report any coverage gap
 when existing tests do not exercise the changed behavior.
 
-**Test categories:**
-
-| Category    | Command                       | GPU Required   |
-| ----------- | ----------------------------- | -------------- |
-| Unit tests  | `pytest tests/test_*.py`      | No             |
-| GRPO tests  | `pytest tests/grpo/`          | Yes            |
-| FSDP tests  | `pytest tests/test_fsdp_*.py` | Yes            |
-| Distributed | `pytest tests/torchrun/`      | Yes, multi-GPU |
-
-**Auto-skip GPU tests when no GPU**: If GPU is not available, skip GPU-required test
-categories.
+Inspect test markers, fixtures and launch code to identify CPU, GPU, service and
+distributed requirements. Top-level test files include hardware-dependent checks. The CI
+marker filter is `(not slow or ci)` plus the selected backend exclusion in
+`.github/workflows/test-areal.yml`. Report unavailable tests separately from passes.
 
 ### Phase 4: Documentation Checks
 
@@ -135,19 +127,19 @@ After auto-fix, remind user:
 
 ### Pre-commit Fails
 
-| Issue         | Solution                              |
-| ------------- | ------------------------------------- |
-| Ruff errors   | Usually auto-fixed; re-run to verify  |
-| Type errors   | Fix manually; Ruff shows line numbers |
-| Import errors | Check for typos, missing deps         |
+| Issue         | Solution                                       |
+| ------------- | ---------------------------------------------- |
+| Ruff errors   | Usually auto-fixed; re-run to verify           |
+| Type errors   | Use the project's type checker when configured |
+| Import errors | Check for typos, missing deps                  |
 
 ### Tests Fail
 
-| Issue        | Solution                                   |
-| ------------ | ------------------------------------------ |
-| GPU required | Skip with note; CI will run                |
-| Missing deps | `uv sync --group dev`                      |
-| Timeout      | Increase timeout or skip distributed tests |
+| Issue        | Solution                                      |
+| ------------ | --------------------------------------------- |
+| GPU required | Report the missing hardware and pending check |
+| Missing deps | `uv sync --group dev`                         |
+| Timeout      | Increase timeout or skip distributed tests    |
 
 ### Cannot Run Tests
 
@@ -156,4 +148,4 @@ If tests cannot be run locally:
 1. First check GPU availability
 1. Document which tests were skipped
 1. Explain why (GPU, multi-node, etc.)
-1. Note that CI will run them
+1. State which checks remain unverified

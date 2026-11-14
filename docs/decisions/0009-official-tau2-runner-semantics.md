@@ -4,6 +4,11 @@ Date: 2026-10-09
 
 Status: Accepted
 
+The training rejection and group-abort rules below are partly superseded by
+[ADR 0011](0011-tau2-lost-episodes-in-training.md). Judge configuration was later
+separated from the user simulator in the
+[judge ADR](../research/tau2/decisions/0002-nl-judge-decoupled.md).
+
 Supersedes the failure-classification part of [ADR 0001](0001-official-tau2-harness.md).
 
 Applies to `examples/tau2/official_runner.py`, `examples/tau2/agent.py`,

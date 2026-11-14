@@ -3,14 +3,15 @@
 > 来源：原 README 第 7、10.5、11 节。拆分前的全文见 git 提交 b8d95027 中的
 > docs/research/2026-10-09-tau2-high-baseline-audit/README.md。
 
-## 1 official 与 fixed 两个变体（当前定义）
+## 1 official 与 fixed 两个变体（固定版本定义）
 
 决策记录见 [ADR 0010](../../decisions/0010-tau2-official-and-fixed-benchmark-variants.md)。
 
 - `official` 是 tau2-bench `b7ea907` 原样，用于和榜单比较。
 - `fixed` 用于训练。
 
-评测时两个变体都报，fixed 的数字不单独报。用 `econfig.benchmark_variant` 选择变体，所有配置的默认值都是 `official`。
+早期比较同时报告 official 与 fixed。用 `econfig.benchmark_variant` 选择变体：GRPO 和 critic production
+配置默认 `official`，PPO 配置默认 `fixed`；各次实验的题集和比较范围见对应运行记录。
 
 ### 1.1 fixed 包含什么
 
@@ -22,7 +23,7 @@
 | 评分         | 两条转人工规则，见 §1.3                                          | 我们                                                                        |
 | 训练集       | Retail train 去掉与 test 重复的 5 题，见 §1.4                    | 我们                                                                        |
 
-- **官方没有修。**`b7ea907` 之后，main 没有改过 Airline 和 Retail 的数据、工具或评估器（§2）。
+- **当时的上游核查**：在 §2 记录的范围内，`b7ea907` 之后的 main 未改动 Airline 和 Retail 的数据、工具或评估器。
 - **#580 没有作为代码合入**。它的作用是：gold 写操作执行抛错时，DB 判定不算通过。fixed 下，`check_gold_replay.py` 没有查出抛错的
   gold 写操作，合入它不会改变任何分数。
 - **社区里不采用的修改**：
