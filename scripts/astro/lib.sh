@@ -20,11 +20,15 @@ export PATH=$HOME/.local/bin:$D/bin:$PATH
 export no_proxy=localhost,127.0.0.1,::1 NO_PROXY=localhost,127.0.0.1,::1
 # Our Codex config: the CPA provider and the guard hook. /root/.codex is never used.
 export CODEX_HOME=$HOME/.codex-cpa
+# Default working directory: the workspace root, not /root (SSH default).
+cd "$D"
 
 # resolve <branch>  ->  sets WT (its worktree) and ART (_artifacts/AReaL/<slug>, created if missing)
+# The slug is always the branch name with / -> -, including for the primary checkout (Areal/).
 resolve() {
   WT=$(git -C "$REPO" worktree list --porcelain | awk -v b="refs/heads/$1" '/^worktree /{w=substr($0,10)} $0=="branch "b{print w}')
   if [ -z "$WT" ]; then echo "no worktree for branch $1; create it with bin/new-worktree.sh" >&2; return 1; fi
-  if [ "$WT" = "$REPO" ]; then ART=$D/_artifacts/AReaL/main; else ART=$D/_artifacts/AReaL/$(basename "$WT"); fi
+  local slug=${1//\//-}
+  ART=$D/_artifacts/AReaL/$slug
   mkdir -p "$ART"
 }
