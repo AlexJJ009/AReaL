@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Usage: areal-sync [<branch>]
+# Syncs a local branch to the AReaL remote server in one step: push via the configured git remote (whose refspec
+# maps <branch> to sync/<branch>), fast-forward merge on the server, delete the sync ref, and re-run install.sh
+# if scripts/astro/ changed. Run from inside the AReaL repo on WSL.
+# Remote: $AREAL_SYNC_REMOTE (default: astro). Uses areal-ssh for server commands.
+set -euo pipefail
+
+remote=${AREAL_SYNC_REMOTE:-astro}
+branch=${1:-$(git rev-parse --abbrev-ref HEAD)}
+[ "$branch" = "HEAD" ] && { echo "detached HEAD; pass a branch name" >&2; exit 1; }
+git remote get-url "$remote" >/dev/null 2>&1 || { echo "no '$remote' remote; configure it first" >&2; exit 1; }
+
+local_head=$(git rev-parse --short "$branch")
+echo "syncing $branch ($local_head) -> $remote"
+
+# Snapshot the server's HEAD before merge so we can detect what changed.
+remote_head=$(areal-ssh --deadline 30 'git -C "$REPO" rev-parse HEAD' 2>/dev/null) || remote_head=""
+
+# Push (the remote's refspec maps <branch> to sync/<branch> on the server).
+git push "$remote" "$branch"
+
+# On the server: fast-forward merge the sync branch, then delete it.
+areal-ssh "git -C \"\$REPO\" merge --ff-only \"sync/$branch\" && git -C \"\$REPO\" branch -d \"sync/$branch\""
+
+# Re-install workspace tools if scripts/astro/ was in the diff.
+if [ -z "$remote_head" ] || ! git diff --quiet "$remote_head".."$branch" -- scripts/astro/ 2>/dev/null; then
+  echo "scripts/astro/ changed; running install.sh"
+  areal-ssh --deadline 120 'cd "$REPO" && scripts/astro/install.sh'
+else
+  echo "scripts/astro/ unchanged; skipping install"
+fi
+
+# Summary: list the commits that were synced.
+if [ -n "$remote_head" ] && git merge-base --is-ancestor "$remote_head" "$branch" 2>/dev/null; then
+  count=$(git rev-list --count "$remote_head".."$branch")
+  echo "$count commit(s) synced:"
+  git log --oneline "$remote_head".."$branch"
+else
+  echo "synced to $local_head"
+fi

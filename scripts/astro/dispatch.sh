@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Usage: dispatch.sh <branch> <task> <brief-file> [resume-session-id]
 # Runs Codex (gpt-6.1-sol, through the CPA on 127.0.0.1:8317) in the branch's worktree, so it reads the
-# repository AGENTS.md. The task directory <artifacts>/<task>/ holds BRIEF.md and logs/. WSL `astro-codex` starts
-# this script detached and `astro-wait codex` polls bin/check.sh, which is why nothing here backgrounds itself.
+# repository AGENTS.md. The task directory <artifacts>/<task>/ holds BRIEF.md and logs/. WSL `areal-codex` starts
+# this script detached and `areal-wait codex` polls bin/check.sh, which is why nothing here backgrounds itself.
 # Logs: <task>/logs/codex-{events.jsonl,last.txt,stderr.txt}.
 #
 # NO SANDBOX: this machine denies user namespaces, so Codex's bubblewrap sandbox cannot start (2026-11-14), and
@@ -11,7 +11,7 @@
 # is the only seatbelt; keep briefs scoped and review the diff.
 # A turn that fails on a transport/provider error (no last.txt) is resumed in the same session, at most
 # MAX_AUTO_RESUME times (default 8), backing off 1, 2, 4, then 10 minutes.
-# CPA_API_KEY must be in the environment (astro-codex passes it over SSH stdin; it is never written here), and
+# CPA_API_KEY must be in the environment (areal-codex passes it over SSH stdin; it is never written here), and
 # $CODEX_HOME/config.toml keeps it out of the commands Codex runs.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"

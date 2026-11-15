@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Usage: run-job.sh <branch> <task> -- <command...>
 # Runs a command detached in the branch's worktree; output goes to <artifacts>/<task>/logs/job.txt and the last
-# line is EXIT=<rc>, which `check.sh job <branch> <task>` (and WSL `astro-wait job ...`) waits for.
+# line is EXIT=<rc>, which `check.sh job <branch> <task>` (and WSL `areal-wait job ...`) waits for.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 [ $# -ge 4 ] && [ "$3" = "--" ] || { sed -n 3p "$0" >&2; exit 2; }

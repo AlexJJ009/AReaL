@@ -61,8 +61,8 @@ worktree so they survive branch deletion. Keep them current; delete completed it
   `codex/<topic>`, merged back into `codex/sao-math`.
 - A worktree holds source changes only. Run outputs, data copies and logs go to the
   artifact directory.
-- Claude starts Codex with WSL `astro-codex` (runs `bin/dispatch.sh` detached) and waits
-  with `astro-wait codex <branch> <task>`. Long jobs start with
+- Claude starts Codex with WSL `areal-codex` (runs `bin/dispatch.sh` detached) and waits
+  with `areal-wait codex <branch> <task>`. Long jobs start with
   `bin/run-job.sh <branch> <task> -- <command>` and report through `bin/check.sh job`.
 - Codex leaves its changes uncommitted and runs focused tests; Claude reviews and
   commits. Codex never pushes, never opens PRs and never uses `gh`.

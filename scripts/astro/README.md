@@ -26,8 +26,8 @@ SSH and Codex land in `Areal/` (the repo checkout), not the parent directory.
 ## Install and check
 
 ```bash
-astro-ssh 'cd /root/lgx/Areal && scripts/astro/install.sh'   # copies bin/, runs guard tests + doctor
-astro-ssh doctor.sh                                           # before any long job
+areal-ssh 'cd /root/lgx/Areal && scripts/astro/install.sh'   # copies bin/, runs guard tests + doctor
+areal-ssh doctor.sh                                           # before any long job
 ```
 
 `install.sh` never writes `cpa/keys` or an existing `home/.codex-cpa/config.toml`. The
@@ -52,8 +52,8 @@ here:
 | keeper  | CPA Usage Keeper v2.0.1 (official release, checksum verified) | \*:18319 (login required)                                          | env adapted to loopback addresses; DB restored from the 2026-11-12 AiLab backup (`keys/keeper/app.db`)                               |
 
 ```bash
-astro-ssh cpactl status        # services, 401 from the API without a key, egress 204
-astro-ssh cpactl start         # after a container restart (idempotent)
+areal-ssh cpactl status        # services, 401 from the API without a key, egress 204
+areal-ssh cpactl start         # after a container restart (idempotent)
 ssh -N -L 8317:127.0.0.1:8317 -L 18319:127.0.0.1:18319 astro-a100   # use it / see the dashboard from WSL
 ```
 
@@ -65,21 +65,32 @@ other's refresh token.
 
 | Tool                                              | Use                                                                                                                           |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `astro-ssh [--deadline S] [--raw] 'cmd'`          | run a command with the workspace environment (`bin/lib.sh`); retries only connection-setup failures, ends within the deadline |
-| `astro-codex <branch> <task> <brief> [session]`   | upload the brief and start `bin/dispatch.sh` detached; the CPA key goes over SSH stdin                                        |
-| `astro-wait [--every S] [--max S] codex\|job ...` | poll `bin/check.sh` until the job ends; run it in the background                                                              |
+| `areal-ssh [--deadline S] [--raw] 'cmd'`          | run a command with the workspace environment (`bin/lib.sh`); retries only connection-setup failures, ends within the deadline |
+| `areal-codex <branch> <task> <brief> [session]`   | upload the brief and start `bin/dispatch.sh` detached; the CPA key goes over SSH stdin                                        |
+| `areal-wait [--every S] [--max S] codex\|job ...` | poll `bin/check.sh` until the job ends; run it in the background                                                              |
+| `areal-sync [<branch>]`                           | push, merge, clean sync ref, re-install tools if `scripts/astro/` changed (see below)                                         |
+
+The SSH host defaults to `astro-a100`; override with `AREAL_SSH_HOST`.
 
 ```bash
-astro-ssh 'new-worktree.sh codex/<topic>'
-astro-codex codex/<topic> <task> ./brief.md
-astro-wait codex codex/<topic> <task>          # run_in_background
-astro-ssh 'run-job.sh codex/<topic> <task> -- uv run pytest -q tests/test_x.py'
-astro-wait job codex/<topic> <task>
+areal-sync                                     # sync current branch
+areal-ssh 'new-worktree.sh codex/<topic>'
+areal-codex codex/<topic> <task> ./brief.md
+areal-wait codex codex/<topic> <task>          # run_in_background
+areal-ssh 'run-job.sh codex/<topic> <task> -- uv run pytest -q tests/test_x.py'
+areal-wait job codex/<topic> <task>
 ```
 
 ## Syncing code
 
-The checkout's `origin` is the public GitHub fork. Without a GitHub push, sync from WSL
-over SSH: `git push astro <branch>:refs/heads/sync/<branch>` (WSL remote `astro` =
-`astro-a100:/root/lgx/Areal`), then on astro `git merge --ff-only sync/<branch>` and
-delete the sync branch.
+The checkout's `origin` is the public GitHub fork. The WSL remote `astro`
+(`astro-a100:/root/lgx/Areal`) has a push refspec that maps `<branch>` to
+`sync/<branch>`. Use `areal-sync` to push, merge and clean up in one step:
+
+```bash
+areal-sync              # sync the current branch
+areal-sync codex/foo    # sync a specific branch
+```
+
+It automatically re-runs `install.sh` when `scripts/astro/` has changes. Override the
+git remote name with `AREAL_SYNC_REMOTE` (default: `astro`).

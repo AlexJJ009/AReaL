@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: Apache-2.0
 # Usage: check.sh <kind> <args...>   Non-blocking: exit 0 = finished (prints the result), 1 = still running
-# (prints one status line), 2 = cannot tell (prints why). WSL `astro-wait` polls it; nothing here sleeps.
+# (prints one status line), 2 = cannot tell (prints why). WSL `areal-wait` polls it; nothing here sleeps.
 #   codex <branch> <task>       Codex task finished: dispatch gone and logs/codex-last.txt present
 #   job <branch> <task>         a detached job wrote EXIT= to <task>/logs/job.txt (see bin/run-job.sh)
 . "$(dirname "$0")/lib.sh"
@@ -11,7 +11,7 @@ case $kind in
     resolve "$1" 2>/dev/null || { echo "no worktree for $1"; exit 2; }
     TD=$ART/$2; log=$TD/logs/codex
     pid=$(cat "$TD/logs/dispatch.pid" 2>/dev/null)
-    # The pid file is written by astro-codex; the cmdline check keeps a reused pid from reading as running.
+    # The pid file is written by areal-codex; the cmdline check keeps a reused pid from reading as running.
     if [ -n "$pid" ] && tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q "dispatch.sh $1 $2 "; then
       echo "running; events $(( $(date +%s) - $(stat -c %Y "$log-events.jsonl" 2>/dev/null || echo 0) ))s ago"; exit 1
     fi

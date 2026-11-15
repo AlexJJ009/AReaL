@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# astro-ssh: run a command on astro-a100 (matpool container, two A100s, repo /root/lgx/Areal), retrying only
-# connection-setup failures. Adapted from phai-ssh (2026-11-14).
+# areal-ssh: run a command on the AReaL remote server (currently astro-a100), retrying only connection-setup
+# failures. Adapted from phai-ssh (2026-11-14).
 #
-# Usage: astro-ssh [--deadline SECONDS] [--raw] [ssh options...] 'remote command'
-#        astro-ssh 'bash -s' < script.sh    # stdin is buffered and replayed on retry
+# Usage: areal-ssh [--deadline SECONDS] [--raw] [ssh options...] 'remote command'
+#        areal-ssh 'bash -s' < script.sh    # stdin is buffered and replayed on retry
 #
 # The remote command runs with the workspace environment (/root/lgx/bin/lib.sh: TMPDIR, HOME, PATH with uv and
 # codex, CODEX_HOME, resolve, cwd=/root/lgx/Areal) when that file exists; --raw skips it (plain root shell,
@@ -12,7 +12,7 @@
 # sockets (the master is stopped first). Not retried: the remote command's own exit status, or a drop after
 # the command started.
 set -u
-host=${ASTRO_SSH_HOST:-astro-a100}
+host=${AREAL_SSH_HOST:-astro-a100}
 deadline=100; raw=0
 while [ $# -gt 0 ]; do
   case $1 in
@@ -36,19 +36,19 @@ attempt=0
 while :; do
   attempt=$((attempt + 1))
   left=$(( end - $(date +%s) ))
-  if [ "$left" -lt 5 ]; then echo "astro-ssh: deadline ${deadline}s reached after $((attempt - 1)) attempts" >&2; exit 255; fi
+  if [ "$left" -lt 5 ]; then echo "areal-ssh: deadline ${deadline}s reached after $((attempt - 1)) attempts" >&2; exit 255; fi
   timeout "$left" ssh -o ConnectTimeout=20 "$host" "$@" < "$tmp/in" 2> "$tmp/err"
   rc=$?
   cat "$tmp/err" >&2
   # 124: the deadline killed ssh; the command may or may not have run, so it is reported, not retried.
-  [ "$rc" -eq 124 ] && { echo "astro-ssh: deadline ${deadline}s reached during attempt $attempt (not retried)" >&2; exit 124; }
+  [ "$rc" -eq 124 ] && { echo "areal-ssh: deadline ${deadline}s reached during attempt $attempt (not retried)" >&2; exit 124; }
   # Only a 255 with a setup-phase message is retried; anything else is the remote command's own result.
   if [ "$rc" -eq 255 ] && grep -Eq "$setup_error" "$tmp/err"; then
     ssh -O stop "$host" 2>/dev/null
   else
     exit "$rc"
   fi
-  [ "$attempt" -ge 3 ] && { echo "astro-ssh: giving up after $attempt attempts" >&2; exit 255; }
-  echo "astro-ssh: connection setup failed (attempt $attempt), retrying" >&2
+  [ "$attempt" -ge 3 ] && { echo "areal-ssh: giving up after $attempt attempts" >&2; exit 255; }
+  echo "areal-ssh: connection setup failed (attempt $attempt), retrying" >&2
   sleep 5
 done
