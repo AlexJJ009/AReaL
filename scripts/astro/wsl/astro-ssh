@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
-# astro-ssh: run a command on astro-a100 (matpool container, two A100s, workspace /root/lgx), retrying only
+# astro-ssh: run a command on astro-a100 (matpool container, two A100s, repo /root/lgx/Areal), retrying only
 # connection-setup failures. Adapted from phai-ssh (2026-11-14).
 #
 # Usage: astro-ssh [--deadline SECONDS] [--raw] [ssh options...] 'remote command'
 #        astro-ssh 'bash -s' < script.sh    # stdin is buffered and replayed on retry
 #
 # The remote command runs with the workspace environment (/root/lgx/bin/lib.sh: TMPDIR, HOME, PATH with uv and
-# codex, CODEX_HOME, resolve) when that file exists; --raw skips it (plain root shell, e.g. for /root tools).
-# The whole call, retries included, ends within --deadline (default 100 s), so it fits the Bash tool's default
-# 120 s foreground timeout. Retried: handshake resets/timeouts and broken ControlMaster sockets (the master is
-# stopped first). Not retried: the remote command's own exit status, or a drop after the command started.
+# codex, CODEX_HOME, resolve, cwd=/root/lgx/Areal) when that file exists; --raw skips it (plain root shell,
+# e.g. for /root tools). The whole call, retries included, ends within --deadline (default 100 s), so it fits
+# the Bash tool's default 120 s foreground timeout. Retried: handshake resets/timeouts and broken ControlMaster
+# sockets (the master is stopped first). Not retried: the remote command's own exit status, or a drop after
+# the command started.
 set -u
 host=${ASTRO_SSH_HOST:-astro-a100}
 deadline=100; raw=0

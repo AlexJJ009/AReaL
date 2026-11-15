@@ -7,8 +7,8 @@
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 D=/root/lgx
-mkdir -p "$D/bin/codex-hooks" "$D/_notes/AReaL" "$D/tmp" "$D/home/.local/bin" "$D/home/.cache/uv" \
-         "$D/home/.codex-cpa" "$D/_artifacts/AReaL" "$D/_worktrees/AReaL"
+mkdir -p "$D/bin/codex-hooks" "$D/_notes" "$D/tmp" "$D/home/.local/bin" "$D/home/.cache/uv" \
+         "$D/home/.codex-cpa" "$D/_artifacts" "$D/_worktrees"
 install -m 644 "$HERE/lib.sh" "$D/bin/lib.sh"
 for s in dispatch.sh check.sh run-job.sh new-worktree.sh doctor.sh; do install -m 755 "$HERE/$s" "$D/bin/$s"; done
 install -m 700 "$HERE/cpactl.sh" "$D/bin/cpactl"

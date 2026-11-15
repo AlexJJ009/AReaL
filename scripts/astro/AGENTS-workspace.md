@@ -1,16 +1,20 @@
-# /root/lgx — AReaL workspace on astro-a100
+# astro-a100 — machine rules for the AReaL workspace
 
-Rules for every agent (Codex, Claude) working in `/root/lgx` on `astro-a100`. Code
-conventions and the research rules are in the repository's `AGENTS.md`, which Codex
-reads inside the worktree; **this file holds what only the machine decides** (hardware
-limits, CPA rules, disk, network). It is installed as `/root/lgx/AGENTS.md` by
-`install.sh` and prepended to every Codex prompt by `bin/dispatch.sh`, because Codex
-only discovers `AGENTS.md` files inside its worktree and cannot see the workspace root.
+Rules for every agent (Codex, Claude) working on `astro-a100`. Code conventions and the
+research rules are in the repository's `AGENTS.md`, which Codex reads inside the
+worktree; **this file holds what only the machine decides** (hardware limits, CPA rules,
+disk, network). It is installed as `/root/lgx/AGENTS.md` by `install.sh` and prepended
+to every Codex prompt by `bin/dispatch.sh`, because Codex only discovers `AGENTS.md`
+files inside its worktree and cannot see this file.
 
 This machine is a rented matpool container (Guangzhou, China Mobile egress): 24 CPU, 180
 GB RAM, two A100-PCIE-40GB, 400 GB overlay root. It is used mostly by us, but `/root`
 also holds other tools (Jupyter, VS Code/Trae servers, `/root/miniconda3`); leave them
 alone. There is no init system: background processes die with the container.
+
+The primary checkout is `/root/lgx/Areal` on branch `codex/sao-math`. Worktrees,
+artifacts and notes live alongside it under `/root/lgx` because they must stay outside
+any git worktree.
 
 **Codex runs without a filesystem sandbox here**: the container denies user namespaces,
 so Codex's sandbox cannot start, and jobs run as root with full access. The guard hook
@@ -25,32 +29,31 @@ files under `/root`. Temporary files go to `tmp/` (`TMPDIR`, set by `bin/lib.sh`
 
 ## Layout
 
-| Path                              | Contents                                                                                        |
-| --------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `Areal/`                          | Primary checkout on `codex/sao-math` (origin: the public GitHub fork)                           |
-| `_worktrees/AReaL/<slug>/`        | One worktree per branch; `<slug>` is the branch name with `/` → `-`                             |
-| `_artifacts/AReaL/<slug>/<task>/` | Task outputs: `BRIEF.md`, `logs/`, `REPORT.md`, evidence, run outputs (see below)               |
-| `_notes/AReaL/`                   | Long-lived records that outlive any single task: backlog, grants, decision logs (see below)     |
-| `bin/`                            | Workspace tools, installed from `Areal/scripts/astro/`; each script's header says how to use it |
-| `home/`, `tmp/`                   | `HOME` of the dev tools (uv cache, `CODEX_HOME`), and `TMPDIR`                                  |
-| `cpa/`                            | CPA stack (mode 700). Off limits                                                                |
+| Path                        | Contents                                                                                        |
+| --------------------------- | ----------------------------------------------------------------------------------------------- |
+| `Areal/`                    | Primary checkout on `codex/sao-math` (origin: the public GitHub fork)                           |
+| `_worktrees/<slug>/`        | One worktree per branch; `<slug>` is the branch name with `/` → `-`                             |
+| `_artifacts/<slug>/<task>/` | Task outputs: `BRIEF.md`, `logs/`, `REPORT.md`, evidence, run outputs (see below)               |
+| `_notes/`                   | Long-lived records that outlive any single task: backlog, grants, decision logs (see below)     |
+| `bin/`                      | Workspace tools, installed from `Areal/scripts/astro/`; each script's header says how to use it |
+| `home/`, `tmp/`             | `HOME` of the dev tools (uv cache, `CODEX_HOME`), and `TMPDIR`                                  |
+| `cpa/`                      | CPA stack (mode 700). Off limits                                                                |
 
 The `<slug>` for the primary checkout (`Areal/`) is derived from its branch name, e.g.
 `codex-sao-math` — not `main`.
 
 ### `_artifacts` vs `_notes`
 
-**`_artifacts/AReaL/<slug>/<task>/`** — everything a single task produces. Each task
-gets its own subdirectory under the branch slug. Contents: the brief that started the
-task, Codex logs, the task's REPORT, evidence files, run outputs. **Cleanup**: delete a
-task's directory once its findings are committed or recorded elsewhere. Smoke tests,
-failed experiments and disposable probes should be cleaned up promptly; don't let them
+**`_artifacts/<slug>/<task>/`** — everything a single task produces. Each task gets its
+own subdirectory under the branch slug. Contents: the brief that started the task, Codex
+logs, the task's REPORT, evidence files, run outputs. **Cleanup**: delete a task's
+directory once its findings are committed or recorded elsewhere. Smoke tests, failed
+experiments and disposable probes should be cleaned up promptly; don't let them
 accumulate.
 
-**`_notes/AReaL/`** — records that are not tied to a single task and outlive any one
-branch: the backlog, RJob grants, decision logs, cross-task references. These are
-outside every worktree so they survive branch deletion. Keep them current; delete
-completed items.
+**`_notes/`** — records that are not tied to a single task and outlive any one branch:
+the backlog, RJob grants, decision logs, cross-task references. These are outside every
+worktree so they survive branch deletion. Keep them current; delete completed items.
 
 ## Branches, worktrees and jobs
 

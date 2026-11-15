@@ -17,10 +17,11 @@ machine-side copy under `/root/lgx/bin` is disposable; this directory is the sou
 
 ## Layout on the machine (`/root/lgx`)
 
-`Areal/` checkout, `_worktrees/AReaL/`, `_artifacts/AReaL/`, `_notes/AReaL/`, `bin/`
-(this directory), `home/` (HOME, uv cache, `CODEX_HOME=home/.codex-cpa`), `tmp/`
-(TMPDIR), `cpa/` (CPA stack, mode 700). The workspace rules agents read are
-`AGENTS-workspace.md`, installed as `/root/lgx/AGENTS.md`.
+`Areal/` checkout (the primary working directory), `_worktrees/`, `_artifacts/`,
+`_notes/`, `bin/` (this directory), `home/` (HOME, uv cache,
+`CODEX_HOME=home/.codex-cpa`), `tmp/` (TMPDIR), `cpa/` (CPA stack, mode 700). The
+machine-level agent rules are `AGENTS-workspace.md`, installed as `/root/lgx/AGENTS.md`.
+SSH and Codex land in `Areal/` (the repo checkout), not the parent directory.
 
 ## Install and check
 

@@ -17,7 +17,7 @@ ALLOW = [
     "uv run --frozen pytest -q tests/test_x.py 2>&1 | tail -5",
     "git commit -m 'x' && git log -1",
     "kill 12345",
-    f"rm -rf {R}/_artifacts/AReaL/main/old-run",
+    f"rm -rf {R}/_artifacts/main/old-run",
     f"rm -rf {R}/tmp/x",
     "rsync -a ./a/ ./b/",
     "curl -s http://127.0.0.1:8317/v1/models -o /dev/null",
@@ -39,7 +39,7 @@ DENY = [
     ("pkill -f python", "kill by PID"),
     ("killall python3", "kill by PID"),
     (f"rm -rf {R}/Areal", "workspace roots"),
-    (f"rm -r -f {R}/_worktrees/", "workspace roots"),
+    (f"rm -r -f {R}/_worktrees", "workspace roots"),
     ("nohup timeout 5 git push", "never pushes"),
 ]
 

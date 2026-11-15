@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage: astro-codex <branch> <task> <brief-file> [resume-session-id]
-# Starts bin/dispatch.sh detached in the AReaL workspace on astro-a100 (/root/lgx). The branch's worktree must
+# Starts bin/dispatch.sh detached in the AReaL repo on astro-a100 (/root/lgx/Areal). The branch's worktree must
 # exist there (astro-ssh 'new-worktree.sh <branch>'). <brief-file> is a WSL path: it is uploaded to
 # <artifacts>/<task>/BRIEF.md first. Codex runs gpt-6.1-sol through the CPA on astro itself (127.0.0.1:8317)
 # WITHOUT a sandbox (the container denies user namespaces); the guard hook is the seatbelt.
