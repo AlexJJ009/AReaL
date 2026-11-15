@@ -23,6 +23,18 @@ arXiv 页面核对过的标"已核对"，其余以 agent 报告为准。
 
 tau2 上目前报告的 4B 结果：IAPO（2608.24588）Qwen3-4B 38.4，GRPO 34.8（agent 报告，未核对）。
 
+**2026-11-15 补充**（噪声注入相关的 benchmark 和训练方法）：
+
+| 工作                                                                                                                                   | 做了什么                                                                                                                                                                                                 | 与本方向的关系                                                                                                                                        |
+| -------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [AgentNoiseBench（2602.11348）](https://arxiv.org/abs/2602.11348)，[GitHub](https://github.com/keven-cyber/agentnoisebench)，ICML 2026 | 噪声鲁棒性 benchmark，覆盖 τ²、VitaBench、Search-R1。在全局用户 prompt 中注入幻觉、遗漏、误导等噪声类型，测试 agent 在噪声下的表现。定义 $\mathbb{I}_{solvable}$ 但未给出计算方法（DESIGN.md §5 已指出） | 提供外部评测基准（DESIGN.md §9 第三张表）。差异：改全局用户 prompt vs 我们改单题剧本；他们的 τ² 噪声版本可直接用作迁移评测                            |
+| [NoisyAgent（2605.27209）](https://arxiv.org/abs/2605.27209)                                                                           | 混合 clean/noisy 用户 rollout 训练 agent，GSPO（Group Selective Policy Optimization）在组内选择性地从干净 rollout 学、丢弃有噪 rollout。在 τ² 等 benchmark 上报告了结果                                  | 覆盖"训练时按 episode 选择性丢弃有噪 rollout"，与 AutoForge 类似但不需要看剧本的 judge，靠组内对比识别噪声。未覆盖：轮级 credit、critic、单条 rollout |
+
+tau2-bench
+官方仓库（[sierra-research/tau2-bench](https://github.com/sierra-research/tau2-bench)）的变体定义和我们的修补见
+[benchmark-variants.md](../benchmark-variants.md)。AReaL-tau2-data（[inclusionAI/AReaL-tau2-data](https://huggingface.co/datasets/inclusionAI/AReaL-tau2-data)，[ModelScope 镜像](https://modelscope.cn/datasets/inclusionAI/AReaL-tau2-data)，文件一致）的训练数据用法见
+[training-data.md](../training-data.md)。
+
 **经典 RL 中的对应理论**（`related_classical_rl.md`，14 篇读了方法和定理）：
 
 | 工作                                                                                                                                                               | 结论                                                                                                                                                                                                   | 对本方向的含义                                                                                                          |
