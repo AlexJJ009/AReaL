@@ -5,9 +5,9 @@
 # Usage: areal-ssh [--deadline SECONDS] [--raw] [ssh options...] 'remote command'
 #        areal-ssh 'bash -s' < script.sh    # stdin is buffered and replayed on retry
 #
-# The remote command runs with the workspace environment (/root/lgx/bin/lib.sh: TMPDIR, HOME, PATH with uv and
-# codex, CODEX_HOME, resolve, cwd=/root/lgx/Areal) when that file exists; --raw skips it (plain root shell,
-# e.g. for /root tools). The whole call, retries included, ends within --deadline (default 100 s), so it fits
+# The remote command runs with the workspace environment ($AREAL_REMOTE_ROOT/bin/lib.sh: TMPDIR, HOME, PATH
+# with uv and codex, CODEX_HOME, resolve, cwd=<checkout>) when that file exists; --raw skips it (plain root
+# shell, e.g. for /root tools). The whole call, retries included, ends within --deadline (default 100 s), so it fits
 # the Bash tool's default 120 s foreground timeout. Retried: handshake resets/timeouts and broken ControlMaster
 # sockets (the master is stopped first). Not retried: the remote command's own exit status, or a drop after
 # the command started.
@@ -21,8 +21,9 @@ while [ $# -gt 0 ]; do
     *) break ;;
   esac
 done
+_remote_root="${AREAL_REMOTE_ROOT:-/root/lgx}"
 if [ $# -ge 1 ] && [ "$raw" = 0 ]; then
-  set -- "${@:1:$#-1}" "[ -r /root/lgx/bin/lib.sh ] && . /root/lgx/bin/lib.sh; ${!#}"
+  set -- "${@:1:$#-1}" "[ -r $_remote_root/bin/lib.sh ] && . $_remote_root/bin/lib.sh; ${!#}"
 fi
 
 tmp=$(mktemp -d) || exit 1

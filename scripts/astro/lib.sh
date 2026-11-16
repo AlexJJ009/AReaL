@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-# Sourced by bin/*. Environment of the AReaL workspace on astro-a100 (a matpool container with two A100s,
-# Guangzhou, China Mobile egress), and resolve <branch> -> WT / ART.
+# Sourced by bin/*. Environment of the AReaL workspace, and resolve <branch> -> WT / ART.
 #
-# Layout under D=/root/lgx: Areal/ (primary checkout), _worktrees/<slug>, _artifacts/<slug>,
-# _notes/, bin/ (this tooling, installed by scripts/astro/install.sh), home/ (HOME for our jobs: caches,
-# CODEX_HOME), tmp/, cpa/ (the CPA stack, mode 700, see bin/cpactl).
-export D=/root/lgx
+# Layout under D=$AREAL_WORKSPACE_ROOT: Areal/ (primary checkout), _worktrees/<slug>,
+# _artifacts/<slug>, _notes/, bin/ (this tooling, installed by scripts/astro/install.sh),
+# home/ (HOME for our jobs: caches, CODEX_HOME), tmp/, cpa/ (CPA stack if present, mode 700).
+_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -r "$_DIR/workspace.env" ] && . "$_DIR/workspace.env"
+: "${AREAL_WORKSPACE_ROOT:?Set AREAL_WORKSPACE_ROOT in workspace.env or environment}"
+export D="$AREAL_WORKSPACE_ROOT"
 export HOME=$D/home
 export XDG_CACHE_HOME=$HOME/.cache XDG_STATE_HOME=$HOME/.local/state XDG_CONFIG_HOME=$HOME/.config
 export UV_CACHE_DIR=$HOME/.cache/uv

@@ -13,7 +13,7 @@ args=$(printf '%q ' "$@")
 end=$(( $(date +%s) + max ))
 out=
 while [ "$(date +%s)" -lt "$end" ]; do
-  out=$(areal-ssh --deadline 60 "/root/lgx/bin/check.sh $args" 2>/dev/null); rc=$?
+  out=$(areal-ssh --deadline 60 "${AREAL_REMOTE_ROOT:-/root/lgx}/bin/check.sh $args" 2>/dev/null); rc=$?
   case $rc in
     0) printf '%s\n' "$out"; exit 0 ;;
     2) printf '%s\n' "$out"; exit 2 ;;

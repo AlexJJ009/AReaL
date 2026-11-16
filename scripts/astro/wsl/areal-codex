@@ -17,6 +17,6 @@ branch=$(printf '%q' "$1") task=$(printf '%q' "$2") resume=$(printf '%q' "${4:-}
 areal-ssh "set -e; resolve $branch; mkdir -p \"\$ART/\"$task/logs; cat > \"\$ART/\"$task/BRIEF.md" < "$3"
 areal-ssh "set -e; resolve $branch; TD=\$ART/$task
 IFS= read -r CPA_API_KEY; export CPA_API_KEY
-setsid nohup /root/lgx/bin/dispatch.sh $branch $task \"\$TD/BRIEF.md\" $resume < /dev/null > \"\$TD/logs/dispatch.txt\" 2>&1 &
+setsid nohup \$D/bin/dispatch.sh $branch $task \"\$TD/BRIEF.md\" $resume < /dev/null > \"\$TD/logs/dispatch.txt\" 2>&1 &
 echo \$! > \"\$TD/logs/dispatch.pid\"
 echo \"started \$! -> \$TD/logs/\"" < "$KEY_FILE"

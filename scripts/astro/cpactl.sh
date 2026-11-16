@@ -15,7 +15,7 @@
 # State lives in $CPA_HOME (default /root/lgx/cpa, mode 700): bin/, keys/ (config, OAuth auths, keeper DB),
 # mihomo/, run/ (CPA working dir: logs/, static/), state/ (pids and service logs).
 set -euo pipefail
-C=${CPA_HOME:-/root/lgx/cpa}
+C=${CPA_HOME:-${AREAL_WORKSPACE_ROOT:-/root/lgx}/cpa}
 ST=$C/state
 mkdir -p "$ST" "$C/run/logs"
 SERVICES=(egress cpa keeper)

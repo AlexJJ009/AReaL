@@ -8,11 +8,10 @@ and `blob_sha1` for the rest (git blob SHA1, which HF gives instead). A file tha
 so a killed run resumes. Download goes to <name>.part and is renamed only after the hash matches, so a
 truncated file never looks complete.
 
-The platform egress proxy gives ~0.3 MB/s per connection but honours Range, so a file above PARALLEL_MIN is
-fetched as CHUNK-sized ranges over WORKERS connections, written at their offsets. WORKERS stays small because
-the proxy is shared with other jobs on this machine.
+When behind a proxy, files above PARALLEL_MIN are fetched as CHUNK-sized ranges over WORKERS connections,
+written at their offsets. Set FETCH_PROXY to the proxy URL (empty or unset = direct).
 
-Stops before writing if the filesystem has less than MIN_FREE_GB left: the store is shared and nearly full.
+Stops before writing if the filesystem has less than MIN_FREE_GB left.
 """
 
 from __future__ import annotations
@@ -27,17 +26,18 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Lock
 
-PROXY = "http://httpproxy-headless.kubebrain.svc.pjlab.local:3128"
+PROXY = os.environ.get("FETCH_PROXY", "")
 MIN_FREE_GB = 40
-# The proxy caps a single connection at ~0.3 MB/s, so ranges go over several; it is shared with other jobs
-# on this machine, hence an env override rather than a high default.
 WORKERS = int(os.environ.get("FETCH_WORKERS", "6"))
 CHUNK = 32 << 20
 ATTEMPTS = 5
 PARALLEL_MIN = 256 << 20
-OPENER = urllib.request.build_opener(
-    urllib.request.ProxyHandler({"http": PROXY, "https": PROXY})
-)
+if PROXY:
+    OPENER = urllib.request.build_opener(
+        urllib.request.ProxyHandler({"http": PROXY, "https": PROXY})
+    )
+else:
+    OPENER = urllib.request.build_opener()
 
 
 def free_gb(path: Path) -> float:
