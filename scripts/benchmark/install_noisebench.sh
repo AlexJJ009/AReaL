@@ -50,6 +50,10 @@ fi
 
 TAU2_DIR="$INSTALL_DIR/tau2-bench-main"
 
+# pdm-backend validates readme = "README.md" at build time; the NoiseBench
+# repo keeps README.md in the repo root, not inside tau2-bench-main/.
+[ -f "$TAU2_DIR/README.md" ] || touch "$TAU2_DIR/README.md"
+
 # --- Create venv and install dependencies ---
 echo "[install] Creating venv in $TAU2_DIR/.venv ..."
 uv venv --python "$PYTHON_VERSION" "$TAU2_DIR/.venv"
