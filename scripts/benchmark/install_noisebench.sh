@@ -56,7 +56,10 @@ uv venv --python "$PYTHON_VERSION" "$TAU2_DIR/.venv"
 
 echo "[install] Installing tau2 dependencies..."
 # The NoiseBench fork uses pdm-backend; uv pip handles it.
-uv pip install --python "$TAU2_DIR/.venv/bin/python" -e "$TAU2_DIR"
+# --index-strategy unsafe-best-match: some internal mirrors only carry
+# a subset of wheels per package; allow uv to search all configured indexes.
+uv pip install --python "$TAU2_DIR/.venv/bin/python" \
+  --index-strategy unsafe-best-match -e "$TAU2_DIR"
 
 # --- Apply JSON parsing patch ---
 EVALUATOR="$TAU2_DIR/src/tau2/evaluator/evaluator_nl_assertions.py"
